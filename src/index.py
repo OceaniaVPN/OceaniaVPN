@@ -1,36 +1,22 @@
 import json
 import base64
 
-# === Pyodide imports (встроено в Cloudflare Workers) ===
-from js import fetch, Headers, FormData, Blob
+# === ИМПОРТЫ ИЗ JAVASCRIPT (встроены в Cloudflare Python Workers) ===
+from js import fetch, Headers, FormData, Blob, Response
 
-# === КОНФИГУРАЦИЯ ИЗ ENV ===
-def get_env(key, default=""):
-    try:
-        return getattr(env, key, default)
-    except:
-        return default
-
-async def get_config():
-    return {
-        "telegram_token": get_env("TELEGRAM_BOT_TOKEN"),
-        "github_token": get_env("GITHUB_TOKEN"),
-        "admin_id": int(get_env("ADMIN_ID", "0")),
-        "repo_owner": get_env("REPO_OWNER", "OceaniaVPN"),
-        "repo_name": get_env("REPO_NAME", "OceaniaVPN"),
-        "configs_folder": get_env("CONFIGS_FOLDER", "configs"),
-        "branch": get_env("BRANCH", "main")
-    }
-
-# === HTTP ЗАПРОСЫ (через fetch из JS) ===
+# === HTTP ЗАПРОСЫ ===
 async def http_request(url, method="GET", headers=None, body=None):
     """Универсальный HTTP запрос через fetch"""
-    options = {
-        "method": method,
-        "headers": headers or {}
-    }
+    options = {"method": method}
+    
+    if headers:
+        options["headers"] = headers
+    
     if body:
-        options["body"] = json.dumps(body) if isinstance(body, dict) else body
+        if isinstance(body, dict):
+            options["body"] = json.dumps(body)
+        else:
+            options["body"] = body
     
     response = await fetch(url, options)
     status = response.status
@@ -41,7 +27,26 @@ async def http_request(url, method="GET", headers=None, body=None):
     except:
         data = {}
     
-    return status, data
+    return status, data, response
+
+# === КОНФИГУРАЦИЯ ===
+def get_config(env):
+    """Получает конфигурацию из переменных окружения"""
+    def get_env(key, default=""):
+        try:
+            return getattr(env, key, default)
+        except:
+            return default
+    
+    return {
+        "telegram_token": get_env("TELEGRAM_BOT_TOKEN"),
+        "github_token": get_env("GITHUB_TOKEN"),
+        "admin_id": int(get_env("ADMIN_ID", "0")),
+        "repo_owner": get_env("REPO_OWNER", "OceaniaVPN"),
+        "repo_name": get_env("REPO_NAME", "OceaniaVPN"),
+        "configs_folder": get_env("CONFIGS_FOLDER", "configs"),
+        "branch": get_env("BRANCH", "main")
+    }
 
 # === TELEGRAM API ===
 async def send_telegram(token, method, params=None):
@@ -50,7 +55,8 @@ async def send_telegram(token, method, params=None):
     headers_dict = {"Content-Type": "application/json"}
     headers_obj = Headers.new(headers_dict)
     
-    return await http_request(url, "POST", headers_obj, params)
+    status, data, _ = await http_request(url, "POST", headers_obj, params or {})
+    return status, data
 
 async def send_message(token, chat_id, text, parse_mode="Markdown"):
     """Отправляет текстовое сообщение"""
@@ -89,7 +95,8 @@ async def github_request(config, method, endpoint, body=None):
     }
     headers_obj = Headers.new(headers_dict)
     
-    return await http_request(url, method, headers_obj, body)
+    status, data, _ = await http_request(url, method, headers_obj, body)
+    return status, data
 
 async def get_file_sha(config, filename):
     """Получает SHA хэш файла"""
@@ -165,7 +172,7 @@ async def get_file_content(config, filename):
 
 # === ОБРАБОТКА СООБЩЕНИЙ ===
 async def handle_update(update, config):
-    """Обрабатывает входящее сообщение"""
+    """Обрабатывает входящее сообщение от Telegram"""
     if "message" not in update:
         return
     
@@ -174,13 +181,13 @@ async def handle_update(update, config):
     user_id = message["from"]["id"]
     text = message.get("text", "")
     
-    if not text.startswith("/"):
+    if not text or not text.startswith("/"):
         return
     
     parts = text.split()
     command = parts[0].split("@")[0].lower()
     
-    # /start
+    # === /start ===
     if command == "/start":
         await send_message(
             config["telegram_token"],
@@ -194,7 +201,7 @@ async def handle_update(update, config):
             "/delete <имя> — Удалить"
         )
     
-    # /add
+    # === /add ===
     elif command == "/add":
         if user_id != config["admin_id"]:
             await send_message(config["telegram_token"], chat_id, "⛔️ Нет прав.")
@@ -227,7 +234,7 @@ async def handle_update(update, config):
             error = data.get('message', 'Ошибка')
             await send_message(config["telegram_token"], chat_id, f"❌ Ошибка: {error}")
     
-    # /delete
+    # === /delete ===
     elif command == "/delete":
         if user_id != config["admin_id"]:
             await send_message(config["telegram_token"], chat_id, "⛔️ Нет прав.")
@@ -238,9 +245,7 @@ async def handle_update(update, config):
             return
         
         filename = parts[1]
-        status, data = await delete_file(
-            config, filename, f"Delete: {filename}"
-        )
+        status, data = await delete_file(config, filename, f"Delete: {filename}")
         
         if status == 200:
             await send_message(
@@ -252,7 +257,7 @@ async def handle_update(update, config):
         else:
             await send_message(config["telegram_token"], chat_id, f"❌ Ошибка удаления.")
     
-    # /list
+    # === /list ===
     elif command == "/list":
         files = await list_files(config)
         
@@ -267,7 +272,7 @@ async def handle_update(update, config):
         
         await send_message(config["telegram_token"], chat_id, response)
     
-    # /get
+    # === /get ===
     elif command == "/get":
         if len(parts) < 2:
             await send_message(config["telegram_token"], chat_id, "❌ Укажи имя файла.")
@@ -300,23 +305,20 @@ async def handle_update(update, config):
                 parse_mode="Markdown"
             )
 
-# === ГЛАВНЫЙ ОБРАБОТЧИК ===
+# === ГЛАВНЫЙ ОБРАБОТЧИК (entry point для Cloudflare) ===
 async def on_fetch(request, env):
-    """Главная функция Cloudflare Worker"""
-    global env
-    
+    """Главная функция, вызываемая Cloudflare Workers"""
     try:
         if request.method == "POST":
             update = await request.json()
-            config = await get_config()
+            config = get_config(env)
             await handle_update(update, config)
-            return Response("OK", status=200)
+            return Response.new("OK", status=200)
         
-        return Response(
-            "<h1>🚀 OceaniaVPN Bot Active</h1>",
-            headers={"Content-Type": "text/html"},
-            status=200
-        )
+        # GET запрос - показываем что бот работает
+        html = "<h1>🚀 OceaniaVPN Bot Active</h1><p>Bot is running on Cloudflare Workers.</p>"
+        headers = Headers.new({"Content-Type": "text/html"})
+        return Response.new(html, status=200, headers=headers)
     
     except Exception as e:
-        return Response(f"Error: {str(e)}", status=500)
+        return Response.new(f"Error: {str(e)}", status=500)
