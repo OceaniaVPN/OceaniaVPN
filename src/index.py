@@ -1,289 +1,322 @@
-import os
 import json
 import base64
-import io
-from urllib.parse import quote
-import requests
-import telebot
-from telebot import types
 
-# === КОНФИГУРАЦИЯ ===
-# Локально читаем из .env, в Workers - из окружения
-def get_env(key, default=None):
+# === Pyodide imports (встроено в Cloudflare Workers) ===
+from js import fetch, Headers, FormData, Blob
+
+# === КОНФИГУРАЦИЯ ИЗ ENV ===
+def get_env(key, default=""):
     try:
-        return os.environ[key]
-    except KeyError:
+        return getattr(env, key, default)
+    except:
         return default
 
-TELEGRAM_BOT_TOKEN = get_env("TELEGRAM_BOT_TOKEN", "")
-GITHUB_TOKEN = get_env("GITHUB_TOKEN", "")
-REPO_OWNER = get_env("REPO_OWNER", "OceaniaVPN")
-REPO_NAME = get_env("REPO_NAME", "OceaniaVPN")
-CONFIGS_FOLDER = get_env("CONFIGS_FOLDER", "configs")  # Папка с конфигами
-BRANCH = get_env("BRANCH", "main")
-ADMIN_ID = int(get_env("ADMIN_ID", "0"))  # Telegram ID админа
-WEBHOOK_URL = get_env("WEBHOOK_URL", "")  # URL твоего Cloudflare Worker
-
-bot = telebot.TeleBot(TELEGRAM_BOT_TOKEN, threaded=False)
-
-# === ФУНКЦИИ ДЛЯ РАБОТЫ С GITHUB API ===
-def get_file_sha(filename):
-    """Получает SHA хэш существующего файла (нужно для обновления)"""
-    url = f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/contents/{CONFIGS_FOLDER}/{filename}"
-    headers = {
-        "Authorization": f"token {GITHUB_TOKEN}",
-        "Accept": "application/vnd.github.v3+json"
+async def get_config():
+    return {
+        "telegram_token": get_env("TELEGRAM_BOT_TOKEN"),
+        "github_token": get_env("GITHUB_TOKEN"),
+        "admin_id": int(get_env("ADMIN_ID", "0")),
+        "repo_owner": get_env("REPO_OWNER", "OceaniaVPN"),
+        "repo_name": get_env("REPO_NAME", "OceaniaVPN"),
+        "configs_folder": get_env("CONFIGS_FOLDER", "configs"),
+        "branch": get_env("BRANCH", "main")
     }
-    response = requests.get(url, headers=headers)
-    if response.status_code == 200:
-        return response.json().get("sha")
+
+# === HTTP ЗАПРОСЫ (через fetch из JS) ===
+async def http_request(url, method="GET", headers=None, body=None):
+    """Универсальный HTTP запрос через fetch"""
+    options = {
+        "method": method,
+        "headers": headers or {}
+    }
+    if body:
+        options["body"] = json.dumps(body) if isinstance(body, dict) else body
+    
+    response = await fetch(url, options)
+    status = response.status
+    
+    try:
+        text = await response.text()
+        data = json.loads(text) if text else {}
+    except:
+        data = {}
+    
+    return status, data
+
+# === TELEGRAM API ===
+async def send_telegram(token, method, params=None):
+    """Отправляет запрос к Telegram Bot API"""
+    url = f"https://api.telegram.org/bot{token}/{method}"
+    headers_dict = {"Content-Type": "application/json"}
+    headers_obj = Headers.new(headers_dict)
+    
+    return await http_request(url, "POST", headers_obj, params)
+
+async def send_message(token, chat_id, text, parse_mode="Markdown"):
+    """Отправляет текстовое сообщение"""
+    return await send_telegram(token, "sendMessage", {
+        "chat_id": chat_id,
+        "text": text,
+        "parse_mode": parse_mode,
+        "disable_web_page_preview": True
+    })
+
+async def send_document(token, chat_id, content, filename, caption=""):
+    """Отправляет файл как документ"""
+    form_data = FormData.new()
+    blob = Blob.new([content], {"type": "text/plain;charset=utf-8"})
+    
+    form_data.append("chat_id", str(chat_id))
+    form_data.append("document", blob, filename)
+    if caption:
+        form_data.append("caption", caption)
+    
+    url = f"https://api.telegram.org/bot{token}/sendDocument"
+    options = {"method": "POST", "body": form_data}
+    response = await fetch(url, options)
+    return await response.text()
+
+# === GITHUB API ===
+async def github_request(config, method, endpoint, body=None):
+    """Запрос к GitHub API"""
+    url = f"https://api.github.com/repos/{config['repo_owner']}/{config['repo_name']}{endpoint}"
+    
+    headers_dict = {
+        "Authorization": f"token {config['github_token']}",
+        "Accept": "application/vnd.github.v3+json",
+        "User-Agent": "OceaniaVPN-Bot",
+        "Content-Type": "application/json"
+    }
+    headers_obj = Headers.new(headers_dict)
+    
+    return await http_request(url, method, headers_obj, body)
+
+async def get_file_sha(config, filename):
+    """Получает SHA хэш файла"""
+    status, data = await github_request(
+        config, "GET",
+        f"/contents/{config['configs_folder']}/{filename}?ref={config['branch']}"
+    )
+    if status == 200 and isinstance(data, dict):
+        return data.get("sha")
     return None
 
-def create_or_update_github_file(filename, content, commit_message="Add VPN config"):
-    """Создает или обновляет файл в папке configs"""
-    url = f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/contents/{CONFIGS_FOLDER}/{filename}"
-    headers = {
-        "Authorization": f"token {GITHUB_TOKEN}",
-        "Accept": "application/vnd.github.v3+json"
-    }
-    
+async def create_or_update_file(config, filename, content, commit_message):
+    """Создает или обновляет файл"""
     encoded_content = base64.b64encode(content.encode('utf-8')).decode('utf-8')
     
-    data = {
+    body = {
         "message": commit_message,
         "content": encoded_content,
-        "branch": BRANCH
+        "branch": config["branch"]
     }
     
-    # Если файл существует, добавляем SHA для обновления
-    sha = get_file_sha(filename)
+    sha = await get_file_sha(config, filename)
     if sha:
-        data["sha"] = sha
+        body["sha"] = sha
     
-    response = requests.put(url, headers=headers, json=data)
-    return response.status_code, response.json()
+    return await github_request(
+        config, "PUT",
+        f"/contents/{config['configs_folder']}/{filename}",
+        body
+    )
 
-def delete_github_file(filename, commit_message="Delete VPN config"):
-    """Удаляет файл из папки configs"""
-    sha = get_file_sha(filename)
+async def delete_file(config, filename, commit_message):
+    """Удаляет файл"""
+    sha = await get_file_sha(config, filename)
     if not sha:
         return 404, {"message": "File not found"}
     
-    url = f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/contents/{CONFIGS_FOLDER}/{filename}"
-    headers = {
-        "Authorization": f"token {GITHUB_TOKEN}",
-        "Accept": "application/vnd.github.v3+json"
-    }
-    
-    data = {
+    body = {
         "message": commit_message,
         "sha": sha,
-        "branch": BRANCH
+        "branch": config["branch"]
     }
     
-    response = requests.delete(url, headers=headers, json=data)
-    return response.status_code, response.json()
-
-def get_github_files():
-    """Получает список файлов из папки configs"""
-    url = f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/contents/{CONFIGS_FOLDER}"
-    headers = {
-        "Authorization": f"token {GITHUB_TOKEN}",
-        "Accept": "application/vnd.github.v3+json"
-    }
-    response = requests.get(url, headers=headers)
-    if response.status_code == 200:
-        return response.json()
-    return []
-
-def get_github_file_content(filename):
-    """Скачивает содержимое файла из папки configs"""
-    url = f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/contents/{CONFIGS_FOLDER}/{filename}"
-    headers = {
-        "Authorization": f"token {GITHUB_TOKEN}",
-        "Accept": "application/vnd.github.v3+json"
-    }
-    response = requests.get(url, headers=headers)
-    if response.status_code == 200:
-        content_base64 = response.json()["content"]
-        content_base64 = content_base64.replace("\n", "")
-        return base64.b64decode(content_base64).decode('utf-8')
-    return None
-
-# === ОБРАБОТЧИКИ КОМАНД ===
-@bot.message_handler(commands=['start'])
-def start_message(message):
-    keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    keyboard.add(types.KeyboardButton("📋 Список конфигов"))
-    keyboard.add(types.KeyboardButton("ℹ️ Помощь"))
-    
-    bot.send_message(
-        message.chat.id,
-        "👋 Добро пожаловать в **OceaniaVPN Bot**!\n\n"
-        "Я храню VPN конфигурации и позволяю их скачивать.\n\n"
-        "📱 **Команды:**\n"
-        "/list - Список доступных конфигов\n"
-        "/get <имя> - Скачать конфиг\n\n"
-        "🛠 **Для админа:**\n"
-        "/add <имя> <ссылка> - Добавить конфиг\n"
-        "/delete <имя> - Удалить конфиг",
-        parse_mode="Markdown",
-        reply_markup=keyboard
+    return await github_request(
+        config, "DELETE",
+        f"/contents/{config['configs_folder']}/{filename}",
+        body
     )
 
-@bot.message_handler(commands=['add'])
-def add_config(message):
-    if message.chat.id != ADMIN_ID:
-        bot.reply_to(message, "⛔️ У вас нет прав для добавления конфигов.")
+async def list_files(config):
+    """Список файлов в папке configs"""
+    status, data = await github_request(
+        config, "GET",
+        f"/contents/{config['configs_folder']}?ref={config['branch']}"
+    )
+    if status == 200 and isinstance(data, list):
+        return [f['name'] for f in data if f.get('type') == 'file']
+    return []
+
+async def get_file_content(config, filename):
+    """Скачивает содержимое файла"""
+    status, data = await github_request(
+        config, "GET",
+        f"/contents/{config['configs_folder']}/{filename}?ref={config['branch']}"
+    )
+    if status == 200 and isinstance(data, dict) and "content" in data:
+        content_base64 = data["content"].replace("\n", "")
+        try:
+            return base64.b64decode(content_base64).decode('utf-8')
+        except:
+            return None
+    return None
+
+# === ОБРАБОТКА СООБЩЕНИЙ ===
+async def handle_update(update, config):
+    """Обрабатывает входящее сообщение"""
+    if "message" not in update:
         return
     
-    try:
-        parts = message.text.split(maxsplit=2)
+    message = update["message"]
+    chat_id = message["chat"]["id"]
+    user_id = message["from"]["id"]
+    text = message.get("text", "")
+    
+    if not text.startswith("/"):
+        return
+    
+    parts = text.split()
+    command = parts[0].split("@")[0].lower()
+    
+    # /start
+    if command == "/start":
+        await send_message(
+            config["telegram_token"],
+            chat_id,
+            "👋 Добро пожаловать в **OceaniaVPN Bot**!\n\n"
+            "📱 **Команды:**\n"
+            "/list — Список конфигов\n"
+            "/get <имя> — Скачать\n\n"
+            "🛠 **Для админа:**\n"
+            "/add <имя> <ссылка> — Добавить\n"
+            "/delete <имя> — Удалить"
+        )
+    
+    # /add
+    elif command == "/add":
+        if user_id != config["admin_id"]:
+            await send_message(config["telegram_token"], chat_id, "⛔️ Нет прав.")
+            return
+        
         if len(parts) < 3:
-            bot.reply_to(
-                message,
-                "❌ Неверный формат.\n\n"
-                "**Пример:**\n"
-                "`/add usa-wireguard.conf vless://12345@1.1.1.1:443?type=ws`",
+            await send_message(
+                config["telegram_token"],
+                chat_id,
+                "❌ Формат: `/add имя ссылка`\n**Пример:** `/add usa.conf vless://...`",
                 parse_mode="Markdown"
             )
             return
         
         filename = parts[1]
-        content = parts[2]
+        content = " ".join(parts[2:])
         
-        status, res = create_or_update_github_file(
-            filename,
-            content,
-            f"Add VPN config: {filename}"
+        status, data = await create_or_update_file(
+            config, filename, content, f"Add VPN config: {filename}"
         )
         
         if status in [200, 201]:
-            bot.reply_to(
-                message,
-                f"✅ Файл `{filename}` успешно сохранен в папке `{CONFIGS_FOLDER}/` на GitHub!",
+            await send_message(
+                config["telegram_token"],
+                chat_id,
+                f"✅ Файл `{filename}` сохранен в `{config['configs_folder']}/`",
                 parse_mode="Markdown"
             )
         else:
-            error_msg = res.get('message', 'Неизвестная ошибка')
-            bot.reply_to(message, f"❌ Ошибка GitHub API: {error_msg}")
+            error = data.get('message', 'Ошибка')
+            await send_message(config["telegram_token"], chat_id, f"❌ Ошибка: {error}")
     
-    except Exception as e:
-        bot.reply_to(message, f"Произошла ошибка: {e}")
-
-@bot.message_handler(commands=['delete'])
-def delete_config(message):
-    if message.chat.id != ADMIN_ID:
-        bot.reply_to(message, "⛔️ У вас нет прав для удаления конфигов.")
-        return
-    
-    try:
-        parts = message.text.split(maxsplit=1)
-        if len(parts) < 2:
-            bot.reply_to(message, "❌ Укажи имя файла.\nПример: `/delete usa.conf`", parse_mode="Markdown")
+    # /delete
+    elif command == "/delete":
+        if user_id != config["admin_id"]:
+            await send_message(config["telegram_token"], chat_id, "⛔️ Нет прав.")
             return
         
-        filename = parts[1].strip()
-        status, res = delete_github_file(filename, f"Delete VPN config: {filename}")
+        if len(parts) < 2:
+            await send_message(config["telegram_token"], chat_id, "❌ Укажи имя файла.")
+            return
+        
+        filename = parts[1]
+        status, data = await delete_file(
+            config, filename, f"Delete: {filename}"
+        )
         
         if status == 200:
-            bot.reply_to(message, f"🗑 Файл `{filename}` удален из `{CONFIGS_FOLDER}/`", parse_mode="Markdown")
+            await send_message(
+                config["telegram_token"],
+                chat_id,
+                f"🗑 Файл `{filename}` удален.",
+                parse_mode="Markdown"
+            )
         else:
-            bot.reply_to(message, f"❌ Не удалось удалить файл: {res.get('message', 'неизвестная ошибка')}")
+            await send_message(config["telegram_token"], chat_id, f"❌ Ошибка удаления.")
     
-    except Exception as e:
-        bot.reply_to(message, f"Ошибка: {e}")
-
-@bot.message_handler(commands=['list'])
-def list_configs(message):
-    try:
-        files_data = get_github_files()
+    # /list
+    elif command == "/list":
+        files = await list_files(config)
         
-        if not files_data or not isinstance(files_data, list):
-            bot.reply_to(message, "📭 В папке `configs/` пока нет файлов.")
+        if not files:
+            await send_message(config["telegram_token"], chat_id, "📭 Конфигов пока нет.")
             return
         
-        vpn_files = [f['name'] for f in files_data if f['type'] == 'file']
+        response = f"📂 **Конфиги в `{config['configs_folder']}/`:**\n\n"
+        for name in files:
+            response += f"🔹 `{name}`\n"
+        response += "\n💡 Чтобы скачать: `/get имя`"
         
-        if not vpn_files:
-            bot.reply_to(message, "📭 Конфигов пока нет.")
-            return
-        
-        response_text = f"📂 **Конфиги в папке `{CONFIGS_FOLDER}/`:**\n\n"
-        for name in vpn_files:
-            response_text += f"🔹 `{name}`\n"
-        
-        response_text += "\n💡 Чтобы скачать: `/get имя_файла`"
-        bot.reply_to(message, response_text, parse_mode="Markdown")
+        await send_message(config["telegram_token"], chat_id, response)
     
-    except Exception as e:
-        bot.reply_to(message, f"Ошибка при получении списка: {e}")
-
-@bot.message_handler(commands=['get'])
-def get_config(message):
-    try:
-        parts = message.text.split(maxsplit=1)
+    # /get
+    elif command == "/get":
         if len(parts) < 2:
-            bot.reply_to(message, "❌ Укажи имя файла.\nПример: `/get usa.conf`", parse_mode="Markdown")
+            await send_message(config["telegram_token"], chat_id, "❌ Укажи имя файла.")
             return
         
-        filename = parts[1].strip()
-        content = get_github_file_content(filename)
+        filename = parts[1]
+        content = await get_file_content(config, filename)
         
         if content:
             if len(content) > 3000:
-                file = io.BytesIO(content.encode('utf-8'))
-                file.name = filename
-                bot.send_document(message.chat.id, file, caption=f"🔗 Твой конфиг {filename}")
+                await send_document(
+                    config["telegram_token"],
+                    chat_id,
+                    content,
+                    filename,
+                    caption=f"🔗 Конфиг {filename}"
+                )
             else:
-                bot.reply_to(
-                    message,
+                await send_message(
+                    config["telegram_token"],
+                    chat_id,
                     f"🔗 **{filename}:**\n\n`{content}`",
                     parse_mode="Markdown"
                 )
         else:
-            bot.reply_to(message, f"❌ Файл `{filename}` не найден в папке `{CONFIGS_FOLDER}/`", parse_mode="Markdown")
+            await send_message(
+                config["telegram_token"],
+                chat_id,
+                f"❌ Файл `{filename}` не найден.",
+                parse_mode="Markdown"
+            )
+
+# === ГЛАВНЫЙ ОБРАБОТЧИК ===
+async def on_fetch(request, env):
+    """Главная функция Cloudflare Worker"""
+    global env
+    
+    try:
+        if request.method == "POST":
+            update = await request.json()
+            config = await get_config()
+            await handle_update(update, config)
+            return Response("OK", status=200)
+        
+        return Response(
+            "<h1>🚀 OceaniaVPN Bot Active</h1>",
+            headers={"Content-Type": "text/html"},
+            status=200
+        )
     
     except Exception as e:
-        bot.reply_to(message, f"Ошибка: {e}")
-
-@bot.message_handler(func=lambda m: m.text == "📋 Список конфигов")
-def handle_list_button(message):
-    list_configs(message)
-
-@bot.message_handler(func=lambda m: m.text == "ℹ️ Помощь")
-def handle_help_button(message):
-    start_message(message)
-
-# === ЗАПУСК ===
-def main():
-    """Запуск для локального тестирования"""
-    if WEBHOOK_URL:
-        bot.remove_webhook()
-        bot.set_webhook(url=WEBHOOK_URL)
-        print(f"✅ Webhook установлен: {WEBHOOK_URL}")
-    else:
-        print("⚠️ Webhook не установлен, запуск в режиме polling...")
-        print("Бот запущен и ожидает сообщений...")
-        bot.infinity_polling()
-
-# Для Cloudflare Workers (Python runtime)
-try:
-    async def on_fetch(request, env):
-        """Обработчик запросов для Cloudflare Workers"""
-        if request.method == "POST":
-            # Telegram webhook
-            try:
-                update_data = await request.json()
-                update = telebot.types.Update.de_json(update_data)
-                bot.process_new_updates([update])
-                return Response("OK", status=200)
-            except Exception as e:
-                return Response(f"Error: {str(e)}", status=500)
-        
-        return Response("OceaniaVPN Bot is running! 🚀", status=200)
-except NameError:
-    pass
-
-if __name__ == "__main__":
-    main()
+        return Response(f"Error: {str(e)}", status=500)
