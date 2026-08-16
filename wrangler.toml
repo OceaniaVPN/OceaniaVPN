@@ -1,6 +1,6 @@
 name = "oceania-vpn-sub-bot"
 main = "src/index.py"
-compatibility_date = "2026-08-17"
+compatibility_date = "2026-08-16"
 
 # Python runtime для Cloudflare Workers
 compatibility_flags = ["python_workers"]
