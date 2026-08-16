@@ -1,0 +1,17 @@
+name = "oceania-vpn-sub-bot"
+main = "src/index.py"
+compatibility_date = "2026-08-17"
+
+# Python runtime для Cloudflare Workers
+compatibility_flags = ["python_workers"]
+
+# Секреты хранятся здесь (добавим через CLI)
+[vars]
+REPO_OWNER = "OceaniaVPN"
+REPO_NAME = "OceaniaVPN"
+CONFIGS_FOLDER = "configs"
+BRANCH = "main"
+
+# Для запуска локально через ngrok
+[dev]
+port = 8787
