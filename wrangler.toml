@@ -3,7 +3,7 @@ main = "src/index.js"
 compatibility_date = "2026-08-16"
 
 [vars]
-REPO_OWNER = "OceaniaVPN"
-REPO_NAME = "OceaniaVPN"
+CONFIG_REPO_OWNER = "OceaniaVPN"
+CONFIG_REPO_NAME = "StekloVPN"
 CONFIGS_FOLDER = "configs"
 BRANCH = "main"
