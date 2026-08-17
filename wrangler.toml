@@ -7,3 +7,7 @@ CONFIG_REPO_OWNER = "OceaniaVPN"
 CONFIG_REPO_NAME = "StekloVPN"
 CONFIGS_FOLDER = "configs"
 BRANCH = "main"
+
+[[kv_namespaces]]
+binding = "BOT_STATE"
+id = "e56a18bce1624f87bc03b8de27544eb7"
