@@ -2,6 +2,9 @@ name = "oceaniavpn"
 main = "src/index.js"
 compatibility_date = "2026-08-16"
 
+[build]
+command = "npm install"
+
 [vars]
 CONFIG_REPO_OWNER = "OceaniaVPN"
 CONFIG_REPO_NAME = "StekloVPN"
