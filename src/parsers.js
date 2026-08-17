@@ -1,6 +1,33 @@
 import yaml from "js-yaml";
 
-// === ПАРСЕРЫ КОНФИГОВ В URI ===
+// ═══════════════════════════════════════════
+//  УТИЛИТЫ
+// ═══════════════════════════════════════════
+
+export function safeBase64(data) {
+  try {
+    const clean = data.replace(/\s/g, "").replace(/-/g, "+").replace(/_/g, "/");
+    const padded = clean + "=".repeat((4 - clean.length % 4) % 4);
+    return atob(padded);
+  } catch {
+    return null;
+  }
+}
+
+export function extractHeaders(content) {
+  const meta = {};
+  for (const line of content.split("\n")) {
+    if (line.startsWith("#")) {
+      const m = line.match(/^#([a-z0-9-]+):\s*(.+)$/i);
+      if (m) meta[m[1]] = m[2].trim();
+    }
+  }
+  return meta;
+}
+
+// ═══════════════════════════════════════════
+//  YAML PROXY → URI (Clash / Mihomo)
+// ═══════════════════════════════════════════
 
 export function proxyToUri(p) {
   if (!p || !p.type) return null;
@@ -53,8 +80,9 @@ export function proxyToUri(p) {
   if (t === "hysteria" || t === "hysteria2") {
     const params = new URLSearchParams();
     if (p.sni) params.set("sni", p.sni);
-    params.set("upmbps", p.up || "100");
-    params.set("downmbps", p.down || "100");
+    if (p["obfs-password"]) params.set("obfs-password", p["obfs-password"]);
+    params.set("upmbps", String(p.up || 100).replace(/\D/g, "") || "100");
+    params.set("downmbps", String(p.down || 100).replace(/\D/g, "") || "100");
     const q = params.toString();
     return `hysteria2://${p.password}@${p.server}:${p.port}${q ? "?" + q : ""}#${encodeURIComponent(name)}`;
   }
@@ -62,13 +90,27 @@ export function proxyToUri(p) {
   if (t === "tuic") {
     const params = new URLSearchParams();
     if (p.sni) params.set("sni", p.sni);
-    if (p["alpn"]) params.set("alpn", Array.isArray(p.alpn) ? p.alpn.join(",") : p.alpn);
+    if (p.alpn) params.set("alpn", Array.isArray(p.alpn) ? p.alpn.join(",") : p.alpn);
+    if (p["congestion-controller"]) params.set("congestion_control", p["congestion-controller"]);
     const q = params.toString();
     return `tuic://${p.uuid}:${p.password}@${p.server}:${p.port}${q ? "?" + q : ""}#${encodeURIComponent(name)}`;
   }
   
+  if (t === "wireguard" || t === "wg") {
+    const params = new URLSearchParams();
+    if (p["private-key"]) params.set("private_key", p["private-key"]);
+    if (p["public-key"]) params.set("peer_public_key", p["public-key"]);
+    if (p.ip) params.set("address", p.ip);
+    const q = params.toString();
+    return `wg://${p.server}:${p.port}${q ? "?" + q : ""}#${encodeURIComponent(name)}`;
+  }
+  
   return null;
 }
+
+// ═══════════════════════════════════════════
+//  XRAY OUTBOUND → URI
+// ═══════════════════════════════════════════
 
 export function xrayToUri(ob) {
   if (!ob || !ob.protocol) return null;
@@ -134,28 +176,90 @@ export function xrayToUri(ob) {
   return null;
 }
 
-// === ПАРСЕРЫ ФОРМАТОВ ===
+// ═══════════════════════════════════════════
+//  SING-BOX OUTBOUND → URI (Happ / Hiddify)
+// ═══════════════════════════════════════════
 
-export function safeBase64(data) {
-  try {
-    const clean = data.replace(/\s/g, "").replace(/-/g, "+").replace(/_/g, "/");
-    const padded = clean + "=".repeat((4 - clean.length % 4) % 4);
-    return atob(padded);
-  } catch {
-    return null;
-  }
-}
-
-export function extractHeaders(content) {
-  const meta = {};
-  for (const line of content.split("\n")) {
-    if (line.startsWith("#")) {
-      const m = line.match(/^#([a-z0-9-]+):\s*(.+)$/i);
-      if (m) meta[m[1]] = m[2].trim();
+export function singboxToUri(ob) {
+  if (!ob || !ob.type || !ob.server || !ob.server_port) return null;
+  const t = ob.type.toLowerCase();
+  const name = ob.tag || "Server";
+  const server = ob.server;
+  const port = ob.server_port;
+  
+  if (t === "vless") {
+    const params = new URLSearchParams();
+    const tr = ob.transport || {};
+    const tls = ob.tls || {};
+    if (tr.type) params.set("type", tr.type);
+    if (tr.type === "ws") {
+      if (tr.path) params.set("path", tr.path);
+      if (tr.headers?.Host) params.set("host", tr.headers.Host);
     }
+    if (tr.type === "grpc" && tr.service_name) params.set("serviceName", tr.service_name);
+    if (tls.enabled) {
+      params.set("security", tls.reality?.enabled ? "reality" : "tls");
+      if (tls.server_name) params.set("sni", tls.server_name);
+      if (tls.reality?.public_key) params.set("pbk", tls.reality.public_key);
+      if (tls.reality?.short_id) params.set("sid", tls.reality.short_id);
+      if (tls.utls?.fingerprint) params.set("fp", tls.utls.fingerprint);
+    }
+    if (ob.flow) params.set("flow", ob.flow);
+    const q = params.toString();
+    return `vless://${ob.uuid}@${server}:${port}${q ? "?" + q : ""}#${encodeURIComponent(name)}`;
   }
-  return meta;
+  
+  if (t === "vmess") {
+    const tr = ob.transport || {};
+    const tls = ob.tls || {};
+    const v = {
+      v: "2", ps: name, add: server, port, id: ob.uuid,
+      aid: ob.alter_id || 0, net: tr.type || "tcp", type: "none",
+      host: tr.headers?.Host || "", path: tr.path || "",
+      tls: tls.enabled ? "tls" : "", sni: tls.server_name || "",
+    };
+    return `vmess://${btoa(JSON.stringify(v))}`;
+  }
+  
+  if (t === "trojan") {
+    const params = new URLSearchParams();
+    const tls = ob.tls || {};
+    params.set("security", "tls");
+    if (ob.transport?.type) params.set("type", ob.transport.type);
+    if (ob.transport?.path) params.set("path", ob.transport.path);
+    if (ob.transport?.headers?.Host) params.set("host", ob.transport.headers.Host);
+    if (tls.server_name) params.set("sni", tls.server_name);
+    const q = params.toString();
+    return `trojan://${ob.password}@${server}:${port}${q ? "?" + q : ""}#${encodeURIComponent(name)}`;
+  }
+  
+  if (t === "shadowsocks") {
+    const ui = btoa(`${ob.method}:${ob.password}`);
+    return `ss://${ui}@${server}:${port}#${encodeURIComponent(name)}`;
+  }
+  
+  if (t === "hysteria2" || t === "hysteria") {
+    const params = new URLSearchParams();
+    if (ob.tls?.server_name) params.set("sni", ob.tls.server_name);
+    if (ob.obfs?.password) params.set("obfs-password", ob.obfs.password);
+    const q = params.toString();
+    return `hysteria2://${ob.password}@${server}:${port}${q ? "?" + q : ""}#${encodeURIComponent(name)}`;
+  }
+  
+  if (t === "tuic") {
+    const params = new URLSearchParams();
+    if (ob.tls?.server_name) params.set("sni", ob.tls.server_name);
+    if (ob.congestion_control) params.set("congestion_control", ob.congestion_control);
+    const q = params.toString();
+    return `tuic://${ob.uuid}:${ob.password}@${server}:${port}${q ? "?" + q : ""}#${encodeURIComponent(name)}`;
+  }
+  
+  return null;
 }
+
+// ═══════════════════════════════════════════
+//  ПАРСЕРЫ ФОРМАТОВ
+// ═══════════════════════════════════════════
 
 export function parseVlessList(content) {
   const uris = [];
@@ -200,14 +304,25 @@ export function parseJson(content) {
     const data = JSON.parse(content);
     const uris = [];
     
-    if (data.outbounds && Array.isArray(data.outbounds)) {
+    const tryConvert = (ob) => {
+      let uri = singboxToUri(ob);
+      if (!uri) uri = xrayToUri(ob);
+      if (!uri) uri = proxyToUri(ob);
+      return uri;
+    };
+    
+    // { outbounds: [...] } — Xray / Sing-box
+    if (Array.isArray(data?.outbounds)) {
+      const skip = ["direct", "block", "dns", "selector", "urltest", "fallback"];
       for (const ob of data.outbounds) {
-        const uri = xrayToUri(ob);
+        if (skip.includes(ob?.type) || skip.includes(ob?.protocol)) continue;
+        const uri = tryConvert(ob);
         if (uri) uris.push(uri);
       }
     }
     
-    if (data.configs && Array.isArray(data.configs)) {
+    // Hiddify: { configs: [{ url }] }
+    if (Array.isArray(data?.configs)) {
       for (const c of data.configs) {
         if (typeof c === "string") uris.push(c);
         else if (c?.url) uris.push(c.url);
@@ -215,22 +330,24 @@ export function parseJson(content) {
       }
     }
     
+    // Массив строк или объектов
     if (Array.isArray(data)) {
       for (const item of data) {
         if (typeof item === "string" && item.includes("://")) uris.push(item);
         else if (item?.type) {
-          const uri = proxyToUri(item);
+          const uri = tryConvert(item);
           if (uri) uris.push(uri);
         }
       }
     }
     
+    // Один объект
     if (data?.type && !Array.isArray(data)) {
-      const uri = proxyToUri(data);
+      const uri = tryConvert(data);
       if (uri) uris.push(uri);
     }
     
-    if (uris.length === 0) return { ok: false, error: "JSON не содержит конфигов" };
+    if (uris.length === 0) return { ok: false, error: "JSON не содержит распознаваемых конфигов" };
     return { ok: true, uris, metadata: {} };
   } catch (e) {
     return { ok: false, error: `JSON: ${e.message}` };
@@ -252,4 +369,4 @@ export function parseCrypt(content) {
            `Требуется AES-ключ для дешифровки.\n\n` +
            `💡 <b>Решение:</b> открой ссылку в Happ или Hiddify → экспортируй как обычную vless подписку → отправь мне снова.`
   };
-                                                   }
+                                      }
