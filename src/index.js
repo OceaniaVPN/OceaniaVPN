@@ -84,12 +84,6 @@ async function deleteFile(cfg, filename, message) {
   });
 }
 
-async function listFiles(cfg) {
-  const data = await ghRequest(cfg, "GET", `/contents/${cfg.configsFolder}?ref=${cfg.branch}`);
-  if (!Array.isArray(data)) return [];
-  return data.filter((f) => f.type === "file").map((f) => f.name);
-}
-
 async function getFileContent(cfg, filename) {
   const data = await ghRequest(
     cfg,
@@ -104,8 +98,14 @@ async function getFileContent(cfg, filename) {
   }
 }
 
+async function listAllUsers(cfg) {
+  const data = await ghRequest(cfg, "GET", `/contents/${cfg.configsFolder}?ref=${cfg.branch}`);
+  if (!Array.isArray(data)) return [];
+  return data.filter((f) => f.type === "file" && f.name.startsWith("user_")).map((f) => f.name);
+}
+
 // === ОБРАБОТКА СООБЩЕНИЙ ===
-async function handleUpdate(update, cfg, workerUrl) {
+async function handleUpdate(update, cfg) {
   if (!update.message) return;
 
   const msg = update.message;
@@ -117,84 +117,160 @@ async function handleUpdate(update, cfg, workerUrl) {
 
   const parts = text.split(" ");
   const cmd = parts[0].split("@")[0].toLowerCase();
+  const userFile = `user_${chatId}.conf`;
 
   // /start
   if (cmd === "/start") {
     await sendMessage(
       cfg.telegramToken,
       chatId,
-      "👋 *OceaniaVPN Bot*\n\n" +
+      "👋 *Добро пожаловать в OceaniaVPN!*\n\n" +
+        "Создай свою VPN подписку и используй её в любом приложении.\n\n" +
         "📱 *Команды:*\n" +
-        "/list — список конфигов\n" +
-        "/get <имя> — скачать конфиг\n\n" +
-        "🛠 *Для админа:*\n" +
-        "/add <имя> <ссылка> — добавить\n" +
-        "/delete <имя> — удалить"
+        "/create `<ссылка>` — создать подписку\n" +
+        "/my — показать мою подписку\n" +
+        "/export — экспортировать файл\n" +
+        "/delete — удалить мою подписку\n\n" +
+        "*Пример:*\n`/create vless://uuid@server:port?type=ws`"
     );
   }
 
-  // /add
-  else if (cmd === "/add") {
-    if (userId !== cfg.adminId) return sendMessage(cfg.telegramToken, chatId, "⛔️ Нет прав.");
-    if (parts.length < 3) {
+  // /create - создать подписку
+  else if (cmd === "/create") {
+    if (parts.length < 2) {
       return sendMessage(
         cfg.telegramToken,
         chatId,
-        "❌ Формат: `/add имя ссылка`\n*Пример:* `/add usa.conf vless://...`"
+        "❌ Укажи ссылку после команды.\n\n*Пример:*\n`/create vless://uuid@server:port?type=ws`"
       );
     }
-    const filename = parts[1];
-    const content = parts.slice(2).join(" ");
-    const res = await createOrUpdateFile(cfg, filename, content, `Add VPN config: ${filename}`);
+    
+    const content = parts.slice(1).join(" ");
+    
+    // Проверка что это похоже на VPN ссылку
+    if (!content.includes("://")) {
+      return sendMessage(
+        cfg.telegramToken,
+        chatId,
+        "❌ Это не похоже на VPN ссылку. Ссылка должна начинаться с `vless://`, `vmess://`, `trojan://` и т.д."
+      );
+    }
+    
+    const res = await createOrUpdateFile(cfg, userFile, content, `Create subscription for user ${chatId}`);
+    
     if (res.content || res.sha) {
-      await sendMessage(cfg.telegramToken, chatId, `✅ Файл \`${filename}\` сохранён в \`${cfg.configsFolder}/\``);
+      await sendMessage(
+        cfg.telegramToken,
+        chatId,
+        `✅ *Подписка создана!*\n\nИспользуй /my чтобы увидеть её или /export чтобы скачать файл.`
+      );
     } else {
       await sendMessage(cfg.telegramToken, chatId, `❌ Ошибка: ${res.message || "неизвестно"}`);
     }
   }
 
-  // /delete
+  // /my - показать мою подписку
+  else if (cmd === "/my") {
+    const content = await getFileContent(cfg, userFile);
+    
+    if (!content) {
+      return sendMessage(
+        cfg.telegramToken,
+        chatId,
+        "📭 У тебя ещё нет подписки.\n\nСоздай её командой:\n`/create vless://...`"
+      );
+    }
+    
+    await sendMessage(
+      cfg.telegramToken,
+      chatId,
+      `🔗 *Твоя подписка:*\n\n\`${content}\`\n\n💡 Используй /export чтобы скачать файл для импорта в приложение.`
+    );
+  }
+
+  // /export - экспортировать как файл
+  else if (cmd === "/export") {
+    const content = await getFileContent(cfg, userFile);
+    
+    if (!content) {
+      return sendMessage(
+        cfg.telegramToken,
+        chatId,
+        "📭 У тебя ещё нет подписки.\n\nСоздай её командой:\n`/create vless://...`"
+      );
+    }
+    
+    await sendDocument(
+      cfg.telegramToken,
+      chatId,
+      content,
+      `oceaniavpn_${chatId}.conf`,
+      "🔗 Твоя VPN подписка OceaniaVPN"
+    );
+  }
+
+  // /delete - удалить мою подписку
   else if (cmd === "/delete") {
-    if (userId !== cfg.adminId) return sendMessage(cfg.telegramToken, chatId, "⛔️ Нет прав.");
-    if (parts.length < 2) return sendMessage(cfg.telegramToken, chatId, "❌ Укажи имя файла.");
-    const filename = parts[1];
-    const res = await deleteFile(cfg, filename, `Delete: ${filename}`);
+    const res = await deleteFile(cfg, userFile, `Delete subscription for user ${chatId}`);
+    
     if (res.commit) {
-      await sendMessage(cfg.telegramToken, chatId, `🗑 Файл \`${filename}\` удалён.`);
+      await sendMessage(cfg.telegramToken, chatId, "🗑 Твоя подписка удалена.");
     } else {
-      await sendMessage(cfg.telegramToken, chatId, `❌ Ошибка: ${res.message || "неизвестно"}`);
+      await sendMessage(cfg.telegramToken, chatId, "📭 У тебя нет подписки.");
     }
   }
 
-  // /list
-  else if (cmd === "/list") {
-    const files = await listFiles(cfg);
-    if (files.length === 0) return sendMessage(cfg.telegramToken, chatId, "📭 Конфигов пока нет.");
-    let response = `📂 *Конфиги в \`${cfg.configsFolder}/\`:*\n\n`;
-    for (const name of files) response += `🔹 \`${name}\`\n`;
-    response += "\n💡 Чтобы скачать: `/get имя`";
+  // /admin - админ команды (только для админа)
+  else if (cmd === "/admin") {
+    if (userId !== cfg.adminId) {
+      return sendMessage(cfg.telegramToken, chatId, "⛔️ Нет прав.");
+    }
+    
+    await sendMessage(
+      cfg.telegramToken,
+      chatId,
+      "🛠 *Админ команды:*\n\n" +
+        "/users — список всех пользователей\n" +
+        "/stats — статистика"
+    );
+  }
+
+  // /users - список всех пользователей (админ)
+  else if (cmd === "/users") {
+    if (userId !== cfg.adminId) {
+      return sendMessage(cfg.telegramToken, chatId, "⛔️ Нет прав.");
+    }
+    
+    const users = await listAllUsers(cfg);
+    
+    if (users.length === 0) {
+      return sendMessage(cfg.telegramToken, chatId, "📭 Пользователей пока нет.");
+    }
+    
+    let response = `👥 *Всего пользователей: ${users.length}*\n\n`;
+    for (const file of users) {
+      const uid = file.replace("user_", "").replace(".conf", "");
+      response += `🔹 ID: \`${uid}\`\n`;
+    }
+    
     await sendMessage(cfg.telegramToken, chatId, response);
   }
 
-  // /get
-  else if (cmd === "/get") {
-    if (parts.length < 2) return sendMessage(cfg.telegramToken, chatId, "❌ Укажи имя файла.");
-    const filename = parts[1];
-    const content = await getFileContent(cfg, filename);
-    if (!content) return sendMessage(cfg.telegramToken, chatId, `❌ Файл \`${filename}\` не найден.`);
-    if (content.length > 3000) {
-      await sendDocument(cfg.telegramToken, chatId, content, filename, `🔗 Конфиг ${filename}`);
-    } else {
-      await sendMessage(cfg.telegramToken, chatId, `🔗 *${filename}:*\n\n\`${content}\``);
+  // /stats - статистика (админ)
+  else if (cmd === "/stats") {
+    if (userId !== cfg.adminId) {
+      return sendMessage(cfg.telegramToken, chatId, "⛔️ Нет прав.");
     }
-  }
-
-  // /setwebhook (только админ)
-  else if (cmd === "/setwebhook") {
-    if (userId !== cfg.adminId) return sendMessage(cfg.telegramToken, chatId, "⛔️ Нет прав.");
-    if (!workerUrl) return sendMessage(cfg.telegramToken, chatId, "❌ Не удалось определить URL воркера.");
-    const res = await tgRequest(cfg.telegramToken, "setWebhook", { url: workerUrl });
-    await sendMessage(cfg.telegramToken, chatId, res.ok ? `✅ Webhook установлен: ${workerUrl}` : `❌ Ошибка: ${res.description}`);
+    
+    const users = await listAllUsers(cfg);
+    
+    await sendMessage(
+      cfg.telegramToken,
+      chatId,
+      `📊 *Статистика OceaniaVPN*\n\n` +
+        `👥 Пользователей: ${users.length}\n` +
+        `📁 Файлов в configs/: ${users.length}`
+    );
   }
 }
 
@@ -203,7 +279,6 @@ export default {
   async fetch(request, env) {
     const cfg = getConfig(env);
     const url = new URL(request.url);
-    const workerUrl = `${url.protocol}//${url.host}`;
 
     // Служебные GET эндпоинты
     if (request.method === "GET") {
@@ -214,6 +289,7 @@ export default {
         );
       }
       if (url.pathname === "/set-webhook") {
+        const workerUrl = `${url.protocol}//${url.host}`;
         const res = await tgRequest(cfg.telegramToken, "setWebhook", { url: workerUrl });
         return new Response(JSON.stringify(res, null, 2), {
           headers: { "Content-Type": "application/json" },
@@ -226,7 +302,7 @@ export default {
     if (request.method === "POST") {
       try {
         const update = await request.json();
-        await handleUpdate(update, cfg, workerUrl);
+        await handleUpdate(update, cfg);
         return new Response("OK", { status: 200 });
       } catch (err) {
         return new Response(`Error: ${err.message}`, { status: 500 });
