@@ -1,8 +1,6 @@
 name = "oceaniavpn"
-main = "src/index.py"
+main = "src/index.js"
 compatibility_date = "2026-08-16"
-
-compatibility_flags = ["python_workers"]
 
 [vars]
 REPO_OWNER = "OceaniaVPN"
