@@ -260,6 +260,7 @@ export function parseVlessList(content) {
   const uris = [];
   for (const line of content.split("\n")) {
     const l = line.trim();
+    // 🔥 FIX: экранированы слеши в регулярном выражении
     if (l && !l.startsWith("#") && /^[a-z0-9]+:\/\//i.test(l)) {
       uris.push(l);
     }
@@ -365,7 +366,8 @@ export function parseJson(content) {
 }
 
 export function parseCrypt(content) {
-  const m = content.match(/^crypt[45]://(.+)$/i);
+  // 🔥 FIX: экранированы слеши в регулярном выражении
+  const m = content.match(/^crypt[45]:\/\/(.+)$/i);
   if (!m) return { ok: false, error: "Некорректный crypt формат" };
   const decoded = safeBase64(m[1]);
   if (decoded && decoded.includes("://")) {
