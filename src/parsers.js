@@ -379,3 +379,188 @@
 379:            `💡 <b>Решение:</b> открой ссылку в Happ или Hiddify → экспортируй как обычную vless подписку → отправь мне снова.`
 380:   };
 381: }
+// ═══════════════════════════════════════════
+// HTML → сбор конфигов со страницы
+// ═══════════════════════════════════════════
+
+// Все поддерживаемые схемы прокси-протоколов
+const PROXY_SCHEMES = [
+  "vless", "vmess", "trojan", "ss", "ssr",
+  "hysteria", "hysteria2", "hy2", "tuic", "wg", "wireguard",
+  "socks", "socks5", "http",
+];
+
+// Regex для "голых" URI прямо в тексте/HTML (в атрибутах, тегах <a>, <code>, <pre>, JSON внутри <script> и т.д.)
+// Берём непрерывный кусок без пробелов/кавычек/угловых скобок после схемы.
+function buildProxyUriRegex() {
+  const schemes = PROXY_SCHEMES.join("|");
+  // допускаем схему://..., останавливаемся на пробеле, кавычке, <, >, ), запятой-разделителе HTML-энтити
+  return new RegExp(`(?:${schemes}):\\/\\/[^\\s"'<>\\)\\]]+`, "gi");
+}
+
+// Regex для ссылок на подписки/сырые конфиги (обычные http/https-ссылки на .txt, /sub, /raw, base64-эндпоинты и т.п.)
+function buildSubLinkRegex() {
+  return /https?:\/\/[^\s"'<>\)\]]+/gi;
+}
+
+// Отсекаем "мусорные" http(s)-ссылки — картинки, стили, соцсети, сама страница и т.д.
+const SUB_LINK_IGNORE = /\.(png|jpe?g|gif|svg|webp|ico|css|woff2?|ttf|map)(\?|#|$)/i;
+const SUB_LINK_IGNORE_HOSTS = /(github\.com\/(?!.*\/raw\/)|githubusercontent\.com\/.*\.md$|twitter\.com|t\.me\/(?!.*[?&#]|.*\/joinchat)|youtube\.com|vk\.com|facebook\.com|instagram\.com)/i;
+
+// Эвристика "похоже на ссылку с конфигами": содержит характерные слова/паттерны в пути
+const SUB_LINK_LIKELY = /(sub|config|clash|singbox|sing-box|v2ray|xray|proxy|nodes?|link|raw\.githubusercontent|\/api\/|token=|\.ya?ml($|\?)|\.json($|\?)|\.txt($|\?))/i;
+
+function stripHtmlEntities(str) {
+  return str
+    .replace(/&amp;/g, "&")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">");
+}
+
+// Достаём текстовое содержимое <pre>/<code> отдельно — там чаще всего лежат
+// подписки/конфиги, которые сайт показывает "как есть"
+function extractCodeBlocks(html) {
+  const blocks = [];
+  const re = /<(pre|code|textarea)[^>]*>([\s\S]*?)<\/\1>/gi;
+  let m;
+  while ((m = re.exec(html)) !== null) {
+    const text = stripHtmlEntities(m[2].replace(/<[^>]+>/g, ""));
+    if (text.trim()) blocks.push(text);
+  }
+  return blocks;
+}
+
+/**
+ * Разбирает произвольный HTML-документ и достаёт из него:
+ *  - прямые прокси-URI (vless/vmess/trojan/ss/...)
+ *  - ссылки на подписки/сырые конфиги (https://.../sub, .../raw/..., .txt, .yaml и т.п.)
+ *  - base64-блоки внутри <pre>/<code>, которые при декодировании дают список URI
+ *
+ * @param {string} html  исходный HTML
+ * @param {string} [pageUrl]  URL страницы (для резолва относительных ссылок, если понадобится)
+ */
+export function parseHtml(html, pageUrl) {
+  if (!html || typeof html !== "string") {
+    return { ok: false, error: "Пустой HTML" };
+  }
+
+  const uris = new Set();
+  const subLinks = new Set();
+
+  const uriRe = buildProxyUriRegex();
+  const linkRe = buildSubLinkRegex();
+
+  // 1. Прямые прокси-URI по всему документу (включая атрибуты href, текст, JS-объекты в <script>)
+  const cleanedHtml = stripHtmlEntities(html);
+  for (const match of cleanedHtml.matchAll(uriRe)) {
+    uris.add(match[0].replace(/[.,;]+$/, "")); // отсечь хвостовую пунктуацию
+  }
+
+  // 2. Блоки <pre>/<code>/<textarea> — частый способ показать подписку на странице
+  for (const block of extractCodeBlocks(html)) {
+    // 2a. Построчный список URI
+    const listResult = parseVlessList(block);
+    if (listResult.ok) {
+      for (const u of listResult.uris) uris.add(u);
+    }
+    // 2b. Целиком base64-блок (подписка одним blob'ом)
+    if (!/:\/\//.test(block)) {
+      const b64Result = parseBase64(block);
+      if (b64Result.ok) {
+        for (const u of b64Result.uris) uris.add(u);
+      }
+    }
+  }
+
+  // 3. Ссылки, вероятно ведущие на подписки/файлы конфигов (для последующей докачки ботом)
+  for (const match of cleanedHtml.matchAll(linkRe)) {
+    const url = match[0].replace(/[.,;]+$/, "");
+    if (SUB_LINK_IGNORE.test(url)) continue;
+    if (SUB_LINK_IGNORE_HOSTS.test(url)) continue;
+    if (SUB_LINK_LIKELY.test(url) || /\/raw\//.test(url)) {
+      subLinks.add(url);
+    }
+  }
+
+  // GitHub blob-ссылки → нормализуем в raw, чтобы бот сразу мог их скачать
+  const normalizedSubLinks = [...subLinks].map((u) => {
+    const blobMatch = u.match(/^https:\/\/github\.com\/([^/]+)\/([^/]+)\/blob\/(.+)$/i);
+    if (blobMatch) {
+      return `https://raw.githubusercontent.com/${blobMatch[1]}/${blobMatch[2]}/${blobMatch[3]}`;
+    }
+    return u;
+  });
+
+  if (uris.size === 0 && normalizedSubLinks.length === 0) {
+    return { ok: false, error: "На странице не найдено конфигов или ссылок на подписки" };
+  }
+
+  return {
+    ok: true,
+    uris: [...uris],
+    subLinks: normalizedSubLinks,
+    metadata: extractHeaders(html),
+  };
+}
+
+/**
+ * Комбинированный разбор: качает URL, определяет тип содержимого
+ * (HTML / plain-list / base64 / yaml / json) и парсит соответствующим парсером.
+ * Если это HTML со ссылками на подписки — рекурсивно докачивает их (глубина 1,
+ * чтобы не улететь в бесконечный обход чужого сайта).
+ *
+ * @param {string} url
+ * @param {(u: string) => Promise<string>} fetcher  функция скачивания текста по URL (передаётся ботом)
+ * @param {number} [depth]
+ */
+export async function parseUrl(url, fetcher, depth = 0) {
+  let content;
+  try {
+    content = await fetcher(url);
+  } catch (e) {
+    return { ok: false, error: `Не удалось скачать: ${e.message}` };
+  }
+
+  const trimmed = content.trim();
+  const looksLikeHtml = /^<!doctype html|^<html[\s>]/i.test(trimmed) || /<\/html>/i.test(trimmed);
+
+  if (looksLikeHtml) {
+    const htmlResult = parseHtml(content, url);
+    if (!htmlResult.ok) return htmlResult;
+
+    let allUris = [...htmlResult.uris];
+
+    if (depth === 0) {
+      for (const sub of htmlResult.subLinks.slice(0, 10)) { // ограничение, чтобы не спамить запросами
+        const nested = await parseUrl(sub, fetcher, depth + 1);
+        if (nested.ok) allUris.push(...nested.uris);
+      }
+    }
+
+    const uniqueUris = [...new Set(allUris)];
+    if (uniqueUris.length === 0) {
+      return { ok: false, error: "Конфиги не найдены ни на странице, ни по вложенным ссылкам" };
+    }
+    return { ok: true, uris: uniqueUris, metadata: htmlResult.metadata };
+  }
+
+  // Не HTML — пробуем как обычную подписку по очереди
+  if (/^crypt[45]:\/\//i.test(trimmed)) return parseCrypt(trimmed);
+  if (/^[a-z0-9]+:\/\//i.test(trimmed) || trimmed.split("\n").some((l) => /^[a-z0-9]+:\/\//i.test(l.trim()))) {
+    return parseVlessList(trimmed);
+  }
+  try {
+    JSON.parse(trimmed);
+    return parseJson(trimmed);
+  } catch { /* not json */ }
+  if (/^proxies:|^proxy-groups:/m.test(trimmed)) {
+    return parseYaml(trimmed);
+  }
+  const b64 = parseBase64(trimmed);
+  if (b64.ok) return b64;
+
+  return { ok: false, error: "Неизвестный формат содержимого по ссылке" };
+}
+
