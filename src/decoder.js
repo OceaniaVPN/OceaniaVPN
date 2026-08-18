@@ -12,27 +12,21 @@ const BLOCKED_DOMAINS = [
 ];
 
 // ═══════════════════════════════════════════
-//  🎭 ПУЛ РАНДОМНЫХ USER-AGENT (Устройства + Приложения)
+//  🎭 ПУЛ РАНДОМНЫХ USER-AGENT
 // ═══════════════════════════════════════════
 const USER_AGENTS_POOL = [
-  // Android устройства
   "Happ/10.0.0 (Android 14; Poco X6 Pro 5G) okhttp/4.12.0",
   "Happ/10.0.0 (Android 14; Xiaomi 13 Pro) okhttp/4.12.0",
   "Happ/10.0.0 (Android 14; OnePlus 11 Pro) okhttp/4.12.0",
+  "Happ/10.0.0 (iOS 17.4; iPhone16,2) okhttp/4.12.0",
+  "Happ/10.0.0 (iOS 17.4; iPhone16,4) okhttp/4.12.0",
   "v2rayNG/1.8.20 (Android 14; Poco X6 Pro 5G)",
   "Hiddify/5.0.0 (Android 14; Xiaomi 13 Pro)",
   "INCY/2.1.0 (Android 14; OnePlus 11 Pro)",
-  // iOS устройства (iPhone 16 Pro / Max)
-  "Happ/10.0.0 (iOS 17.4; iPhone16,2) okhttp/4.12.0",
-  "Happ/10.0.0 (iOS 17.4; iPhone16,4) okhttp/4.12.0",
-  "Hiddify/5.0.0 (iOS 17.4; iPhone16,2)",
-  "v2rayNG/1.8.20 (iOS 17.4; iPhone16,4)",
-  // Windows (7, 10, 11)
   "INCY/2.1.0 (Windows NT 10.0; Win64; x64)",
   "INCY/2.1.0 (Windows NT 11.0; Win64; x64)",
-  "INCY/2.1.0 (Windows NT 6.1; Win64; x64)", // Windows 7
+  "INCY/2.1.0 (Windows NT 6.1; Win64; x64)",
   "Hiddify/5.0.0 (Windows NT 10.0; Win64; x64)",
-  // Linux
   "Hiddify/5.0.0 (X11; Linux x86_64)",
   "INCY/2.1.0 (X11; Linux x86_64)"
 ];
@@ -42,7 +36,7 @@ function getRandomUA() {
 }
 
 // ═══════════════════════════════════════════
-//  HTTP С ТАЙМАУТОМ, РЕДИРЕКТАМИ И РАНДОМНЫМ UA
+//  HTTP С ТАЙМАУТОМ И РЕДИРЕКТАМИ
 // ═══════════════════════════════════════════
 
 async function fetchWithTimeout(url, options, timeoutMs = 15000) {
@@ -59,7 +53,6 @@ async function fetchWithRedirects(url, max = 5) {
   let currentUrl = url;
   
   for (let i = 0; i < max; i++) {
-    // 🎭 Генерируем новый случайный UA для каждого шага редиректа
     const dynamicHeaders = { 
       "User-Agent": getRandomUA(),
       "Accept": "*/*",
@@ -94,14 +87,9 @@ async function fetchWithRedirects(url, max = 5) {
   return await fetchWithTimeout(currentUrl, { method: "GET", headers: dynamicHeaders }, 15000);
 }
 
-// ═══════════════════════════════════════════
-//  ИЗВЛЕЧЕНИЕ РЕАЛЬНОЙ ССЫЛКИ ИЗ URL (happ-redirect)
-// ═══════════════════════════════════════════
-
 function extractRedirectTarget(url) {
   try {
     const urlObj = new URL(url); 
-    
     if (urlObj.pathname.includes("happ-redirect") || urlObj.pathname.includes("redirect")) {
       const target = urlObj.searchParams.get("url") ||
                      urlObj.searchParams.get("sub") ||
@@ -109,11 +97,9 @@ function extractRedirectTarget(url) {
                      urlObj.searchParams.get("target");
       if (target) return target;
     }
-     
     if (urlObj.searchParams.get("url")) {
       return urlObj.searchParams.get("url");
     }
-    
     return null;
   } catch {
     return null;
@@ -121,31 +107,32 @@ function extractRedirectTarget(url) {
 }
 
 // ═══════════════════════════════════════════
-//  УМНЫЙ ПОИСК ВСЕХ URL ИЗ HTML (БЕЗ ФЕЙКОВ)
+//  🔥 УМНЫЙ ПОИСК URL (СПЕЦИАЛЬНО ДЛЯ HATVPN)
 // ═══════════════════════════════════════════
 
 function extractAllUrlsFromHtml(html, originalUrl) {
   const foundUrls = new Set();
   
-  // 🎯 1. ПРИОРИТЕТ: Ищем явные ссылки на подписки
-  const subPatterns = [
-    /https?:\/\/[^\s"'<>]+(?:subscribe|token|uuid|client|api\/v1)[^\s"'<>]*/gi,
-    /https?:\/\/[^\s"'<>]+\/link\/[^\s"'<>]+/gi,
-    /https?:\/\/[^\s"'<>]+\/sub\/[^\s"'<>]+/gi
+  // 🎯 1. ПРИОРИТЕТ: Кнопка "Добавить подписку" (HatVPN)
+  // Ищем кнопки с текстом "Добавить подписку", "Subscribe", "Add subscription"
+  const buttonPatterns = [
+    /<button[^>]*data-(?:url|link|sub|subscription)=["']([^"']+)["'][^>]*>.*?(?:Добавить подписку|Subscribe|Add subscription).*?<\/button>/gi,
+    /<a[^>]*data-(?:url|link|sub|subscription)=["']([^"']+)["'][^>]*>.*?(?:Добавить подписку|Subscribe|Add subscription).*?<\/a>/gi,
+    /<div[^>]*data-(?:url|link|sub|subscription)=["']([^"']+)["'][^>]*>.*?(?:Добавить подписку|Subscribe|Add subscription).*?<\/div>/gi,
   ];
   
-  for (const p of subPatterns) {
+  for (const p of buttonPatterns) {
     const matches = html.match(p) || [];
     for (const m of matches) {
-      const cleanUrl = m.replace(/&amp;/g, "&").replace(/["']/g, "");
-      if (cleanUrl.startsWith("http") && !cleanUrl.includes("0.0.0.0") && !cleanUrl.includes("00000000-0000")) {
-        foundUrls.add(cleanUrl);
+      const dataMatch = m.match(/data-(?:url|link|sub|subscription)=["']([^"']+)["']/i);
+      if (dataMatch && dataMatch[1].startsWith("http")) {
+        foundUrls.add(dataMatch[1]);
       }
     }
   }
   
-  // 🎯 2. data-атрибуты
-  const dataAttrs = html.match(/data-(?:url|link|sub|subscription|config|clipboard-text)=["']([^"']+)["']/gi) || [];
+  // 🎯 2. Любые data-атрибуты с URL (независимо от текста кнопки)
+  const dataAttrs = html.match(/data-(?:url|link|sub|subscription|config|clipboard-text|href)=["']([^"']+)["']/gi) || [];
   for (const attr of dataAttrs) {
     const m = attr.match(/=["']([^"']+)["']/);
     if (m && m[1].startsWith("http") && !m[1].includes("0.0.0.0")) {
@@ -153,7 +140,7 @@ function extractAllUrlsFromHtml(html, originalUrl) {
     }
   }
   
-  // 🎯 3. onclick обработчики
+  //  3. onclick обработчики (особенно для кнопок)
   const onclickMatches = html.match(/onclick=["'][^"']*?(https?:\/\/[^"'\s]+)[^"']*?["']/gi) || [];
   for (const m of onclickMatches) {
     const urlMatch = m.match(/https?:\/\/[^"'\s]+/);
@@ -183,7 +170,24 @@ function extractAllUrlsFromHtml(html, originalUrl) {
     }
   }
   
-  // 🎯 5. JavaScript переменные
+  // 🎯 5. Явные ссылки на подписки (token, uuid, sub, api/v1)
+  const subPatterns = [
+    /https?:\/\/[^\s"'<>]+(?:subscribe|token|uuid|client|api\/v1)[^\s"'<>]*/gi,
+    /https?:\/\/[^\s"'<>]+\/link\/[^\s"'<>]+/gi,
+    /https?:\/\/[^\s"'<>]+\/sub\/[^\s"'<>]+/gi
+  ];
+  
+  for (const p of subPatterns) {
+    const matches = html.match(p) || [];
+    for (const m of matches) {
+      const cleanUrl = m.replace(/&amp;/g, "&").replace(/["']/g, "");
+      if (cleanUrl.startsWith("http") && !cleanUrl.includes("0.0.0.0") && !cleanUrl.includes("00000000-0000")) {
+        foundUrls.add(cleanUrl);
+      }
+    }
+  }
+  
+  // 🎯 6. JavaScript переменные
   const jsVars = html.match(/(?:var|let|const)\s+(?:url|link|sub|subscription|config)\s*=\s*["']([^"']+)["']/gi) || [];
   for (const v of jsVars) {
     const m = v.match(/=\s*["']([^"']+)["']/);
@@ -216,7 +220,6 @@ async function fetchSubscription(url) {
       };
     }
 
-    // ШАГ 1: happ-redirect?url=... → достаём настоящую ссылку
     const redirectTarget = extractRedirectTarget(url);
     const actualUrl = redirectTarget || url;
     
@@ -224,7 +227,6 @@ async function fetchSubscription(url) {
       console.log(`[Decoder] Redirect: ${url} -> ${redirectTarget}`);
     }
     
-    // ШАГ 2: запрос со случайным UA
     const res = await fetchWithRedirects(actualUrl);
     
     if (!res.ok) {
@@ -234,7 +236,6 @@ async function fetchSubscription(url) {
     const text = await res.text();
     const ct = res.headers.get("content-type") || "";
     
-    // ШАГ 3: HTML → ищем ВСЕ ссылки
     const isHtml = ct.includes("text/html") || 
                    text.trim().startsWith("<!DOCTYPE") || 
                    text.trim().startsWith("<html") ||
@@ -284,8 +285,11 @@ async function fetchSubscription(url) {
       
       return {
         ok: false,
-        error: `📄 Получена HTML страница, но реальная ссылка на подписку не найдена.\n\n` +
-               `💡 Совет: открой эту ссылку в браузере, нажми "Скопировать ссылку" и отправь мне именно её.`
+        error: ` Получена HTML страница, но реальная ссылка на подписку не найдена.\n\n` +
+               `💡 <b>Что делать:</b>\n` +
+               `1. Открой эту ссылку в браузере\n` +
+               `2. Нажми кнопку <b>"Добавить подписку"</b> или <b>"Скопировать ссылку"</b>\n` +
+               `3. Отправь мне <b>ту ссылку, которая скопировалась</b> (обычно содержит token=)`
       };
     }
     
@@ -299,7 +303,7 @@ async function fetchSubscription(url) {
 }
 
 // ═══════════════════════════════════════════
-//  ДЕТЕКТОР ФОРМАТА (УСИЛЕННЫЙ)
+//  ДЕТЕКТОР ФОРМАТА
 // ═══════════════════════════════════════════
 
 function detectFormat(content) {
@@ -364,10 +368,10 @@ export async function decodeSubscription(url) {
     case "html":
       return {
         ok: false,
-        error: `❌ <b>Обнаружена HTML-страница с инструкциями, а не сама подписка.</b>\n\n` +
+        error: ` <b>Обнаружена HTML-страница с инструкциями, а не сама подписка.</b>\n\n` +
                `Провайдер спрятал реальную ссылку. Попробуйте:\n` +
                `1. Открыть эту ссылку в браузере.\n` +
-               `2. Нажать кнопку "Скопировать ссылку" или "Subscribe".\n` +
+               `2. Нажать кнопку "Добавить подписку" или "Скопировать ссылку".\n` +
                `3. Отправить мне <b>ту ссылку, которая скопировалась</b> (она обычно содержит <code>token=</code> или <code>/sub/</code>).`
       };
     default:
@@ -379,4 +383,4 @@ export async function decodeSubscription(url) {
                `Первые 300 символов:\n${escapeHtml(result.content.substring(0, 300))}`
       };
   }
-  }
+      }
