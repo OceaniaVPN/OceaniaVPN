@@ -89,146 +89,84 @@ function extractRedirectTarget(url) {
 }
 
 // ═══════════════════════════════════════════
-//  🔥 ИЗВЛЕЧЕНИЕ ВСЕХ URL ИЗ HTML СТРАНИЦЫ
+//  🔥 УМНЫЙ ПОИСК ВСЕХ URL ИЗ HTML (БЕЗ ФЕЙКОВ)
 // ═══════════════════════════════════════════
 
 function extractAllUrlsFromHtml(html, originalUrl) {
   const foundUrls = new Set();
   
-  // 1. happ:// deep-links
+  // 🎯 1. ПРИОРИТЕТ: Ищем явные ссылки на подписки (token, subscribe, api/v1, link/)
+  const subPatterns = [
+    /https?:\/\/[^\s"'<>]+(?:subscribe|token|uuid|client|api\/v1)[^\s"'<>]*/gi,
+    /https?:\/\/[^\s"'<>]+\/link\/[^\s"'<>]+/gi,
+    /https?:\/\/[^\s"'<>]+\/sub\/[^\s"'<>]+/gi
+  ];
+  
+  for (const p of subPatterns) {
+    const matches = html.match(p) || [];
+    for (const m of matches) {
+      const cleanUrl = m.replace(/&amp;/g, "&").replace(/["']/g, "");
+      if (cleanUrl.startsWith("http") && !cleanUrl.includes("0.0.0.0") && !cleanUrl.includes("00000000-0000")) {
+        foundUrls.add(cleanUrl);
+      }
+    }
+  }
+  
+  // 🎯 2. data-атрибуты (data-url, data-link, data-clipboard-text)
+  const dataAttrs = html.match(/data-(?:url|link|sub|subscription|config|clipboard-text)=["']([^"']+)["']/gi) || [];
+  for (const attr of dataAttrs) {
+    const m = attr.match(/=["']([^"']+)["']/);
+    if (m && m[1].startsWith("http") && !m[1].includes("0.0.0.0")) {
+      foundUrls.add(m[1]);
+    }
+  }
+  
+  // 🎯 3. onclick="copy('URL')" или подобные JS функции
+  const onclickMatches = html.match(/onclick=["'][^"']*?(https?:\/\/[^"'\s]+)[^"']*?["']/gi) || [];
+  for (const m of onclickMatches) {
+    const urlMatch = m.match(/https?:\/\/[^"'\s]+/);
+    if (urlMatch && !urlMatch[0].includes("0.0.0.0")) {
+      foundUrls.add(urlMatch[0]);
+    }
+  }
+  
+  // 🎯 4. happ:// deep-links (извлекаем реальный URL из них)
   const happLinks = html.match(/happ:\/\/[^"'\s]+/gi) || [];
   for (const link of happLinks) {
     const decoded = decodeURIComponent(link.replace("happ://", ""));
-    
-    // а) Прямая ссылка
     const direct = decoded.match(/https?:\/\/[^\s]+/gi);
-    if (direct) {
+    if (direct && !direct[0].includes("0.0.0.0")) {
       foundUrls.add(direct[0]);
     }
     
-    // б) base64 payload
     const b64 = decoded.match(/happ:\/\/[a-z]*\/?([A-Za-z0-9+/=_-]{20,})/i);
     if (b64) { 
       const d = safeBase64(b64[1]);
       if (d) {
         const inner = d.match(/https?:\/\/[^\s"'\\]+/gi) || [];
-        inner.forEach(u => foundUrls.add(u));
+        inner.forEach(u => {
+          if (!u.includes("0.0.0.0")) foundUrls.add(u);
+        });
       }
     }
   }
   
-  // 2. data-атрибуты
-  const dataAttrs = html.match(/data-(?:url|link|sub|subscription|config)=["']([^"']+)["']/gi) || [];
-  for (const attr of dataAttrs) {
-    const m = attr.match(/=["']([^"']+)["']/);
-    if (m && m[1].startsWith("http")) {
-      foundUrls.add(m[1]);
-    }
-  }
-  
-  // 3. onclick обработчики
-  const onclickMatches = html.match(/onclick=["'][^"']*['"](https?:\/\/[^"'\s]+)['"][^"']*['"]/gi) || [];
-  onclickMatches.forEach(m => {
-    const urlMatch = m.match(/https?:\/\/[^"'\s]+/);
-    if (urlMatch) foundUrls.add(urlMatch[0]);
-  });
-  
-  // 4. JavaScript переменные
+  // 🎯 5. JavaScript переменные
   const jsVars = html.match(/(?:var|let|const)\s+(?:url|link|sub|subscription|config)\s*=\s*["']([^"']+)["']/gi) || [];
-  jsVars.forEach(v => {
+  for (const v of jsVars) {
     const m = v.match(/=\s*["']([^"']+)["']/);
-    if (m && m[1].startsWith("http")) {
+    if (m && m[1].startsWith("http") && !m[1].includes("0.0.0.0")) {
       foundUrls.add(m[1]);
     }
-  });
-  
-  // 5. JSON в HTML
-  const jsonInHtml = html.match(/<script[^>]*>\s*(?:var\s+config\s*=)?\s*({[^]*?})\s*<\/script>/gi) || [];
-  for (const block of jsonInHtml) {
-    try {
-      const jsonMatch = block.match(/{[^]*?}/);
-      if (jsonMatch) {
-        const obj = JSON.parse(jsonMatch[0]);
-        if (obj.url) foundUrls.add(obj.url);
-        if (obj.subscription) foundUrls.add(obj.subscription);
-        if (obj.config) foundUrls.add(obj.config);
-        if (obj.link) foundUrls.add(obj.link);
-      }
-    } catch {}
   }
-  
-  // 6. Base64 encoded URL
-  const b64InHtml = html.match(/["']([A-Za-z0-9+/]{50,}={0,2})["']/g) || [];
-  for (const b64 of b64InHtml) {
-    try {
-      const clean = b64.replace(/["']/g, "");
-      const decoded = safeBase64(clean);
-      if (decoded && decoded.startsWith("http")) {
-        foundUrls.add(decoded);
-      }
-    } catch {}
-  }
-  
-  // 7. Стандартные паттерны
-  const patterns = [
-    /window\.location(?:\.href)?\s*=\s*["']([^"']+)["']/i,
-    /window\.location\.replace\(["']([^"']+)["']/i,
-    /window\.open\(["']([^"']+)["']/i,
-    /content=["'][^"']*url=([^"']+)["']/i,
-    /href=["'](https?:\/\/[^"']+\.php\?[^"']+)["']/i,
-    /action=["'](https?:\/\/[^"']+)["']/i,
-  ];
-  
-  for (const p of patterns) {
-    const matches = html.match(p);
-    if (matches && matches[1]) {
-      let url = matches[1].replace(/&amp;/g, "&");
-      if (url.startsWith("happ://")) continue;
-      if (url.startsWith("/")) {
-        try {
-          const base = new URL(originalUrl);
-          url = `${base.protocol}//${base.host}${url}`;
-        } catch {}
-      }
-      if (url.startsWith("http") && url !== originalUrl) {
-        foundUrls.add(url);
-      }
-    }
-  }
-  
-  // 8. Ссылки в <a> тегах
-  const linkTags = html.match(/<a[^>]*href=["'](https?:\/\/[^"']+)["'][^>]*>/gi) || [];
-  for (const tag of linkTags) {
-    const m = tag.match(/href=["'](https?:\/\/[^"']+)["']/i);
-    if (m) {
-      const href = m[1];
-      // Фильтруем только похожие на подписки
-      if (href.includes("sub") || href.includes("token") || href.includes("config") || href.includes("uuid")) {
-        foundUrls.add(href);
-      }
-    }
-  }
-  
-  // 9. Любая ссылка с /sub, token=, key=, uuid=
-  const anySub = html.match(/["'](https?:\/\/[^"'\s]*\/sub[^"'\s]*)["']/gi) || 
-                 html.match(/["'](https?:\/\/[^"'\s]*[?&](?:token|key|uuid|id)=[^"'\s]+)["']/gi) || [];
-  for (const s of anySub) {
-    const url = s.replace(/["']/g, "").replace(/&amp;/g, "&");
-    foundUrls.add(url);
-  }
-  
-  // 10. Простые HTTP ссылки (резерв)
-  if (foundUrls.size === 0) {
-    const simpleLinks = html.match(/https?:\/\/[^\s"'<>]{20,}/gi) || [];
-    for (const link of simpleLinks) {
-      if (link.includes("sub") || link.includes("token") || link.includes("config")) {
-        foundUrls.add(link);
-      }
-    }
-  }
-  
-  // Возвращаем массив URL (исключая originalUrl)
-  return Array.from(foundUrls).filter(url => url !== originalUrl && url.startsWith("http"));
+
+  // Возвращаем массив URL (исключая originalUrl и фейковые)
+  return Array.from(foundUrls).filter(url => 
+    url !== originalUrl && 
+    url.startsWith("http") && 
+    !url.includes("0.0.0.0") && 
+    !url.includes("00000000-0000")
+  );
 }
 
 // ═══════════════════════════════════════════
@@ -237,7 +175,6 @@ function extractAllUrlsFromHtml(html, originalUrl) {
 
 async function fetchSubscription(url) {
   try {
-    // ШАГ 1: happ-redirect?url=... → достаём настоящую ссылку
     const redirectTarget = extractRedirectTarget(url);
     const actualUrl = redirectTarget || url;
     
@@ -245,7 +182,6 @@ async function fetchSubscription(url) {
       console.log(`[Decoder] Redirect: ${url} -> ${redirectTarget}`);
     }
     
-    // ШАГ 2: запрос с Happ UA
     const res = await fetchWithRedirects(actualUrl, HAPP_HEADERS);
     
     if (!res.ok) {
@@ -255,35 +191,39 @@ async function fetchSubscription(url) {
     const text = await res.text();
     const ct = res.headers.get("content-type") || "";
     
-    // ШАГ 3: HTML → ищем ВСЕ ссылки
-    if (ct.includes("text/html") || text.trim().startsWith("<!DOCTYPE") || text.trim().startsWith("<html")) {
+    // 🔥 ПРОВЕРКА НА HTML: если это HTML, ищем реальные ссылки, а не парсим как vless-list!
+    const isHtml = ct.includes("text/html") || 
+                   text.trim().startsWith("<!DOCTYPE") || 
+                   text.trim().startsWith("<html") ||
+                   text.includes("<body") ||
+                   text.includes("<script");
+    
+    if (isHtml) {
       const allUrls = extractAllUrlsFromHtml(text, url);
       
       if (allUrls.length > 0) {
-        console.log(`[Decoder] Found ${allUrls.length} URLs in HTML:`, allUrls);
+        console.log(`[Decoder] Found ${allUrls.length} real URLs in HTML:`, allUrls);
         
-        // 🔥 Запрашиваем КАЖДУЮ ссылку и объединяем результаты
         const allContents = [];
         for (const subUrl of allUrls) {
           try {
-            console.log(`[Decoder] Fetching: ${subUrl}`);
+            console.log(`[Decoder] Fetching real sub: ${subUrl}`);
             const subRes = await fetchWithRedirects(subUrl, HAPP_HEADERS);
             if (subRes.ok) {
               const subText = await subRes.text();
               const subCt = subRes.headers.get("content-type") || "";
               
-              // Если это снова HTML, рекурсивно ищем дальше
+              // Если снова HTML (редирект на страницу), ищем глубже
               if (subCt.includes("text/html") || subText.trim().startsWith("<")) {
                 const nestedUrls = extractAllUrlsFromHtml(subText, subUrl);
                 for (const nestedUrl of nestedUrls) {
                   try {
                     const nestedRes = await fetchWithRedirects(nestedUrl, HAPP_HEADERS);
                     if (nestedRes.ok) {
-                      const nestedText = await nestedRes.text();
-                      allContents.push(nestedText);
+                      allContents.push(await nestedRes.text());
                     }
                   } catch (e) {
-                    console.log(`[Decoder] Failed nested URL ${nestedUrl}:`, e.message);
+                    console.log(`[Decoder] Failed nested: ${nestedUrl}`);
                   }
                 }
               } else {
@@ -291,26 +231,19 @@ async function fetchSubscription(url) {
               }
             }
           } catch (e) {
-            console.log(`[Decoder] Failed URL ${subUrl}:`, e.message);
+            console.log(`[Decoder] Failed sub URL ${subUrl}:`, e.message);
           }
         }
         
         if (allContents.length > 0) {
-          // Объединяем все полученные содержимое
-          return { 
-            ok: true, 
-            content: allContents.join("\n"), 
-            contentType: "text/plain" 
-          };
+          return { ok: true, content: allContents.join("\n"), contentType: "text/plain" };
         }
       }
       
       return {
         ok: false,
-        error: `📄 Получена HTML страница, но ссылки на подписку не найдены\n\n` +
-               `Content-Type: ${ct}\n\n` +
-               `Первые 500 символов:\n${escapeHtml(text.substring(0, 500))}\n\n` +
-               `💡 Совет: открой ссылку в Happ/Hiddify, скопируй подписку и отправь мне текстом`
+        error: `📄 Получена HTML страница, но реальная ссылка на подписку не найдена.\n\n` +
+               `💡 Совет: открой эту ссылку в браузере, нажми "Скопировать ссылку" и отправь мне именно её.`
       };
     }
     
@@ -324,7 +257,7 @@ async function fetchSubscription(url) {
 }
 
 // ═══════════════════════════════════════════
-//  ДЕТЕКТОР ФОРМАТА
+//  ДЕТЕКТОР ФОРМАТА (УСИЛЕННЫЙ)
 // ═══════════════════════════════════════════
 
 function detectFormat(content) {
@@ -332,6 +265,11 @@ function detectFormat(content) {
   if (!c) return "empty";
   
   if (c.startsWith("crypt5://") || c.startsWith("crypt4://")) return "crypt";
+  
+  // 🔥 БЛОКИРОВКА: если это явно HTML, не пытаемся парсить как vless-list или base64!
+  if (c.includes("<!DOCTYPE") || c.includes("<html") || c.includes("<body") || c.includes("<script")) {
+    return "html";
+  }
   
   // Base64
   if (/^[A-Za-z0-9+/=\-_]+$/.test(c.replace(/\s/g, "")) && c.length > 40) {
@@ -352,9 +290,14 @@ function detectFormat(content) {
     return "yaml";
   }
   
-  // vless/vmess список
+  // vless/vmess список (только если нет HTML-тегов и это реальные ссылки)
   const lines = c.split("\n").map(l => l.trim()).filter(l => l && !l.startsWith("#"));
-  if (lines.length > 0 && lines.some(l => /^[a-z0-9]+:\/\//i.test(l))) {
+  if (lines.length > 0 && lines.some(l => /^(vless|vmess|trojan|ss| hysteria|tuic|wireguard):\/\//i.test(l))) {
+    // Дополнительная проверка: если большинство строк содержат "0.0.0.0", это фейк
+    const fakeCount = lines.filter(l => l.includes("0.0.0.0") || l.includes("00000000-0000")).length;
+    if (fakeCount > lines.length / 2) {
+      return "html"; // Принудительно считаем HTML-ом, чтобы выдать ошибку с подсказкой
+    }
     return "vless-list";
   }
   
@@ -382,6 +325,15 @@ export async function decodeSubscription(url) {
     case "json": return parseJson(result.content);
     case "crypt": return parseCrypt(result.content);
     case "empty": return { ok: false, error: "Пустая подписка" };
+    case "html":
+      return {
+        ok: false,
+        error: `❌ <b>Обнаружена HTML-страница с инструкциями, а не сама подписка.</b>\n\n` +
+               `Провайдер спрятал реальную ссылку. Попробуйте:\n` +
+               `1. Открыть эту ссылку в браузере.\n` +
+               `2. Нажать кнопку "Скопировать ссылку" или "Subscribe".\n` +
+               `3. Отправить мне <b>ту ссылку, которая скопировалась</b> (она обычно содержит <code>token=</code> или <code>/sub/</code>).`
+      };
     default:
       return {
         ok: false,
@@ -391,4 +343,4 @@ export async function decodeSubscription(url) {
                `Первые 300 символов:\n${escapeHtml(result.content.substring(0, 300))}`
       };
   }
-      }
+}
