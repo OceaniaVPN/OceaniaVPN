@@ -107,54 +107,65 @@ function extractRedirectTarget(url) {
 }
 
 // ═══════════════════════════════════════════
-//  🔥 УМНЫЙ ПОИСК URL (СПЕЦИАЛЬНО ДЛЯ HATVPN)
+//  🔥 АГРЕССИВНЫЙ ПОИСК URL (БЕЗ ЗАГЛУШЕК!)
 // ═══════════════════════════════════════════
 
 function extractAllUrlsFromHtml(html, originalUrl) {
   const foundUrls = new Set();
   
-  // 🎯 1. ПРИОРИТЕТ: Кнопка "Добавить подписку" (HatVPN)
-  // Ищем кнопки с текстом "Добавить подписку", "Subscribe", "Add subscription"
-  const buttonPatterns = [
-    /<button[^>]*data-(?:url|link|sub|subscription)=["']([^"']+)["'][^>]*>.*?(?:Добавить подписку|Subscribe|Add subscription).*?<\/button>/gi,
-    /<a[^>]*data-(?:url|link|sub|subscription)=["']([^"']+)["'][^>]*>.*?(?:Добавить подписку|Subscribe|Add subscription).*?<\/a>/gi,
-    /<div[^>]*data-(?:url|link|sub|subscription)=["']([^"']+)["'][^>]*>.*?(?:Добавить подписку|Subscribe|Add subscription).*?<\/div>/gi,
+  // 🎯 1. ПРИОРИТЕТ: Ищем ТОЛЬКО реальные ссылки на подписки (token, uuid, sub, api/v1, link/)
+  const subPatterns = [
+    /https?:\/\/[^\s"'<>]+(?:subscribe|token=|uuid=|client=|api\/v1)[^\s"'<>]*/gi,
+    /https?:\/\/[^\s"'<>]+\/link\/[^\s"'<>]+/gi,
+    /https?:\/\/[^\s"'<>]+\/sub\/[^\s"'<>]+/gi,
+    /https?:\/\/[^\s"'<>]+[?&](?:token|uuid|id|key)=[a-f0-9-]+[^\s"'<>]*/gi
   ];
   
-  for (const p of buttonPatterns) {
+  for (const p of subPatterns) {
     const matches = html.match(p) || [];
     for (const m of matches) {
-      const dataMatch = m.match(/data-(?:url|link|sub|subscription)=["']([^"']+)["']/i);
-      if (dataMatch && dataMatch[1].startsWith("http")) {
-        foundUrls.add(dataMatch[1]);
+      const cleanUrl = m.replace(/&amp;/g, "&").replace(/["']/g, "");
+      // 🔥 АГРЕССИВНАЯ ФИЛЬТРАЦИЯ: отбрасываем всё с 0.0.0.0
+      if (cleanUrl.startsWith("http") && 
+          !cleanUrl.includes("0.0.0.0") && 
+          !cleanUrl.includes("00000000-0000") &&
+          !cleanUrl.includes("127.0.0.1") &&
+          !cleanUrl.includes("localhost")) {
+        foundUrls.add(cleanUrl);
       }
     }
   }
   
-  // 🎯 2. Любые data-атрибуты с URL (независимо от текста кнопки)
-  const dataAttrs = html.match(/data-(?:url|link|sub|subscription|config|clipboard-text|href)=["']([^"']+)["']/gi) || [];
+  // 🎯 2. data-атрибуты кнопок (data-url, data-link, data-subscription)
+  const dataAttrs = html.match(/data-(?:url|link|sub|subscription|config|clipboard-text)=["']([^"']+)["']/gi) || [];
   for (const attr of dataAttrs) {
     const m = attr.match(/=["']([^"']+)["']/);
-    if (m && m[1].startsWith("http") && !m[1].includes("0.0.0.0")) {
+    if (m && m[1].startsWith("http") && 
+        !m[1].includes("0.0.0.0") && 
+        !m[1].includes("00000000-0000")) {
       foundUrls.add(m[1]);
     }
   }
   
-  //  3. onclick обработчики (особенно для кнопок)
+  //  3. onclick обработчики кнопок
   const onclickMatches = html.match(/onclick=["'][^"']*?(https?:\/\/[^"'\s]+)[^"']*?["']/gi) || [];
   for (const m of onclickMatches) {
     const urlMatch = m.match(/https?:\/\/[^"'\s]+/);
-    if (urlMatch && !urlMatch[0].includes("0.0.0.0")) {
+    if (urlMatch && 
+        !urlMatch[0].includes("0.0.0.0") && 
+        !urlMatch[0].includes("00000000-0000")) {
       foundUrls.add(urlMatch[0]);
     }
   }
   
-  // 🎯 4. happ:// deep-links
+  // 🎯 4. happ:// deep-links (извлекаем реальный URL)
   const happLinks = html.match(/happ:\/\/[^"'\s]+/gi) || [];
   for (const link of happLinks) {
     const decoded = decodeURIComponent(link.replace("happ://", ""));
     const direct = decoded.match(/https?:\/\/[^\s]+/gi);
-    if (direct && !direct[0].includes("0.0.0.0")) {
+    if (direct && 
+        !direct[0].includes("0.0.0.0") && 
+        !direct[0].includes("00000000-0000")) {
       foundUrls.add(direct[0]);
     }
     
@@ -164,44 +175,33 @@ function extractAllUrlsFromHtml(html, originalUrl) {
       if (d) {
         const inner = d.match(/https?:\/\/[^\s"'\\]+/gi) || [];
         inner.forEach(u => {
-          if (!u.includes("0.0.0.0")) foundUrls.add(u);
+          if (!u.includes("0.0.0.0") && !u.includes("00000000-0000")) {
+            foundUrls.add(u);
+          }
         });
       }
     }
   }
   
-  // 🎯 5. Явные ссылки на подписки (token, uuid, sub, api/v1)
-  const subPatterns = [
-    /https?:\/\/[^\s"'<>]+(?:subscribe|token|uuid|client|api\/v1)[^\s"'<>]*/gi,
-    /https?:\/\/[^\s"'<>]+\/link\/[^\s"'<>]+/gi,
-    /https?:\/\/[^\s"'<>]+\/sub\/[^\s"'<>]+/gi
-  ];
-  
-  for (const p of subPatterns) {
-    const matches = html.match(p) || [];
-    for (const m of matches) {
-      const cleanUrl = m.replace(/&amp;/g, "&").replace(/["']/g, "");
-      if (cleanUrl.startsWith("http") && !cleanUrl.includes("0.0.0.0") && !cleanUrl.includes("00000000-0000")) {
-        foundUrls.add(cleanUrl);
-      }
-    }
-  }
-  
-  // 🎯 6. JavaScript переменные
+  // 🎯 5. JavaScript переменные
   const jsVars = html.match(/(?:var|let|const)\s+(?:url|link|sub|subscription|config)\s*=\s*["']([^"']+)["']/gi) || [];
   for (const v of jsVars) {
     const m = v.match(/=\s*["']([^"']+)["']/);
-    if (m && m[1].startsWith("http") && !m[1].includes("0.0.0.0")) {
+    if (m && m[1].startsWith("http") && 
+        !m[1].includes("0.0.0.0") && 
+        !m[1].includes("00000000-0000")) {
       foundUrls.add(m[1]);
     }
   }
 
-  return Array.from(foundUrls).filter(url => 
+  // 🔥 ФИНАЛЬНАЯ ПРОВЕРКА: возвращаем только URL с token= или /sub/
+  const validUrls = Array.from(foundUrls).filter(url => 
     url !== originalUrl && 
     url.startsWith("http") && 
-    !url.includes("0.0.0.0") && 
-    !url.includes("00000000-0000")
+    (url.includes("token=") || url.includes("/sub") || url.includes("uuid="))
   );
+  
+  return validUrls;
 }
 
 // ═══════════════════════════════════════════
@@ -245,9 +245,9 @@ async function fetchSubscription(url) {
     if (isHtml) {
       const allUrls = extractAllUrlsFromHtml(text, url);
       
+      console.log(`[Decoder] Found URLs in HTML:`, allUrls);
+      
       if (allUrls.length > 0) {
-        console.log(`[Decoder] Found ${allUrls.length} real URLs in HTML:`, allUrls);
-        
         const allContents = [];
         for (const subUrl of allUrls) {
           try {
@@ -257,21 +257,13 @@ async function fetchSubscription(url) {
               const subText = await subRes.text();
               const subCt = subRes.headers.get("content-type") || "";
               
+              // 🔥 Если снова HTML — пропускаем (это не подписка!)
               if (subCt.includes("text/html") || subText.trim().startsWith("<")) {
-                const nestedUrls = extractAllUrlsFromHtml(subText, subUrl);
-                for (const nestedUrl of nestedUrls) {
-                  try {
-                    const nestedRes = await fetchWithRedirects(nestedUrl);
-                    if (nestedRes.ok) {
-                      allContents.push(await nestedRes.text());
-                    }
-                  } catch (e) {
-                    console.log(`[Decoder] Failed nested: ${nestedUrl}`);
-                  }
-                }
-              } else {
-                allContents.push(subText);
+                console.log(`[Decoder] Skipping HTML response for ${subUrl}`);
+                continue;
               }
+              
+              allContents.push(subText);
             }
           } catch (e) {
             console.log(`[Decoder] Failed sub URL ${subUrl}:`, e.message);
@@ -285,11 +277,14 @@ async function fetchSubscription(url) {
       
       return {
         ok: false,
-        error: ` Получена HTML страница, но реальная ссылка на подписку не найдена.\n\n` +
+        error: `📄 <b>Получена HTML страница HatVPN</b>\n\n` +
+               `❌ <b>Реальная ссылка на подписку НЕ найдена!</b>\n\n` +
                `💡 <b>Что делать:</b>\n` +
                `1. Открой эту ссылку в браузере\n` +
-               `2. Нажми кнопку <b>"Добавить подписку"</b> или <b>"Скопировать ссылку"</b>\n` +
-               `3. Отправь мне <b>ту ссылку, которая скопировалась</b> (обычно содержит token=)`
+               `2. Нажми кнопку <b>"Добавить подписку"</b>\n` +
+               `3. Скопируй ссылку (она должна содержать <code>token=</code>)\n` +
+               `4. Отправь эту ссылку мне\n\n` +
+               `<i>Бот НЕ будет декодировать заглушки vless://0.0.0.0!</i>`
       };
     }
     
@@ -303,7 +298,7 @@ async function fetchSubscription(url) {
 }
 
 // ═══════════════════════════════════════════
-//  ДЕТЕКТОР ФОРМАТА
+//  ДЕТЕКТОР ФОРМАТА (АГРЕССИВНЫЙ)
 // ═══════════════════════════════════════════
 
 function detectFormat(content) {
@@ -332,12 +327,21 @@ function detectFormat(content) {
     return "yaml";
   }
   
+  // vless/vmess список
   const lines = c.split("\n").map(l => l.trim()).filter(l => l && !l.startsWith("#"));
   if (lines.length > 0 && lines.some(l => /^(vless|vmess|trojan|ss|hysteria|tuic|wireguard):\/\//i.test(l))) {
-    const fakeCount = lines.filter(l => l.includes("0.0.0.0") || l.includes("00000000-0000")).length;
-    if (fakeCount > lines.length / 2) {
+    // 🔥 АГРЕССИВНАЯ ПРОВЕРКА: если есть заглушки — считаем это HTML!
+    const fakeCount = lines.filter(l => 
+      l.includes("0.0.0.0") || 
+      l.includes("00000000-0000") ||
+      l.includes("127.0.0.1")
+    ).length;
+    
+    if (fakeCount > 0) {
+      console.log(`[Decoder] Detected ${fakeCount} fake proxies, rejecting as HTML`);
       return "html";
     }
+    
     return "vless-list";
   }
   
@@ -346,7 +350,7 @@ function detectFormat(content) {
 
 // ═══════════════════════════════════════════
 //  ГЛАВНАЯ ФУНКЦИЯ ДЕКОДЕРА
-// ═══════════════════════════════════════════
+// ══════════════════════════════════════════
 
 export async function decodeSubscription(url) {
   const result = await fetchSubscription(url);
@@ -368,11 +372,13 @@ export async function decodeSubscription(url) {
     case "html":
       return {
         ok: false,
-        error: ` <b>Обнаружена HTML-страница с инструкциями, а не сама подписка.</b>\n\n` +
-               `Провайдер спрятал реальную ссылку. Попробуйте:\n` +
-               `1. Открыть эту ссылку в браузере.\n` +
-               `2. Нажать кнопку "Добавить подписку" или "Скопировать ссылку".\n` +
-               `3. Отправить мне <b>ту ссылку, которая скопировалась</b> (она обычно содержит <code>token=</code> или <code>/sub/</code>).`
+        error: `❌ <b>Обнаружена HTML-страница или заглушки!</b>\n\n` +
+               `Бот обнаружил фейковые ключи (0.0.0.0) вместо реальной подписки.\n\n` +
+               `💡 <b>Инструкция:</b>\n` +
+               `1. Открой ссылку в браузере\n` +
+               `2. Нажми <b>"Добавить подписку"</b>\n` +
+               `3. Скопируй ссылку (с token=)\n` +
+               `4. Отправь её мне`
       };
     default:
       return {
