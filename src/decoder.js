@@ -4,22 +4,45 @@ import {
 import { escapeHtml } from "./config.js";
 
 // ═══════════════════════════════════════════
-//  МАСКИРОВКА ПОД HAPP
+//  🚫 ГЛОБАЛЬНЫЙ ЧЕРНЫЙ СПИСОК ДОМЕНОВ
 // ═══════════════════════════════════════════
-
-const HAPP_UA = "Happ/10.0.0 (Android; 13; Pixel 7) okhttp/4.12.0";
-const HAPP_HEADERS = { 
-  "User-Agent": HAPP_UA,
-  "Accept": "*/*",
-  "Accept-Language": "en-US,en;q=0.9",
-  "X-Happ-App": "Happ",
-  "X-Happ-Platform": "android",
-  "X-Happ-Version": "10.0.0",
-  "Connection": "keep-alive",
-};
+const BLOCKED_DOMAINS = [
+  "okeaniavpn.dimastekolnikov1.workers.dev",
+  "sub.chkav-vpn.workers.dev"
+];
 
 // ═══════════════════════════════════════════
-//  HTTP С ТАЙМАУТОМ И РЕДИРЕКТАМИ
+//  🎭 ПУЛ РАНДОМНЫХ USER-AGENT (Устройства + Приложения)
+// ═══════════════════════════════════════════
+const USER_AGENTS_POOL = [
+  // Android устройства
+  "Happ/10.0.0 (Android 14; Poco X6 Pro 5G) okhttp/4.12.0",
+  "Happ/10.0.0 (Android 14; Xiaomi 13 Pro) okhttp/4.12.0",
+  "Happ/10.0.0 (Android 14; OnePlus 11 Pro) okhttp/4.12.0",
+  "v2rayNG/1.8.20 (Android 14; Poco X6 Pro 5G)",
+  "Hiddify/5.0.0 (Android 14; Xiaomi 13 Pro)",
+  "INCY/2.1.0 (Android 14; OnePlus 11 Pro)",
+  // iOS устройства (iPhone 16 Pro / Max)
+  "Happ/10.0.0 (iOS 17.4; iPhone16,2) okhttp/4.12.0",
+  "Happ/10.0.0 (iOS 17.4; iPhone16,4) okhttp/4.12.0",
+  "Hiddify/5.0.0 (iOS 17.4; iPhone16,2)",
+  "v2rayNG/1.8.20 (iOS 17.4; iPhone16,4)",
+  // Windows (7, 10, 11)
+  "INCY/2.1.0 (Windows NT 10.0; Win64; x64)",
+  "INCY/2.1.0 (Windows NT 11.0; Win64; x64)",
+  "INCY/2.1.0 (Windows NT 6.1; Win64; x64)", // Windows 7
+  "Hiddify/5.0.0 (Windows NT 10.0; Win64; x64)",
+  // Linux
+  "Hiddify/5.0.0 (X11; Linux x86_64)",
+  "INCY/2.1.0 (X11; Linux x86_64)"
+];
+
+function getRandomUA() {
+  return USER_AGENTS_POOL[Math.floor(Math.random() * USER_AGENTS_POOL.length)];
+}
+
+// ═══════════════════════════════════════════
+//  HTTP С ТАЙМАУТОМ, РЕДИРЕКТАМИ И РАНДОМНЫМ UA
 // ═══════════════════════════════════════════
 
 async function fetchWithTimeout(url, options, timeoutMs = 15000) {
@@ -32,13 +55,21 @@ async function fetchWithTimeout(url, options, timeoutMs = 15000) {
   }
 }
 
-async function fetchWithRedirects(url, headers, max = 5) {
+async function fetchWithRedirects(url, max = 5) {
   let currentUrl = url;
   
   for (let i = 0; i < max; i++) {
+    // 🎭 Генерируем новый случайный UA для каждого шага редиректа
+    const dynamicHeaders = { 
+      "User-Agent": getRandomUA(),
+      "Accept": "*/*",
+      "Accept-Language": "en-US,en;q=0.9,ru;q=0.8",
+      "Connection": "keep-alive",
+    };
+
     const res = await fetchWithTimeout(
       currentUrl,
-      { method: "GET", headers, redirect: "manual" },
+      { method: "GET", headers: dynamicHeaders, redirect: "manual" },
       15000
     );
     
@@ -59,11 +90,12 @@ async function fetchWithRedirects(url, headers, max = 5) {
     return res;
   }
   
-  return await fetchWithTimeout(currentUrl, { method: "GET", headers }, 15000);
+  const dynamicHeaders = { "User-Agent": getRandomUA(), "Accept": "*/*" };
+  return await fetchWithTimeout(currentUrl, { method: "GET", headers: dynamicHeaders }, 15000);
 }
 
 // ═══════════════════════════════════════════
-//  ИЗВЛЕЧЕНИЕ РЕАЛЬНОЙ ССЫЛКИ ИЗ URL
+//  ИЗВЛЕЧЕНИЕ РЕАЛЬНОЙ ССЫЛКИ ИЗ URL (happ-redirect)
 // ═══════════════════════════════════════════
 
 function extractRedirectTarget(url) {
@@ -89,13 +121,13 @@ function extractRedirectTarget(url) {
 }
 
 // ═══════════════════════════════════════════
-//  🔥 УМНЫЙ ПОИСК ВСЕХ URL ИЗ HTML (БЕЗ ФЕЙКОВ)
+//  УМНЫЙ ПОИСК ВСЕХ URL ИЗ HTML (БЕЗ ФЕЙКОВ)
 // ═══════════════════════════════════════════
 
 function extractAllUrlsFromHtml(html, originalUrl) {
   const foundUrls = new Set();
   
-  // 🎯 1. ПРИОРИТЕТ: Ищем явные ссылки на подписки (token, subscribe, api/v1, link/)
+  // 🎯 1. ПРИОРИТЕТ: Ищем явные ссылки на подписки
   const subPatterns = [
     /https?:\/\/[^\s"'<>]+(?:subscribe|token|uuid|client|api\/v1)[^\s"'<>]*/gi,
     /https?:\/\/[^\s"'<>]+\/link\/[^\s"'<>]+/gi,
@@ -112,7 +144,7 @@ function extractAllUrlsFromHtml(html, originalUrl) {
     }
   }
   
-  // 🎯 2. data-атрибуты (data-url, data-link, data-clipboard-text)
+  // 🎯 2. data-атрибуты
   const dataAttrs = html.match(/data-(?:url|link|sub|subscription|config|clipboard-text)=["']([^"']+)["']/gi) || [];
   for (const attr of dataAttrs) {
     const m = attr.match(/=["']([^"']+)["']/);
@@ -121,7 +153,7 @@ function extractAllUrlsFromHtml(html, originalUrl) {
     }
   }
   
-  // 🎯 3. onclick="copy('URL')" или подобные JS функции
+  // 🎯 3. onclick обработчики
   const onclickMatches = html.match(/onclick=["'][^"']*?(https?:\/\/[^"'\s]+)[^"']*?["']/gi) || [];
   for (const m of onclickMatches) {
     const urlMatch = m.match(/https?:\/\/[^"'\s]+/);
@@ -130,7 +162,7 @@ function extractAllUrlsFromHtml(html, originalUrl) {
     }
   }
   
-  // 🎯 4. happ:// deep-links (извлекаем реальный URL из них)
+  // 🎯 4. happ:// deep-links
   const happLinks = html.match(/happ:\/\/[^"'\s]+/gi) || [];
   for (const link of happLinks) {
     const decoded = decodeURIComponent(link.replace("happ://", ""));
@@ -160,7 +192,6 @@ function extractAllUrlsFromHtml(html, originalUrl) {
     }
   }
 
-  // Возвращаем массив URL (исключая originalUrl и фейковые)
   return Array.from(foundUrls).filter(url => 
     url !== originalUrl && 
     url.startsWith("http") && 
@@ -175,6 +206,17 @@ function extractAllUrlsFromHtml(html, originalUrl) {
 
 async function fetchSubscription(url) {
   try {
+    // 🚫 ШАГ 0: ГЛОБАЛЬНАЯ ПРОВЕРКА НА ЗАБЛОКИРОВАННЫЕ ДОМЕНЫ
+    const lowerUrl = url.toLowerCase();
+    const isBlocked = BLOCKED_DOMAINS.some(domain => lowerUrl.includes(domain.toLowerCase()));
+    if (isBlocked) {
+      return { 
+        ok: false, 
+        error: `🚫 <b>Домен заблокирован</b>\n\nОбработка запросов к этому домену глобально отключена.` 
+      };
+    }
+
+    // ШАГ 1: happ-redirect?url=... → достаём настоящую ссылку
     const redirectTarget = extractRedirectTarget(url);
     const actualUrl = redirectTarget || url;
     
@@ -182,7 +224,8 @@ async function fetchSubscription(url) {
       console.log(`[Decoder] Redirect: ${url} -> ${redirectTarget}`);
     }
     
-    const res = await fetchWithRedirects(actualUrl, HAPP_HEADERS);
+    // ШАГ 2: запрос со случайным UA
+    const res = await fetchWithRedirects(actualUrl);
     
     if (!res.ok) {
       return { ok: false, error: `HTTP ${res.status} ${res.statusText}` };
@@ -191,7 +234,7 @@ async function fetchSubscription(url) {
     const text = await res.text();
     const ct = res.headers.get("content-type") || "";
     
-    // 🔥 ПРОВЕРКА НА HTML: если это HTML, ищем реальные ссылки, а не парсим как vless-list!
+    // ШАГ 3: HTML → ищем ВСЕ ссылки
     const isHtml = ct.includes("text/html") || 
                    text.trim().startsWith("<!DOCTYPE") || 
                    text.trim().startsWith("<html") ||
@@ -208,17 +251,16 @@ async function fetchSubscription(url) {
         for (const subUrl of allUrls) {
           try {
             console.log(`[Decoder] Fetching real sub: ${subUrl}`);
-            const subRes = await fetchWithRedirects(subUrl, HAPP_HEADERS);
+            const subRes = await fetchWithRedirects(subUrl);
             if (subRes.ok) {
               const subText = await subRes.text();
               const subCt = subRes.headers.get("content-type") || "";
               
-              // Если снова HTML (редирект на страницу), ищем глубже
               if (subCt.includes("text/html") || subText.trim().startsWith("<")) {
                 const nestedUrls = extractAllUrlsFromHtml(subText, subUrl);
                 for (const nestedUrl of nestedUrls) {
                   try {
-                    const nestedRes = await fetchWithRedirects(nestedUrl, HAPP_HEADERS);
+                    const nestedRes = await fetchWithRedirects(nestedUrl);
                     if (nestedRes.ok) {
                       allContents.push(await nestedRes.text());
                     }
@@ -266,18 +308,15 @@ function detectFormat(content) {
   
   if (c.startsWith("crypt5://") || c.startsWith("crypt4://")) return "crypt";
   
-  // 🔥 БЛОКИРОВКА: если это явно HTML, не пытаемся парсить как vless-list или base64!
   if (c.includes("<!DOCTYPE") || c.includes("<html") || c.includes("<body") || c.includes("<script")) {
     return "html";
   }
   
-  // Base64
   if (/^[A-Za-z0-9+/=\-_]+$/.test(c.replace(/\s/g, "")) && c.length > 40) {
     const decoded = safeBase64(c);
     if (decoded && decoded.includes("://")) return "base64";
   }
   
-  // JSON
   if (c.startsWith("{") || c.startsWith("[")) {
     try {
       JSON.parse(c);
@@ -285,18 +324,15 @@ function detectFormat(content) {
     } catch {}
   }
   
-  // YAML
   if (c.includes("proxies:") || c.includes("proxy-groups:") || /mixed-port:\s*\d+/.test(c)) {
     return "yaml";
   }
   
-  // vless/vmess список (только если нет HTML-тегов и это реальные ссылки)
   const lines = c.split("\n").map(l => l.trim()).filter(l => l && !l.startsWith("#"));
-  if (lines.length > 0 && lines.some(l => /^(vless|vmess|trojan|ss| hysteria|tuic|wireguard):\/\//i.test(l))) {
-    // Дополнительная проверка: если большинство строк содержат "0.0.0.0", это фейк
+  if (lines.length > 0 && lines.some(l => /^(vless|vmess|trojan|ss|hysteria|tuic|wireguard):\/\//i.test(l))) {
     const fakeCount = lines.filter(l => l.includes("0.0.0.0") || l.includes("00000000-0000")).length;
     if (fakeCount > lines.length / 2) {
-      return "html"; // Принудительно считаем HTML-ом, чтобы выдать ошибку с подсказкой
+      return "html";
     }
     return "vless-list";
   }
@@ -343,4 +379,4 @@ export async function decodeSubscription(url) {
                `Первые 300 символов:\n${escapeHtml(result.content.substring(0, 300))}`
       };
   }
-}
+  }
