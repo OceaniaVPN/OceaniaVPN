@@ -3,7 +3,6 @@ import yaml from "js-yaml";
 // ═══════════════════════════════════════════
 //  УТИЛИТЫ
 // ═══════════════════════════════════════════
-
 export function safeBase64(data) {
   try {
     const clean = data.replace(/\s/g, "").replace(/-/g, "+").replace(/_/g, "/");
@@ -28,7 +27,6 @@ export function extractHeaders(content) {
 // ═══════════════════════════════════════════
 //  YAML PROXY → URI (Clash / Mihomo)
 // ═══════════════════════════════════════════
-
 export function proxyToUri(p) {
   if (!p || !p.type) return null;
   const t = p.type.toLowerCase();
@@ -111,7 +109,6 @@ export function proxyToUri(p) {
 // ═══════════════════════════════════════════
 //  XRAY OUTBOUND → URI
 // ═══════════════════════════════════════════
-
 export function xrayToUri(ob) {
   if (!ob || !ob.protocol) return null;
   const proto = ob.protocol.toLowerCase();
@@ -179,7 +176,6 @@ export function xrayToUri(ob) {
 // ═══════════════════════════════════════════
 //  SING-BOX OUTBOUND → URI (Happ / Hiddify)
 // ═══════════════════════════════════════════
-
 export function singboxToUri(ob) {
   if (!ob || !ob.type || !ob.server || !ob.server_port) return null;
   const t = ob.type.toLowerCase();
@@ -260,7 +256,6 @@ export function singboxToUri(ob) {
 // ═══════════════════════════════════════════
 //  ПАРСЕРЫ ФОРМАТОВ
 // ═══════════════════════════════════════════
-
 export function parseVlessList(content) {
   const uris = [];
   for (const line of content.split("\n")) {
@@ -310,8 +305,8 @@ export function parseJson(content) {
       if (!uri) uri = proxyToUri(ob);
       return uri;
     };
-    
-    // { outbounds: [...] } — Xray / Sing-box
+
+    // 1. { outbounds: [...] } — Одиночный Xray / Sing-box конфиг
     if (Array.isArray(data?.outbounds)) {
       const skip = ["direct", "block", "dns", "selector", "urltest", "fallback"];
       for (const ob of data.outbounds) {
@@ -320,8 +315,8 @@ export function parseJson(content) {
         if (uri) uris.push(uri);
       }
     }
-    
-    // Hiddify: { configs: [{ url }] }
+
+    // 2. Hiddify: { configs: [{ url }] }
     if (Array.isArray(data?.configs)) {
       for (const c of data.configs) {
         if (typeof c === "string") uris.push(c);
@@ -329,44 +324,57 @@ export function parseJson(content) {
         else if (c?.config) uris.push(c.config);
       }
     }
-    
-    // Массив строк или объектов
+
+    // 3. Массив строк или объектов (включая массив полных конфигов Hiddify/Xray)
     if (Array.isArray(data)) {
       for (const item of data) {
-        if (typeof item === "string" && item.includes("://")) uris.push(item);
-        else if (item?.type) {
+        if (typeof item === "string" && item.includes("://")) {
+          uris.push(item);
+        } else if (item?.type) {
           const uri = tryConvert(item);
           if (uri) uris.push(uri);
+        } else if (Array.isArray(item?.outbounds)) {
+          // 🔥 FIX: Поддержка массива полных конфигов
+          const skip = ["direct", "block", "dns", "selector", "urltest", "fallback"];
+          for (const ob of item.outbounds) {
+            if (skip.includes(ob?.type) || skip.includes(ob?.protocol)) continue;
+            const uri = tryConvert(ob);
+            if (uri) uris.push(uri);
+          }
         }
       }
     }
-    
-    // Один объект
+
+    // 4. Один объект (без outbounds на верхнем уровне, но с type)
     if (data?.type && !Array.isArray(data)) {
       const uri = tryConvert(data);
       if (uri) uris.push(uri);
     }
-    
-    if (uris.length === 0) return { ok: false, error: "JSON не содержит распознаваемых конфигов" };
-    return { ok: true, uris, metadata: {} };
+
+    if (uris.length === 0) {
+      return { ok: false, error: "JSON не содержит распознаваемых конфигов" };
+    }
+
+    // Удаляем возможные дубликаты URI
+    const uniqueUris = [...new Set(uris)];
+
+    return { ok: true, uris: uniqueUris, metadata: {} };
   } catch (e) {
     return { ok: false, error: `JSON: ${e.message}` };
   }
 }
 
 export function parseCrypt(content) {
-  const m = content.match(/^crypt[45]:\/\/(.+)$/i);
+  const m = content.match(/^crypt[45]://(.+)$/i);
   if (!m) return { ok: false, error: "Некорректный crypt формат" };
-  
   const decoded = safeBase64(m[1]);
   if (decoded && decoded.includes("://")) {
     return parseVlessList(decoded);
   }
-  
   return {
     ok: false,
     error: `⚠️ <b>crypt5/crypt4</b> — зашифрованный формат Happ/Hiddify\n\n` +
            `Требуется AES-ключ для дешифровки.\n\n` +
            `💡 <b>Решение:</b> открой ссылку в Happ или Hiddify → экспортируй как обычную vless подписку → отправь мне снова.`
   };
-                                      }
+}
