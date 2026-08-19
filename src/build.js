@@ -2,10 +2,12 @@ export function buildFile(state, uris = [], defaults = {}) {
   const lines = [];
   const title = state.title || defaults.title || "My Subscription";
   const interval = state.interval || defaults.interval || 4;
+  // Теперь поддерживаем кастомную строку userinfo, как в твоем примере
+  const userinfo = state.userinfo || defaults.userinfo || "upload=0; download=0; total=536870912000; expire=0";
   
   lines.push(`#profile-title: ${title}`);
   lines.push(`#profile-update-interval: ${interval}`);
-  lines.push(`#subscription-userinfo: upload=0; download=0; total=536870912000; expire=0`);
+  lines.push(`#subscription-userinfo: ${userinfo}`);
   
   if (state.webpage) lines.push(`#profile-web-page-url: ${state.webpage}`);
   if (state.announce) lines.push(`#announce: ${state.announce}`);
