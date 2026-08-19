@@ -19,7 +19,7 @@ function isStubResponse(text) {
   return stubs.some(s => text.includes(s));
 }
 
-async function fetchWithTimeout(url, options, timeoutMs = 8000) {
+async function fetchWithTimeout(url, options, timeoutMs = 10000) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
@@ -29,10 +29,15 @@ async function fetchWithTimeout(url, options, timeoutMs = 8000) {
   }
 }
 
-async function fetchWithRedirects(url, headers, max = 3) {
+async function fetchWithRedirects(url, headers, max = 5) {
   let currentUrl = url;
   for (let i = 0; i < max; i++) {
-    const res = await fetchWithTimeout(currentUrl, { method: "GET", headers, redirect: "manual" }, 8000);
+    const res = await fetchWithTimeout(currentUrl, { 
+      method: "GET", 
+      headers, 
+      redirect: "manual" 
+    }, 10000);
+    
     if ([301, 302, 303, 307, 308].includes(res.status)) {
       const loc = res.headers.get("location");
       if (!loc) return res;
@@ -45,7 +50,7 @@ async function fetchWithRedirects(url, headers, max = 3) {
     }
     return res;
   }
-  return await fetchWithTimeout(currentUrl, { method: "GET", headers }, 8000);
+  return await fetchWithTimeout(currentUrl, { method: "GET", headers }, 10000);
 }
 
 function extractRedirectTarget(url) {
@@ -61,6 +66,62 @@ function extractRedirectTarget(url) {
   } catch {
     return null;
   }
+}
+
+// 🔥 ГЕНЕРАТОР "ПРАВИЛЬНЫХ" ЗАГОЛОВКОВ ДЛЯ HAPP
+function buildHappHeaders(ua, isFirstRequest = false) {
+  // Извлекаем HWID из User-Agent (если есть)
+  const hwidMatch = ua.match(/Android\/(\d+)/);
+  const hwid = hwidMatch ? hwidMatch[1] : Math.floor(Math.random() * 1e19).toString();
+  
+  // Генерируем случайный request ID (как в реальных приложениях)
+  const requestId = crypto.randomUUID ? crypto.randomUUID() : 
+    `${Date.now()}-${Math.random().toString(36).substring(7)}`;
+  
+  const headers = {
+    "User-Agent": ua,
+    "Accept": "*/*",
+    "Accept-Language": "en-US,en;q=0.9,ru;q=0.8",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Connection": "keep-alive",
+    "DNT": "1",
+    "Sec-Fetch-Dest": "empty",
+    "Sec-Fetch-Mode": "cors",
+    "Sec-Fetch-Site": "cross-site",
+    
+    // 🔥 Кастомные заголовки Happ
+    "X-Client-Version": "3.26.3",
+    "X-Client-Platform": "Android",
+    "X-Request-ID": requestId,
+    "X-App-Name": "Happ",
+    
+    // 🔥 Заголовки для "первого" запроса (имитация запуска приложения)
+    ...(isFirstRequest && {
+      "X-First-Launch": "true",
+      "X-Install-Time": Date.now() - 86400000 * (Math.floor(Math.random() * 30) + 1).toString(),
+    }),
+  };
+  
+  // Добавляем HWID если есть в UA
+  if (ua.includes("Happ")) {
+    headers["X-Happ-HWID"] = hwid;
+    headers["X-Device-ID"] = hwid;
+    headers["X-Happ-App"] = "Happ";
+    headers["X-Happ-Platform"] = ua.includes("iOS") ? "ios" : "android";
+  }
+  
+  // Добавляем заголовки для V2rayTun
+  if (ua.includes("V2raytun")) {
+    headers["X-V2Ray-Version"] = "5.25.81";
+    headers["X-App-Type"] = "v2ray";
+  }
+  
+  // Добавляем заголовки для INCY
+  if (ua.includes("INCY")) {
+    headers["X-INCY-Version"] = "3.4.2";
+  }
+  
+  return headers;
 }
 
 function extractAllUrlsFromHtml(html, originalUrl) {
@@ -232,7 +293,7 @@ async function fetchSubscription(url) {
   try {
     const lowerUrl = url.toLowerCase();
     if (BLOCKED_DOMAINS.some(domain => lowerUrl.includes(domain.toLowerCase()))) {
-      return { ok: false, error: "🚫 Домен заблокирован", attempts: 0 };
+      return { ok: false, error: " Домен заблокирован", attempts: 0 };
     }
 
     const redirectTarget = extractRedirectTarget(url);
@@ -246,16 +307,15 @@ async function fetchSubscription(url) {
       attempts = i + 1;
       const ua = TARGET_USER_AGENTS[i];
       
-      const headers = { 
-        "User-Agent": ua,
-        "Accept": "*/*",
-        "Accept-Language": "en-US,en;q=0.9,ru;q=0.8",
-        "Connection": "keep-alive",
-        "X-Happ-App": ua.includes("Happ") ? "Happ" : undefined,
-        "X-Happ-Platform": ua.includes("Android") ? "android" : (ua.includes("iOS") ? "ios" : "windows")
-      };
+      // 🔥 ГЕНЕРИРУЕМ "ПРАВИЛЬНЫЕ" ЗАГОЛОВКИ
+      const headers = buildHappHeaders(ua, i === 0);
 
       try {
+        // 🔥 Небольшая задержка между запросами (эмуляция реального приложения)
+        if (i > 0) {
+          await new Promise(resolve => setTimeout(resolve, 500));
+        }
+        
         const res = await fetchWithRedirects(actualUrl, headers);
         if (!res.ok) {
           lastError = `HTTP ${res.status}`;
@@ -284,7 +344,8 @@ async function fetchSubscription(url) {
             
             for (const subUrl of urlsToFetch) {
               try {
-                const subRes = await fetchWithRedirects(subUrl, headers);
+                const subHeaders = buildHappHeaders(ua, false);
+                const subRes = await fetchWithRedirects(subUrl, subHeaders);
                 if (subRes.ok) {
                   const subText = await subRes.text();
                   const subCt = subRes.headers.get("content-type") || "";
@@ -293,7 +354,8 @@ async function fetchSubscription(url) {
                     const nestedUrls = extractAllUrlsFromHtml(subText, subUrl).slice(0, 2);
                     for (const nestedUrl of nestedUrls) {
                       try {
-                        const nestedRes = await fetchWithRedirects(nestedUrl, headers);
+                        const nestedHeaders = buildHappHeaders(ua, false);
+                        const nestedRes = await fetchWithRedirects(nestedUrl, nestedHeaders);
                         if (nestedRes.ok) {
                           const nestedText = await nestedRes.text();
                           if (!isStubResponse(nestedText)) {
@@ -328,12 +390,12 @@ async function fetchSubscription(url) {
 
     return {
       ok: false,
-      error: `❌ <b>Не удалось получить подписку</b>\n\nБот попробовал <b>${attempts}</b> раз.\n\nПоследняя ошибка: <code>${escapeHtml(lastError)}</code>\n\n💡 <b>Решение:</b> Открой ссылку в браузере на телефоне → нажми "Добавить подписку" → скопируй прямую ссылку (с <code>token=</code>) и отправь её мне.`,
+      error: `❌ <b>Не удалось получить подписку</b>\n\nБот попробовал <b>${attempts}</b> раз с эмуляцией Happ.\n\nПоследняя ошибка: <code>${escapeHtml(lastError)}</code>\n\n💡 <b>Решение:</b> Эти серверы требуют реальное приложение Happ. Открой ссылку в Happ → скопируй рабочую ссылку → отправь мне.`,
       attempts
     };
 
   } catch (e) {
-    if (e.name === "AbortError") return { ok: false, error: "Таймаут (8 сек)", attempts: 0 };
+    if (e.name === "AbortError") return { ok: false, error: "Таймаут (10 сек)", attempts: 0 };
     return { ok: false, error: `Ошибка сети: ${e.message}`, attempts: 0 };
   }
 }
@@ -381,4 +443,4 @@ export async function decodeSubscription(url) {
   }
   parseResult.attempts = result.attempts;
   return parseResult;
-    }
+}
