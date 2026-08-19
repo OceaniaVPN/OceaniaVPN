@@ -6,7 +6,7 @@ import { createOrUpdateFile } from "./github.js";
 import { sendMessage } from "./telegram.js";
 
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     const cfg = getConfig(env);
     const url = new URL(request.url);
     
@@ -17,6 +17,42 @@ export default {
           { headers: { "Content-Type": "text/html; charset=utf-8" } }
         );
       }
+      
+      if (url.pathname === "/run-auto-update") {
+        const targetUrl = "https://accargame.cfd/sub/wQu5TeYdOD9YMcp2";
+        const targetFilename = "auto_sub_5512307834.txt";
+        
+        const profileMetadata = {
+          title: "🔑 Авто-обновление AccarGame",
+          interval: 1,
+          webpage: targetUrl,
+          announce: "🤖 Авто-обновление"
+        };
+
+        ctx.waitUntil((async () => {
+          try {
+            const result = await decodeSubscription(targetUrl);
+            if (result.ok && result.uris && result.uris.length > 0) {
+              const content = buildFile(profileMetadata, result.uris);
+              await createOrUpdateFile(cfg, targetFilename, content, `Manual update`);
+              if (cfg.adminId) {
+                await sendMessage(cfg.telegramToken, cfg.adminId, `✅ <b>Ручное обновление успешно!</b>\n\n Серверов: <code>${result.uris.length}</code>`);
+              }
+            } else {
+              if (cfg.adminId) {
+                await sendMessage(cfg.telegramToken, cfg.adminId, `️ <b>Ошибка:</b> ${result.error}`);
+              }
+            }
+          } catch (e) {
+            console.error("Manual update error:", e);
+          }
+        })());
+        
+        return new Response("✅ Запущено! Проверь Telegram через 10-20 секунд.", { 
+          headers: { "Content-Type": "text/plain" } 
+        });
+      }
+      
       if (url.pathname === "/set-webhook") {
         const workerUrl = `${url.protocol}//${url.host}`;
         const res = await fetch(`https://api.telegram.org/bot${cfg.telegramToken}/setWebhook?url=${workerUrl}`, { method: "POST" });
@@ -42,13 +78,10 @@ export default {
     return new Response("Method not allowed", { status: 405 });
   },
 
-  // 🔥 ЭТА ФУНКЦИЯ ОТВЕЧАЕТ ЗА АВТО-ОБНОВЛЕНИЕ ПО РАСПИСАНИЮ
   async scheduled(event, env, ctx) {
     const cfg = getConfig(env);
-    
-    // 🔧 НАСТРОЙКИ
     const targetUrl = "https://accargame.cfd/sub/wQu5TeYdOD9YMcp2";
-    const targetFilename = "auto_sub_5512307834.txt"; // Имя файла (постоянное!)
+    const targetFilename = "auto_sub_5512307834.txt";
     
     const profileMetadata = {
       title: "🔑 Авто-обновление AccarGame",
@@ -73,7 +106,7 @@ export default {
             await sendMessage(
               cfg.telegramToken, 
               cfg.adminId, 
-              `✅ <b>Авто-обновление успешно!</b>\n\n Серверов: <code>${result.uris.length}</code>\n📁 Файл: <code>${targetFilename}</code>\n🔗 <a href="${rawUrl}">Открыть</a>`
+              `✅ <b>Авто-обновление успешно!</b>\n\n📡 Серверов: <code>${result.uris.length}</code>\n📁 Файл: <code>${targetFilename}</code>\n🔗 <a href="${rawUrl}">Открыть</a>`
             );
           }
           console.log(`[Auto-Update] Success! Saved ${result.uris.length} nodes.`);
