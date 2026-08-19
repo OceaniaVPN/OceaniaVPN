@@ -366,9 +366,7 @@ export function parseCrypt(content) {
   }
   return {
     ok: false,
-    error: `⚠️ <b>crypt5/crypt4</b> — зашифрованный формат Happ/Hiddify\n\n` +
-           `Требуется AES-ключ для дешифровки.\n\n` +
-           `💡 <b>Решение:</b> открой ссылку в Happ или Hiddify → экспортируй как обычную vless подписку → отправь мне снова.`
+    error: `⚠️ <b>crypt5/crypt4</b> — зашифрованный формат Happ/Hiddify\n\nТребуется AES-ключ для дешифровки.\n\n💡 <b>Решение:</b> открой ссылку в Happ или Hiddify → экспортируй как обычную vless подписку → отправь мне снова.`
   };
 }
 
@@ -384,7 +382,7 @@ const PROXY_SCHEMES = [
 
 function buildProxyUriRegex() {
   const schemes = PROXY_SCHEMES.join("|");
-  // ИСПРАВЛЕНО: корректный класс символов, исключающий пробелы, кавычки, угловые скобки и амперсанд
+  // 🔥 ИСПРАВЛЕНО: убрана лишняя закрывающая скобка ']', которая ломала парсинг
   return new RegExp(`(?:${schemes})://[^\\s"'<>&]+`, "gi");
 }
 
@@ -521,4 +519,4 @@ export async function parseUrl(url, fetcher, depth = 0) {
   if (b64.ok) return b64;
 
   return { ok: false, error: "Неизвестный формат содержимого по ссылке" };
-}
+        }
