@@ -6,7 +6,6 @@ import { createOrUpdateFile } from "./github.js";
 import { sendMessage } from "./telegram.js";
 
 export default {
-  // 1. Обработка обычных HTTP запросов (Telegram Webhook)
   async fetch(request, env) {
     const cfg = getConfig(env);
     const url = new URL(request.url);
@@ -43,60 +42,50 @@ export default {
     return new Response("Method not allowed", { status: 405 });
   },
 
-  // 2. АВТОМАТИЧЕСКОЕ ОБНОВЛЕНИЕ ПО РАСПИСАНИЮ (КАЖДЫЙ ЧАС)
+  // 🔥 ЭТА ФУНКЦИЯ ОТВЕЧАЕТ ЗА АВТО-ОБНОВЛЕНИЕ ПО РАСПИСАНИЮ
   async scheduled(event, env, ctx) {
     const cfg = getConfig(env);
     
-    // 🔧 НАСТРОЙКИ АВТО-ОБНОВЛЕНИЯ
+    // 🔧 НАСТРОЙКИ
     const targetUrl = "https://accargame.cfd/sub/wQu5TeYdOD9YMcp2";
-    // ВАЖНО: Используй стабильное имя файла, чтобы он ПЕРЕЗАПИСЫВАЛСЯ, а не создавался новый каждый час!
-    // Если хочешь другое имя, поменяй "auto_sub_5512307834.txt" на нужное (например, то, что было на скриншоте)
-    const targetFilename = "auto_sub_5512307834.txt"; 
+    const targetFilename = "auto_sub_5512307834.txt"; // Имя файла (постоянное!)
     
-    // Настройки профиля (как в гайде по созданию)
     const profileMetadata = {
       title: "🔑 Авто-обновление AccarGame",
-      interval: 1, // Обновление каждые 1 час
+      interval: 1,
       webpage: targetUrl,
-      announce: "🤖 Автоматически обновляется каждый час"
+      announce: "🤖 Авто-обновление каждый час"
     };
 
     try {
-      console.log(`[Auto-Update] Starting decode for: ${targetUrl}`);
+      console.log(`[Auto-Update] Starting for: ${targetUrl}`);
       
-      // 1. Декодируем ссылку
       const result = await decodeSubscription(targetUrl);
       
       if (result.ok && result.uris && result.uris.length > 0) {
-        // 2. Формируем файл с заголовками
         const content = buildFile(profileMetadata, result.uris);
-        
-        // 3. Сохраняем/обновляем файл на GitHub
-        const res = await createOrUpdateFile(cfg, targetFilename, content, `Auto hourly update: ${result.uris.length} nodes`);
+        const res = await createOrUpdateFile(cfg, targetFilename, content, `Auto update: ${result.uris.length} nodes`);
         
         if (res.content || res.sha) {
-          console.log(`[Auto-Update] Success! File ${targetFilename} updated with ${result.uris.length} nodes.`);
+          const rawUrl = `https://raw.githubusercontent.com/${cfg.configRepoOwner}/${cfg.configRepoName}/${cfg.branch}/${cfg.configsFolder}/${targetFilename}`;
           
-          // (Опционально) Уведомление админу об успехе
           if (cfg.adminId) {
-            const rawUrl = `https://raw.githubusercontent.com/${cfg.configRepoOwner}/${cfg.configRepoName}/${cfg.branch}/${cfg.configsFolder}/${targetFilename}`;
             await sendMessage(
               cfg.telegramToken, 
               cfg.adminId, 
-              `✅ <b>Авто-обновление успешно!</b>\n\n📡 Серверов: <code>${result.uris.length}</code>\n📁 Файл: <code>${targetFilename}</code>\n🔗 <a href="${rawUrl}">Ссылка на файл</a>`
+              `✅ <b>Авто-обновление успешно!</b>\n\n Серверов: <code>${result.uris.length}</code>\n📁 Файл: <code>${targetFilename}</code>\n🔗 <a href="${rawUrl}">Открыть</a>`
             );
           }
-        } else {
-          console.error(`[Auto-Update] GitHub save failed:`, res);
+          console.log(`[Auto-Update] Success! Saved ${result.uris.length} nodes.`);
         }
       } else {
         console.error(`[Auto-Update] Decode failed:`, result.error);
         if (cfg.adminId) {
-          await sendMessage(cfg.telegramToken, cfg.adminId, `⚠️ <b>Ошибка авто-обновления</b>\n\nНе удалось декодировать ссылку.\nПричина: ${result.error}`);
+          await sendMessage(cfg.telegramToken, cfg.adminId, `⚠️ <b>Ошибка авто-обновления</b>\n\n${result.error}`);
         }
       }
     } catch (e) {
-      console.error(`[Auto-Update] Critical error:`, e);
+      console.error(`[Auto-Update] Error:`, e);
     }
   }
 };
