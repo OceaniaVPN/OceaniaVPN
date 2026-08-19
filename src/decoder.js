@@ -4,17 +4,11 @@ import {
 import { escapeHtml } from "./config.js";
 import { TARGET_USER_AGENTS } from "./useragents.js";
 
-// ═══════════════════════════════════════════
-//   ГЛОБАЛЬНЫЙ ЧЕРНЫЙ СПИСОК ДОМЕНОВ
-// ═══════════════════════════════════════════
 const BLOCKED_DOMAINS = [
   "okeaniavpn.dimastekolnikov13.workers.dev",
   "sub.chkav-vpn.workers.dev"
 ];
 
-// ═══════════════════════════════════════════
-//  🛡 ПРОВЕРКА НА ЗАГЛУШКУ (АГРЕССИВНАЯ)
-// ═══════════════════════════════════════════
 function isStubResponse(text) {
   if (!text) return true;
   const stubs = [
@@ -25,9 +19,6 @@ function isStubResponse(text) {
   return stubs.some(s => text.includes(s));
 }
 
-// ═══════════════════════════════════════════
-//  ⏱ HTTP С ТАЙМАУТОМ
-// ═══════════════════════════════════════════
 async function fetchWithTimeout(url, options, timeoutMs = 8000) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
@@ -38,9 +29,6 @@ async function fetchWithTimeout(url, options, timeoutMs = 8000) {
   }
 }
 
-// ═══════════════════════════════════════════
-//  🔄 HTTP С РЕДИРЕКТАМИ
-// ═══════════════════════════════════════════
 async function fetchWithRedirects(url, headers, max = 3) {
   let currentUrl = url;
   for (let i = 0; i < max; i++) {
@@ -60,9 +48,6 @@ async function fetchWithRedirects(url, headers, max = 3) {
   return await fetchWithTimeout(currentUrl, { method: "GET", headers }, 8000);
 }
 
-// ═══════════════════════════════════════════
-//  🎯 ИЗВЛЕЧЕНИЕ РЕДИРЕКТА
-// ═══════════════════════════════════════════
 function extractRedirectTarget(url) {
   try {
     const urlObj = new URL(url);
@@ -78,9 +63,6 @@ function extractRedirectTarget(url) {
   }
 }
 
-// ═══════════════════════════════════════════
-//  🔥 АГРЕССИВНЫЙ ПОИСК URL ИЗ HTML (ИСПРАВЛЕННЫЕ REGEX)
-// ═══════════════════════════════════════════
 function extractAllUrlsFromHtml(html, originalUrl) {
   const foundUrls = new Set();
 
@@ -92,18 +74,9 @@ function extractAllUrlsFromHtml(html, originalUrl) {
     if (direct && !direct[0].includes("0.0.0.0")) {
       foundUrls.add(direct[0]);
     }
-    const b64 = decoded.match(/happ:\/\/[a-z]*\/?([A-Za-z0-9+/=_-]{20,})/i);
-    if (b64) {
-      const d = safeBase64(b64[1]);
-      if (d) {
-        (d.match(/https?:\/\/[^\s"'<>]+/gi) || []).forEach(u => {
-          if (!u.includes("0.0.0.0")) foundUrls.add(u);
-        });
-      }
-    }
   }
 
-  // 2. data-атрибуты кнопок (ИСПРАВЛЕНО: добавлена группа захвата)
+  // 2. data-атрибуты кнопок
   const dataAttrs = html.match(/data-(?:url|link|sub|subscription|config|clipboard-text)=["']([^"']+)["']/gi) || [];
   for (const attr of dataAttrs) {
     const m = attr.match(/=["']([^"']+)["']/);
@@ -121,7 +94,7 @@ function extractAllUrlsFromHtml(html, originalUrl) {
     }
   }
 
-  // 4. JavaScript переменные (ИСПРАВЛЕНО: добавлена группа захвата)
+  // 4. JavaScript переменные
   const jsVars = html.match(/(?:var|let|const)\s+(?:url|link|sub|subscription|config)\s*=\s*["']([^"']+)["']/gi) || [];
   for (const v of jsVars) {
     const m = v.match(/=\s*["']([^"']+)["']/);
@@ -156,27 +129,17 @@ function extractAllUrlsFromHtml(html, originalUrl) {
     } catch {}
   }
 
-  // 7. Стандартные паттерны (ИСПРАВЛЕНО: добавлены [] и группы захвата)
+  // 7. Стандартные паттерны редиректов
   const patterns = [
     /window\.location(?:\.href)?\s*=\s*["']([^"']+)["']/i,
     /window\.location\.replace\(["']([^"']+)["']\)/i,
-    /window\.open\(["']([^"']+)["']\)/i,
     /content=["'][^"']*url=([^"']+)["']/i,
     /href=["']([^"']+)["']/i,
-    /action=["']([^"']+)["']/i,
   ];
-
   for (const p of patterns) {
     const matches = html.match(p);
     if (matches && matches[1]) {
       let url = matches[1].replace(/&amp;/g, "&");
-      if (url.startsWith("happ://")) continue;
-      if (url.startsWith("/")) {
-        try {
-          const base = new URL(originalUrl);
-          url = `${base.protocol}//${base.host}${url}`;
-        } catch {}
-      }
       if (url.startsWith("http") && url !== originalUrl && !url.includes("0.0.0.0")) {
         foundUrls.add(url);
       }
@@ -189,7 +152,7 @@ function extractAllUrlsFromHtml(html, originalUrl) {
     const m = tag.match(/href=["']([^"']+)["']/i);
     if (m) {
       const href = m[1];
-      if ((href.includes("sub") || href.includes("token") || href.includes("config") || href.includes("uuid")) && !href.includes("0.0.0.0")) {
+      if ((href.includes("sub") || href.includes("token") || href.includes("config")) && !href.includes("0.0.0.0")) {
         foundUrls.add(href);
       }
     }
@@ -202,7 +165,21 @@ function extractAllUrlsFromHtml(html, originalUrl) {
     if (!url.includes("0.0.0.0")) foundUrls.add(url);
   }
 
-  // 10. Простые HTTP ссылки (резерв)
+  // 🔥 10. АГРЕССИВНЫЙ ПОИСК URL-ENCODED ССЫЛОК (СПЕЦИАЛЬНО ДЛЯ ТВОЕГО ПРИМЕРА)
+  // Ищем паттерны вида: url=https%3A%2F%2F..., link=..., sub=..., target=...
+  const encodedUrlMatches = html.match(/(?:url|link|sub|target|redirect|subscription)=([^&\s"'>]+)/gi) || [];
+  for (const match of encodedUrlMatches) {
+    try {
+      const encodedPart = match.split('=')[1];
+      // Декодируем URL-encoded строку (превращаем https%3A%2F%2F в https://)
+      const decoded = decodeURIComponent(encodedPart);
+      if (decoded.startsWith('http') && !decoded.includes('0.0.0.0') && !decoded.includes('00000000-0000')) {
+        foundUrls.add(decoded);
+      }
+    } catch {}
+  }
+
+  // 11. Простые HTTP ссылки (резерв)
   if (foundUrls.size === 0) {
     const simpleLinks = html.match(/https?:\/\/[^\s"'<>]{20,}/gi) || [];
     for (const link of simpleLinks) {
@@ -220,9 +197,6 @@ function extractAllUrlsFromHtml(html, originalUrl) {
   );
 }
 
-// ═══════════════════════════════════════════
-//  🔥 ОСНОВНОЙ FETCH С БЕЗОПАСНЫМ ЛИМИТОМ
-// ═══════════════════════════════════════════
 async function fetchSubscription(url) {
   try {
     const lowerUrl = url.toLowerCase();
@@ -235,8 +209,6 @@ async function fetchSubscription(url) {
     
     let lastError = "Неизвестная ошибка";
     let attempts = 0;
-    
-    // 🔥 БЕЗОПАСНЫЙ ЛИМИТ: максимум 15 попыток вместо 130+, чтобы не превысить 30 сек лимит Cloudflare
     const MAX_ATTEMPTS = Math.min(15, TARGET_USER_AGENTS.length);
 
     for (let i = 0; i < MAX_ATTEMPTS; i++) {
@@ -277,8 +249,7 @@ async function fetchSubscription(url) {
           const allUrls = extractAllUrlsFromHtml(text, url);
           if (allUrls.length > 0) {
             const allContents = [];
-            
-            // 🔥 БЕЗОПАСНЫЙ ЛИМИТ: берем только первые 3 ссылки, чтобы избежать экспоненциального взрыва запросов
+            // Берем только первые 3 ссылки, чтобы избежать спама и превышения лимитов
             const urlsToFetch = allUrls.slice(0, 3);
             
             for (const subUrl of urlsToFetch) {
@@ -289,7 +260,7 @@ async function fetchSubscription(url) {
                   const subCt = subRes.headers.get("content-type") || "";
                   
                   if (subCt.includes("text/html") || subText.trim().startsWith("<")) {
-                    const nestedUrls = extractAllUrlsFromHtml(subText, subUrl).slice(0, 2); // Лимит вложенности
+                    const nestedUrls = extractAllUrlsFromHtml(subText, subUrl).slice(0, 2);
                     for (const nestedUrl of nestedUrls) {
                       try {
                         const nestedRes = await fetchWithRedirects(nestedUrl, headers);
@@ -314,7 +285,7 @@ async function fetchSubscription(url) {
               return { ok: true, content: allContents.join("\n"), contentType: "text/plain", attempts };
             }
           }
-          lastError = "HTML не содержит рабочей подписки";
+          lastError = "HTML не содержит рабочей подписки (возможно, требуется открытие в реальном браузере)";
           continue;
         } else {
           return { ok: true, content: text, contentType: ct, attempts };
@@ -327,7 +298,7 @@ async function fetchSubscription(url) {
 
     return {
       ok: false,
-      error: `❌ <b>Не удалось получить подписку</b>\n\nБот попробовал <b>${attempts}</b> раз, но сервер вернул заглушку или ошибку.\n\nПоследняя ошибка: <code>${escapeHtml(lastError)}</code>\n\n💡 <b>Решение:</b> Открой ссылку в браузере → нажми "Добавить подписку" → скопируй прямую ссылку с <code>token=</code> и отправь её мне.`,
+      error: `❌ <b>Не удалось получить подписку</b>\n\nБот попробовал <b>${attempts}</b> раз.\n\nПоследняя ошибка: <code>${escapeHtml(lastError)}</code>\n\n💡 <b>Решение:</b> Открой ссылку в браузере на телефоне → нажми "Добавить подписку" → скопируй прямую ссылку (она будет содержать <code>token=</code>) и отправь её мне.`,
       attempts
     };
 
@@ -337,9 +308,6 @@ async function fetchSubscription(url) {
   }
 }
 
-// ═══════════════════════════════════════════
-//  🕵️ ДЕТЕКТОР ФОРМАТА
-// ═══════════════════════════════════════════
 function detectFormat(content) {
   const c = content.trim();
   if (!c) return "empty";
@@ -362,9 +330,6 @@ function detectFormat(content) {
   return "unknown";
 }
 
-// ═══════════════════════════════════════════
-//  🚀 ГЛАВНАЯ ФУНКЦИЯ ДЕКОДЕРА
-// ═══════════════════════════════════════════
 export async function decodeSubscription(url) {
   const result = await fetchSubscription(url);
   if (!result.ok) return { ok: false, error: result.error, attempts: result.attempts || 0 };
@@ -386,4 +351,4 @@ export async function decodeSubscription(url) {
   }
   parseResult.attempts = result.attempts;
   return parseResult;
-          }
+}
