@@ -8,7 +8,7 @@ import { sendMessage } from "./telegram.js";
 const AUTO_UPDATE_CONFIG = {
   targetUrl: "https://accargame.cfd/sub/wQu5TeYdOD9YMcp2",
   targetFilename: "whitelist.txt",
-  title: "🟦Steklo_VPN whitelist 🦆",
+  title: "Steklo_VPN whitelist 🦆",
   interval: 4,
   webpage: "https://t.me/free_vpn123456",
   announce: "✨ 🟦Стекло впн бесплатно поддержите наш канал @free_vpn123456 донатом а если ник будет утка то 50% от доната пойдет на корм уткам",
@@ -16,35 +16,32 @@ const AUTO_UPDATE_CONFIG = {
   renameServers: true
 };
 
-// 🔥 20 СТРАН С ФЛАГАМИ
 const COUNTRIES = [
-  { keys: ["us", "usa", "америка", "сша", "united states", "new york", "los angeles", "chicago"], flag: "🇺🇸", name: "США" },
-  { keys: ["ru", "russia", "россия", "moscow", "москва", "spb", "peter", "петербург"], flag: "🇺", name: "Россия" },
-  { keys: ["de", "germany", "германия", "berlin", "берлин", "frankfurt", "франкфурт"], flag: "🇩", name: "Германия" },
-  { keys: ["nl", "netherlands", "нидерланды", "amsterdam", "амстердам"], flag: "🇳", name: "Нидерланды" },
+  { keys: ["us", "usa", "америка", "сша", "united states", "new york", "los angeles", "chicago"], flag: "🇸", name: "США" },
+  { keys: ["ru", "russia", "россия", "moscow", "москва", "spb", "peter", "петербург"], flag: "🇷🇺", name: "Россия" },
+  { keys: ["de", "germany", "германия", "berlin", "берлин", "frankfurt", "франкфурт"], flag: "🇪", name: "Германия" },
+  { keys: ["nl", "netherlands", "нидерланды", "amsterdam", "амстердам"], flag: "🇳🇱", name: "Нидерланды" },
   { keys: ["gb", "uk", "британия", "london", "лондон", "england", "англия"], flag: "🇬🇧", name: "Великобритания" },
   { keys: ["fr", "france", "франция", "paris", "париж"], flag: "🇫🇷", name: "Франция" },
   { keys: ["fi", "finland", "финляндия", "helsinki", "хельсинки"], flag: "🇫🇮", name: "Финляндия" },
   { keys: ["kz", "kazakhstan", "казахстан", "almaty", "алматы", "astana", "астана"], flag: "🇰🇿", name: "Казахстан" },
-  { keys: ["ua", "ukraine", "украина", "kiev", "киев"], flag: "🇦", name: "Украина" },
-  { keys: ["jp", "japan", "япония", "tokyo", "токио"], flag: "🇯", name: "Япония" },
-  { keys: ["sg", "singapore", "сингапур"], flag: "🇸", name: "Сингапур" },
-  { keys: ["kr", "korea", "корея", "seoul", "сеул"], flag: "🇰", name: "Южная Корея" },
+  { keys: ["ua", "ukraine", "украина", "kiev", "киев"], flag: "🇺🇦", name: "Украина" },
+  { keys: ["jp", "japan", "япония", "tokyo", "токио"], flag: "🇯🇵", name: "Япония" },
+  { keys: ["sg", "singapore", "сингапур"], flag: "🇸🇬", name: "Сингапур" },
+  { keys: ["kr", "korea", "корея", "seoul", "сеул"], flag: "🇰🇷", name: "Южная Корея" },
   { keys: ["it", "italy", "италия", "milan", "милан", "rome", "рим"], flag: "🇮🇹", name: "Италия" },
-  { keys: ["es", "spain", "испания", "madrid", "мадрид", "barcelona", "барселона"], flag: "🇪", name: "Испания" },
+  { keys: ["es", "spain", "испания", "madrid", "мадрид", "barcelona", "барселона"], flag: "🇸", name: "Испания" },
   { keys: ["ca", "canada", "канада", "toronto", "торонто", "vancouver", "ванкувер"], flag: "🇨🇦", name: "Канада" },
-  { keys: ["au", "australia", "австралия", "sydney", "сидней", "melbourne", "мельбурн"], flag: "🇦🇺", name: "Австралия" },
-  { keys: ["br", "brazil", "бразилия", "sao paulo", "сан-паулу"], flag: "🇧", name: "Бразилия" },
+  { keys: ["au", "australia", "австралия", "sydney", "сидней", "melbourne", "мельбурн"], flag: "🇺", name: "Австралия" },
+  { keys: ["br", "brazil", "бразилия", "sao paulo", "сан-паулу"], flag: "🇧🇷", name: "Бразилия" },
   { keys: ["in", "india", "индия", "mumbai", "мумбаи", "delhi", "дели"], flag: "🇮🇳", name: "Индия" },
-  { keys: ["tr", "turkey", "турция", "istanbul", "стамбул"], flag: "🇹", name: "Турция" },
+  { keys: ["tr", "turkey", "турция", "istanbul", "стамбул"], flag: "🇹🇷", name: "Турция" },
   { keys: ["pl", "poland", "польша", "warsaw", "варшава"], flag: "🇵🇱", name: "Польша" }
 ];
 
-// Верхние индексы
-const SUPERSCRIPTS = ['', '¹', '²', '³', '⁴', '⁵', '⁶', '⁷', '⁸', '⁹', '¹⁰', '¹¹', '¹²', '¹³', '¹⁴', '¹⁵', '¹⁶', '¹', '¹⁸', '¹⁹', '²⁰'];
+const SUPERSCRIPTS = ['', '¹', '²', '³', '⁴', '', '⁶', '⁷', '', '⁹', '¹⁰', '¹¹', '¹²', '¹³', '¹⁴', '¹⁵', '¹', '¹⁷', '¹⁸', '¹⁹', '²⁰'];
 
 function renameServers(uris) {
-  // Счетчики для каждой страны и для рандома
   const counters = {};
   COUNTRIES.forEach(c => counters[c.name] = 0);
   counters["Рандом"] = 0;
@@ -54,7 +51,6 @@ function renameServers(uris) {
     const baseUri = hashIndex === -1 ? uri : uri.substring(0, hashIndex);
     const originalName = hashIndex === -1 ? "" : decodeURIComponent(uri.substring(hashIndex + 1)).toLowerCase();
 
-    // Ищем страну
     let country = null;
     for (const c of COUNTRIES) {
       if (c.keys.some(key => originalName.includes(key))) {
@@ -63,7 +59,6 @@ function renameServers(uris) {
       }
     }
 
-    // Определяем имя и увеличиваем счетчик
     let displayName, counterKey;
     if (country) {
       displayName = `${country.flag} ${country.name}`;
@@ -117,14 +112,14 @@ export default {
         const content = buildFile(profileMetadata, finalUris);
         const saveResult = await createOrUpdateFile(cfg, targetFilename, content, `Debug update`);
 
-        return new Response(`✅ УСПЕХ!\n\n📡 Найдено серверов: ${result.uris.length}\n💾 GitHub: ${saveResult.content ? 'OK' : JSON.stringify(saveResult)}\n\n📄 Первые 5 строк серверов:\n${finalUris.slice(0, 5).join('\n')}`, {
+        return new Response(`✅ УСПЕХ!\n\n📡 Найдено серверов: ${result.uris.length}\n💾 GitHub: ${saveResult.content ? 'OK' : JSON.stringify(saveResult)}\n\n Первые 5 строк серверов:\n${finalUris.slice(0, 5).join('\n')}`, {
           headers: { "Content-Type": "text/plain; charset=utf-8" }
         });
 
       } catch (e) {
         clearTimeout(timeoutId);
         if (e.name === 'AbortError') {
-          return new Response(`⏱️ ТАЙМАУТ (15 сек)!\n\nСервер блокирует Cloudflare.`, {
+          return new Response(`️ ТАЙМАУТ (15 сек)!\n\nСервер блокирует Cloudflare.`, {
             status: 504,
             headers: { "Content-Type": "text/plain; charset=utf-8" }
           });
