@@ -8,7 +8,7 @@ import { TARGET_USER_AGENTS } from "./useragents.js";
 //   ГЛОБАЛЬНЫЙ ЧЕРНЫЙ СПИСОК ДОМЕНОВ
 // ═══════════════════════════════════════════
 const BLOCKED_DOMAINS = [
-  "okeaniavpn.dimastekolnikov1.workers.dev",
+  "okeaniavpn.dimastekolnikov13.workers.dev",
   "sub.chkav-vpn.workers.dev"
 ];
 
@@ -18,15 +18,9 @@ const BLOCKED_DOMAINS = [
 function isStubResponse(text) {
   if (!text) return true;
   const stubs = [
-    "0.0.0.0",
-    "00000000-0000",
-    "127.0.0.1",
-    "localhost",
-    "App not supported",
-    "not supported",
-    "Unsupported app",
-    "invalid subscription",
-    "subscription not found"
+    "0.0.0.0", "00000000-0000", "127.0.0.1", "localhost",
+    "App not supported", "not supported", "Unsupported app",
+    "invalid subscription", "subscription not found"
   ];
   return stubs.some(s => text.includes(s));
 }
@@ -34,7 +28,7 @@ function isStubResponse(text) {
 // ═══════════════════════════════════════════
 //  ⏱ HTTP С ТАЙМАУТОМ
 // ═══════════════════════════════════════════
-async function fetchWithTimeout(url, options, timeoutMs = 15000) {
+async function fetchWithTimeout(url, options, timeoutMs = 8000) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
@@ -47,34 +41,23 @@ async function fetchWithTimeout(url, options, timeoutMs = 15000) {
 // ═══════════════════════════════════════════
 //  🔄 HTTP С РЕДИРЕКТАМИ
 // ═══════════════════════════════════════════
-async function fetchWithRedirects(url, headers, max = 5) {
+async function fetchWithRedirects(url, headers, max = 3) {
   let currentUrl = url;
-
   for (let i = 0; i < max; i++) {
-    const res = await fetchWithTimeout(
-      currentUrl,
-      { method: "GET", headers, redirect: "manual" },
-      15000
-    );
-
+    const res = await fetchWithTimeout(currentUrl, { method: "GET", headers, redirect: "manual" }, 8000);
     if ([301, 302, 303, 307, 308].includes(res.status)) {
       const loc = res.headers.get("location");
       if (!loc) return res;
-
       currentUrl = loc.startsWith("/")
         ? `${new URL(currentUrl).protocol}//${new URL(currentUrl).host}${loc}`
         : loc;
-
       const redirectTarget = extractRedirectTarget(currentUrl);
       if (redirectTarget) currentUrl = redirectTarget;
-
       continue;
     }
-
     return res;
   }
-
-  return await fetchWithTimeout(currentUrl, { method: "GET", headers }, 15000);
+  return await fetchWithTimeout(currentUrl, { method: "GET", headers }, 8000);
 }
 
 // ═══════════════════════════════════════════
@@ -96,7 +79,7 @@ function extractRedirectTarget(url) {
 }
 
 // ═══════════════════════════════════════════
-//  🔥 АГРЕССИВНЫЙ ПОИСК URL ИЗ HTML (ИСПРАВЛЕННАЯ ВЕРСИЯ)
+//  🔥 АГРЕССИВНЫЙ ПОИСК URL ИЗ HTML (ИСПРАВЛЕННЫЕ REGEX)
 // ═══════════════════════════════════════════
 function extractAllUrlsFromHtml(html, originalUrl) {
   const foundUrls = new Set();
@@ -120,7 +103,7 @@ function extractAllUrlsFromHtml(html, originalUrl) {
     }
   }
 
-  // 2. data-атрибуты кнопок
+  // 2. data-атрибуты кнопок (ИСПРАВЛЕНО: добавлена группа захвата)
   const dataAttrs = html.match(/data-(?:url|link|sub|subscription|config|clipboard-text)=["']([^"']+)["']/gi) || [];
   for (const attr of dataAttrs) {
     const m = attr.match(/=["']([^"']+)["']/);
@@ -138,7 +121,7 @@ function extractAllUrlsFromHtml(html, originalUrl) {
     }
   }
 
-  // 4. JavaScript переменные
+  // 4. JavaScript переменные (ИСПРАВЛЕНО: добавлена группа захвата)
   const jsVars = html.match(/(?:var|let|const)\s+(?:url|link|sub|subscription|config)\s*=\s*["']([^"']+)["']/gi) || [];
   for (const v of jsVars) {
     const m = v.match(/=\s*["']([^"']+)["']/);
@@ -173,7 +156,7 @@ function extractAllUrlsFromHtml(html, originalUrl) {
     } catch {}
   }
 
-  // 7. Стандартные паттерны (JS редиректы, meta refresh) — ИСПРАВЛЕНО: добавлены [] и группы захвата
+  // 7. Стандартные паттерны (ИСПРАВЛЕНО: добавлены [] и группы захвата)
   const patterns = [
     /window\.location(?:\.href)?\s*=\s*["']([^"']+)["']/i,
     /window\.location\.replace\(["']([^"']+)["']\)/i,
@@ -238,7 +221,7 @@ function extractAllUrlsFromHtml(html, originalUrl) {
 }
 
 // ═══════════════════════════════════════════
-//  🔥 ОСНОВНОЙ FETCH С ПЕРЕБОРОМ ВСЕХ UA
+//  🔥 ОСНОВНОЙ FETCH С БЕЗОПАСНЫМ ЛИМИТОМ
 // ═══════════════════════════════════════════
 async function fetchSubscription(url) {
   try {
@@ -252,8 +235,11 @@ async function fetchSubscription(url) {
     
     let lastError = "Неизвестная ошибка";
     let attempts = 0;
+    
+    // 🔥 БЕЗОПАСНЫЙ ЛИМИТ: максимум 15 попыток вместо 130+, чтобы не превысить 30 сек лимит Cloudflare
+    const MAX_ATTEMPTS = Math.min(15, TARGET_USER_AGENTS.length);
 
-    for (let i = 0; i < TARGET_USER_AGENTS.length; i++) {
+    for (let i = 0; i < MAX_ATTEMPTS; i++) {
       attempts = i + 1;
       const ua = TARGET_USER_AGENTS[i];
       
@@ -291,7 +277,11 @@ async function fetchSubscription(url) {
           const allUrls = extractAllUrlsFromHtml(text, url);
           if (allUrls.length > 0) {
             const allContents = [];
-            for (const subUrl of allUrls) {
+            
+            // 🔥 БЕЗОПАСНЫЙ ЛИМИТ: берем только первые 3 ссылки, чтобы избежать экспоненциального взрыва запросов
+            const urlsToFetch = allUrls.slice(0, 3);
+            
+            for (const subUrl of urlsToFetch) {
               try {
                 const subRes = await fetchWithRedirects(subUrl, headers);
                 if (subRes.ok) {
@@ -299,7 +289,7 @@ async function fetchSubscription(url) {
                   const subCt = subRes.headers.get("content-type") || "";
                   
                   if (subCt.includes("text/html") || subText.trim().startsWith("<")) {
-                    const nestedUrls = extractAllUrlsFromHtml(subText, subUrl);
+                    const nestedUrls = extractAllUrlsFromHtml(subText, subUrl).slice(0, 2); // Лимит вложенности
                     for (const nestedUrl of nestedUrls) {
                       try {
                         const nestedRes = await fetchWithRedirects(nestedUrl, headers);
@@ -337,12 +327,12 @@ async function fetchSubscription(url) {
 
     return {
       ok: false,
-      error: `❌ <b>Не удалось получить подписку</b>\n\nБот попробовал <b>${attempts}</b> User-Agent'ов, но сервер каждый раз возвращал заглушку или ошибку.\n\nПоследняя ошибка: <code>${escapeHtml(lastError)}</code>\n\n💡 <b>Единственное решение:</b>\n1. Открой эту ссылку в браузере на телефоне\n2. Нажми кнопку <b>"Добавить подписку"</b>\n3. Скопируй прямую ссылку (она должна содержать <code>token=</code>)\n4. Отправь эту ссылку мне напрямую`,
+      error: `❌ <b>Не удалось получить подписку</b>\n\nБот попробовал <b>${attempts}</b> раз, но сервер вернул заглушку или ошибку.\n\nПоследняя ошибка: <code>${escapeHtml(lastError)}</code>\n\n💡 <b>Решение:</b> Открой ссылку в браузере → нажми "Добавить подписку" → скопируй прямую ссылку с <code>token=</code> и отправь её мне.`,
       attempts
     };
 
   } catch (e) {
-    if (e.name === "AbortError") return { ok: false, error: "Таймаут (15 сек)", attempts: 0 };
+    if (e.name === "AbortError") return { ok: false, error: "Таймаут (8 сек)", attempts: 0 };
     return { ok: false, error: `Ошибка сети: ${e.message}`, attempts: 0 };
   }
 }
@@ -353,33 +343,22 @@ async function fetchSubscription(url) {
 function detectFormat(content) {
   const c = content.trim();
   if (!c) return "empty";
-  
   if (c.startsWith("crypt5://") || c.startsWith("crypt4://")) return "crypt";
-  
-  if (c.includes("<!DOCTYPE") || c.includes("<html") || c.includes("<body") || c.includes("<script")) {
-    return "html";
-  }
-  
+  if (c.includes("<!DOCTYPE") || c.includes("<html") || c.includes("<body") || c.includes("<script")) return "html";
   if (/^[A-Za-z0-9+/=\-_]+$/.test(c.replace(/\s/g, "")) && c.length > 40) {
     const decoded = safeBase64(c);
     if (decoded && decoded.includes("://")) return "base64";
   }
-  
   if (c.startsWith("{") || c.startsWith("[")) {
     try { JSON.parse(c); return "json"; } catch {}
   }
-  
-  if (c.includes("proxies:") || c.includes("proxy-groups:") || /mixed-port:\s*\d+/.test(c)) {
-    return "yaml";
-  }
-  
+  if (c.includes("proxies:") || c.includes("proxy-groups:") || /mixed-port:\s*\d+/.test(c)) return "yaml";
   const lines = c.split("\n").map(l => l.trim()).filter(l => l && !l.startsWith("#"));
   if (lines.length > 0 && lines.some(l => /^(vless|vmess|trojan|ss|hysteria|tuic|wireguard):\/\//i.test(l))) {
     const fakeCount = lines.filter(l => l.includes("0.0.0.0") || l.includes("00000000-0000")).length;
     if (fakeCount > 0) return "html";
     return "vless-list";
   }
-  
   return "unknown";
 }
 
@@ -388,21 +367,12 @@ function detectFormat(content) {
 // ═══════════════════════════════════════════
 export async function decodeSubscription(url) {
   const result = await fetchSubscription(url);
-  
-  if (!result.ok) {
-    return { ok: false, error: result.error, attempts: result.attempts || 0 };
-  }
-  
+  if (!result.ok) return { ok: false, error: result.error, attempts: result.attempts || 0 };
   if (isStubResponse(result.content)) {
-    return {
-      ok: false,
-      error: `❌ <b>Обнаружена заглушка!</b>\n\nСервер вернул фейковые ключи (0.0.0.0) или "App not supported".\n\n💡 Открой ссылку в браузере → нажми "Добавить подписку" → скопируй прямую ссылку`,
-      attempts: result.attempts || 0
-    };
+    return { ok: false, error: `❌ <b>Обнаружена заглушка!</b>\n\nСервер вернул фейковые ключи (0.0.0.0). Открой ссылку в браузере и скопируй прямую ссылку.`, attempts: result.attempts || 0 };
   }
   
   const format = detectFormat(result.content);
-  
   let parseResult;
   switch (format) {
     case "vless-list": parseResult = parseVlessList(result.content); break;
@@ -411,19 +381,9 @@ export async function decodeSubscription(url) {
     case "json": parseResult = parseJson(result.content); break;
     case "crypt": parseResult = parseCrypt(result.content); break;
     case "empty": parseResult = { ok: false, error: "Пустая подписка" }; break;
-    case "html":
-      parseResult = {
-        ok: false,
-        error: `❌ <b>HTML-страница или заглушка!</b>\n\nОбнаружены фейковые ключи (0.0.0.0).\n\n💡 Открой в браузере → нажми "Добавить подписку" → скопируй ссылку`
-      };
-      break;
-    default:
-      parseResult = {
-        ok: false,
-        error: `❓ Неизвестный формат\n\nContent-Type: ${result.contentType}\nДлина: ${result.content.length}\n\nПервые 300 символов:\n${escapeHtml(result.content.substring(0, 300))}`
-      };
+    case "html": parseResult = { ok: false, error: `❌ <b>HTML-страница или заглушка!</b>` }; break;
+    default: parseResult = { ok: false, error: `❓ Неизвестный формат` };
   }
-
   parseResult.attempts = result.attempts;
   return parseResult;
-      }
+          }
