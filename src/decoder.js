@@ -66,13 +66,46 @@ function extractRedirectTarget(url) {
 function extractAllUrlsFromHtml(html, originalUrl) {
   const foundUrls = new Set();
 
-  // 1. happ:// deep-links
+  // 1. happ:// deep-links (УЛУЧШЕНО)
   const happLinks = html.match(/happ:\/\/[^\s"'<>]+/gi) || [];
   for (const link of happLinks) {
-    const decoded = decodeURIComponent(link.replace("happ://", ""));
+    const cleanLink = link.replace(/["'>]/g, "");
+    const decoded = decodeURIComponent(cleanLink.replace("happ://", ""));
+    
+    // Обработка happ://add/{url}
+    const addMatch = cleanLink.match(/happ:\/\/add\/(.+)$/i);
+    if (addMatch) {
+      const extractedUrl = decodeURIComponent(addMatch[1]);
+      if (extractedUrl.startsWith('http') && !extractedUrl.includes("0.0.0.0")) {
+        foundUrls.add(extractedUrl);
+      }
+    }
+    
+    // Обработка happ://crypt/{url}, happ://crypt2/{url}, и т.д.
+    const cryptMatch = cleanLink.match(/happ:\/\/crypt\d*\/(.+)$/i);
+    if (cryptMatch) {
+      const encryptedUrl = cryptMatch[1];
+      const decrypted = safeBase64(encryptedUrl);
+      if (decrypted && decrypted.startsWith('http')) {
+        foundUrls.add(decrypted);
+      }
+    }
+    
+    // Прямая ссылка в happ://
     const direct = decoded.match(/https?:\/\/[^\s"'<>]+/gi);
     if (direct && !direct[0].includes("0.0.0.0")) {
       foundUrls.add(direct[0]);
+    }
+    
+    // Base64 payload в happ://
+    const b64 = decoded.match(/happ:\/\/[a-z]*\/?([A-Za-z0-9+/=_-]{20,})/i);
+    if (b64) {
+      const d = safeBase64(b64[1]);
+      if (d) {
+        (d.match(/https?:\/\/[^\s"'<>]+/gi) || []).forEach(u => {
+          if (!u.includes("0.0.0.0")) foundUrls.add(u);
+        });
+      }
     }
   }
 
@@ -165,13 +198,11 @@ function extractAllUrlsFromHtml(html, originalUrl) {
     if (!url.includes("0.0.0.0")) foundUrls.add(url);
   }
 
-  // 🔥 10. АГРЕССИВНЫЙ ПОИСК URL-ENCODED ССЫЛОК (СПЕЦИАЛЬНО ДЛЯ ТВОЕГО ПРИМЕРА)
-  // Ищем паттерны вида: url=https%3A%2F%2F..., link=..., sub=..., target=...
+  // 10. АГРЕССИВНЫЙ ПОИСК URL-ENCODED ССЫЛОК
   const encodedUrlMatches = html.match(/(?:url|link|sub|target|redirect|subscription)=([^&\s"'>]+)/gi) || [];
   for (const match of encodedUrlMatches) {
     try {
       const encodedPart = match.split('=')[1];
-      // Декодируем URL-encoded строку (превращаем https%3A%2F%2F в https://)
       const decoded = decodeURIComponent(encodedPart);
       if (decoded.startsWith('http') && !decoded.includes('0.0.0.0') && !decoded.includes('00000000-0000')) {
         foundUrls.add(decoded);
@@ -249,7 +280,6 @@ async function fetchSubscription(url) {
           const allUrls = extractAllUrlsFromHtml(text, url);
           if (allUrls.length > 0) {
             const allContents = [];
-            // Берем только первые 3 ссылки, чтобы избежать спама и превышения лимитов
             const urlsToFetch = allUrls.slice(0, 3);
             
             for (const subUrl of urlsToFetch) {
@@ -285,7 +315,7 @@ async function fetchSubscription(url) {
               return { ok: true, content: allContents.join("\n"), contentType: "text/plain", attempts };
             }
           }
-          lastError = "HTML не содержит рабочей подписки (возможно, требуется открытие в реальном браузере)";
+          lastError = "HTML не содержит рабочей подписки";
           continue;
         } else {
           return { ok: true, content: text, contentType: ct, attempts };
@@ -298,7 +328,7 @@ async function fetchSubscription(url) {
 
     return {
       ok: false,
-      error: `❌ <b>Не удалось получить подписку</b>\n\nБот попробовал <b>${attempts}</b> раз.\n\nПоследняя ошибка: <code>${escapeHtml(lastError)}</code>\n\n💡 <b>Решение:</b> Открой ссылку в браузере на телефоне → нажми "Добавить подписку" → скопируй прямую ссылку (она будет содержать <code>token=</code>) и отправь её мне.`,
+      error: `❌ <b>Не удалось получить подписку</b>\n\nБот попробовал <b>${attempts}</b> раз.\n\nПоследняя ошибка: <code>${escapeHtml(lastError)}</code>\n\n💡 <b>Решение:</b> Открой ссылку в браузере на телефоне → нажми "Добавить подписку" → скопируй прямую ссылку (с <code>token=</code>) и отправь её мне.`,
       attempts
     };
 
@@ -351,4 +381,4 @@ export async function decodeSubscription(url) {
   }
   parseResult.attempts = result.attempts;
   return parseResult;
-}
+    }
