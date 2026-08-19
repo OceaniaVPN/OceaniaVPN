@@ -19,6 +19,17 @@ function isStubResponse(text) {
   return stubs.some(s => text.includes(s));
 }
 
+// 🔥 ПРОВЕРКА НА "ВРЕМЕННОЕ" СООБЩЕНИЕ (конфиг загружается)
+function isTemporaryMessage(text) {
+  if (!text) return false;
+  const tempMessages = [
+    "загружается", "loading", "загрузка", "wait", "подождите",
+    "отгружается", "обновляется", "updating", "processing",
+    "через", "минут", "секунд", "seconds", "minutes"
+  ];
+  return tempMessages.some(s => text.toLowerCase().includes(s));
+}
+
 async function fetchWithTimeout(url, options, timeoutMs = 10000) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
@@ -68,13 +79,10 @@ function extractRedirectTarget(url) {
   }
 }
 
-// 🔥 ГЕНЕРАТОР "ПРАВИЛЬНЫХ" ЗАГОЛОВКОВ ДЛЯ HAPP
 function buildHappHeaders(ua, isFirstRequest = false) {
-  // Извлекаем HWID из User-Agent (если есть)
   const hwidMatch = ua.match(/Android\/(\d+)/);
   const hwid = hwidMatch ? hwidMatch[1] : Math.floor(Math.random() * 1e19).toString();
   
-  // Генерируем случайный request ID (как в реальных приложениях)
   const requestId = crypto.randomUUID ? crypto.randomUUID() : 
     `${Date.now()}-${Math.random().toString(36).substring(7)}`;
   
@@ -88,21 +96,16 @@ function buildHappHeaders(ua, isFirstRequest = false) {
     "Sec-Fetch-Dest": "empty",
     "Sec-Fetch-Mode": "cors",
     "Sec-Fetch-Site": "cross-site",
-    
-    // 🔥 Кастомные заголовки Happ
     "X-Client-Version": "3.26.3",
     "X-Client-Platform": "Android",
     "X-Request-ID": requestId,
     "X-App-Name": "Happ",
-    
-    // 🔥 Заголовки для "первого" запроса (имитация запуска приложения)
     ...(isFirstRequest && {
       "X-First-Launch": "true",
       "X-Install-Time": Date.now() - 86400000 * (Math.floor(Math.random() * 30) + 1).toString(),
     }),
   };
   
-  // Добавляем HWID если есть в UA
   if (ua.includes("Happ")) {
     headers["X-Happ-HWID"] = hwid;
     headers["X-Device-ID"] = hwid;
@@ -110,13 +113,11 @@ function buildHappHeaders(ua, isFirstRequest = false) {
     headers["X-Happ-Platform"] = ua.includes("iOS") ? "ios" : "android";
   }
   
-  // Добавляем заголовки для V2rayTun
   if (ua.includes("V2raytun")) {
     headers["X-V2Ray-Version"] = "5.25.81";
     headers["X-App-Type"] = "v2ray";
   }
   
-  // Добавляем заголовки для INCY
   if (ua.includes("INCY")) {
     headers["X-INCY-Version"] = "3.4.2";
   }
@@ -127,13 +128,11 @@ function buildHappHeaders(ua, isFirstRequest = false) {
 function extractAllUrlsFromHtml(html, originalUrl) {
   const foundUrls = new Set();
 
-  // 1. happ:// deep-links (УЛУЧШЕНО)
   const happLinks = html.match(/happ:\/\/[^\s"'<>]+/gi) || [];
   for (const link of happLinks) {
     const cleanLink = link.replace(/["'>]/g, "");
     const decoded = decodeURIComponent(cleanLink.replace("happ://", ""));
     
-    // Обработка happ://add/{url}
     const addMatch = cleanLink.match(/happ:\/\/add\/(.+)$/i);
     if (addMatch) {
       const extractedUrl = decodeURIComponent(addMatch[1]);
@@ -142,7 +141,6 @@ function extractAllUrlsFromHtml(html, originalUrl) {
       }
     }
     
-    // Обработка happ://crypt/{url}, happ://crypt2/{url}, и т.д.
     const cryptMatch = cleanLink.match(/happ:\/\/crypt\d*\/(.+)$/i);
     if (cryptMatch) {
       const encryptedUrl = cryptMatch[1];
@@ -152,13 +150,11 @@ function extractAllUrlsFromHtml(html, originalUrl) {
       }
     }
     
-    // Прямая ссылка в happ://
     const direct = decoded.match(/https?:\/\/[^\s"'<>]+/gi);
     if (direct && !direct[0].includes("0.0.0.0")) {
       foundUrls.add(direct[0]);
     }
     
-    // Base64 payload в happ://
     const b64 = decoded.match(/happ:\/\/[a-z]*\/?([A-Za-z0-9+/=_-]{20,})/i);
     if (b64) {
       const d = safeBase64(b64[1]);
@@ -170,7 +166,6 @@ function extractAllUrlsFromHtml(html, originalUrl) {
     }
   }
 
-  // 2. data-атрибуты кнопок
   const dataAttrs = html.match(/data-(?:url|link|sub|subscription|config|clipboard-text)=["']([^"']+)["']/gi) || [];
   for (const attr of dataAttrs) {
     const m = attr.match(/=["']([^"']+)["']/);
@@ -179,7 +174,6 @@ function extractAllUrlsFromHtml(html, originalUrl) {
     }
   }
 
-  // 3. onclick обработчики
   const onclickMatches = html.match(/onclick=["'][^"']*?(https?:\/\/[^"'\s]+)[^"']*?["']/gi) || [];
   for (const m of onclickMatches) {
     const urlMatch = m.match(/https?:\/\/[^"'\s]+/);
@@ -188,7 +182,6 @@ function extractAllUrlsFromHtml(html, originalUrl) {
     }
   }
 
-  // 4. JavaScript переменные
   const jsVars = html.match(/(?:var|let|const)\s+(?:url|link|sub|subscription|config)\s*=\s*["']([^"']+)["']/gi) || [];
   for (const v of jsVars) {
     const m = v.match(/=\s*["']([^"']+)["']/);
@@ -197,7 +190,6 @@ function extractAllUrlsFromHtml(html, originalUrl) {
     }
   }
 
-  // 5. JSON в HTML
   const jsonInHtml = html.match(/<script[^>]*>\s*(?:var\s+config\s*=)?\s*({[\s\S]*?})\s*<\/script>/gi) || [];
   for (const block of jsonInHtml) {
     try {
@@ -212,7 +204,6 @@ function extractAllUrlsFromHtml(html, originalUrl) {
     } catch {}
   }
 
-  // 6. Base64 encoded URL
   const b64InHtml = html.match(/[A-Za-z0-9+/=]{40,}/g) || [];
   for (const b64 of b64InHtml) {
     try {
@@ -223,7 +214,6 @@ function extractAllUrlsFromHtml(html, originalUrl) {
     } catch {}
   }
 
-  // 7. Стандартные паттерны редиректов
   const patterns = [
     /window\.location(?:\.href)?\s*=\s*["']([^"']+)["']/i,
     /window\.location\.replace\(["']([^"']+)["']\)/i,
@@ -240,7 +230,6 @@ function extractAllUrlsFromHtml(html, originalUrl) {
     }
   }
 
-  // 8. Ссылки в <a> тегах
   const linkTags = html.match(/<a[^>]*href=["']([^"']+)["'][^>]*>/gi) || [];
   for (const tag of linkTags) {
     const m = tag.match(/href=["']([^"']+)["']/i);
@@ -252,14 +241,12 @@ function extractAllUrlsFromHtml(html, originalUrl) {
     }
   }
 
-  // 9. Любая ссылка с /sub, token=, key=, uuid=
   const anySub = html.match(/https?:\/\/[^\s"'<>]*?(?:sub|token=|key=|uuid=)[^\s"'<>]*/gi) || [];
   for (const s of anySub) {
     const url = s.replace(/["']/g, "").replace(/&amp;/g, "&");
     if (!url.includes("0.0.0.0")) foundUrls.add(url);
   }
 
-  // 10. АГРЕССИВНЫЙ ПОИСК URL-ENCODED ССЫЛОК
   const encodedUrlMatches = html.match(/(?:url|link|sub|target|redirect|subscription)=([^&\s"'>]+)/gi) || [];
   for (const match of encodedUrlMatches) {
     try {
@@ -271,7 +258,6 @@ function extractAllUrlsFromHtml(html, originalUrl) {
     } catch {}
   }
 
-  // 11. Простые HTTP ссылки (резерв)
   if (foundUrls.size === 0) {
     const simpleLinks = html.match(/https?:\/\/[^\s"'<>]{20,}/gi) || [];
     for (const link of simpleLinks) {
@@ -293,7 +279,7 @@ async function fetchSubscription(url) {
   try {
     const lowerUrl = url.toLowerCase();
     if (BLOCKED_DOMAINS.some(domain => lowerUrl.includes(domain.toLowerCase()))) {
-      return { ok: false, error: " Домен заблокирован", attempts: 0 };
+      return { ok: false, error: "🚫 Домен заблокирован", attempts: 0 };
     }
 
     const redirectTarget = extractRedirectTarget(url);
@@ -301,19 +287,20 @@ async function fetchSubscription(url) {
     
     let lastError = "Неизвестная ошибка";
     let attempts = 0;
-    const MAX_ATTEMPTS = Math.min(15, TARGET_USER_AGENTS.length);
+    let bestContent = null;
+    let bestContentType = null;
+    const MAX_ATTEMPTS = Math.min(20, TARGET_USER_AGENTS.length);
+    const WAIT_BETWEEN_ATTEMPTS = 2000; // 🔥 Ждем 2 секунды между попытками
 
     for (let i = 0; i < MAX_ATTEMPTS; i++) {
       attempts = i + 1;
       const ua = TARGET_USER_AGENTS[i];
-      
-      // 🔥 ГЕНЕРИРУЕМ "ПРАВИЛЬНЫЕ" ЗАГОЛОВКИ
       const headers = buildHappHeaders(ua, i === 0);
 
       try {
-        // 🔥 Небольшая задержка между запросами (эмуляция реального приложения)
         if (i > 0) {
-          await new Promise(resolve => setTimeout(resolve, 500));
+          // 🔥 Ждем перед следующей попыткой (даем серверу время подготовить конфиг)
+          await new Promise(resolve => setTimeout(resolve, WAIT_BETWEEN_ATTEMPTS));
         }
         
         const res = await fetchWithRedirects(actualUrl, headers);
@@ -324,6 +311,13 @@ async function fetchSubscription(url) {
         
         const text = await res.text();
         const ct = res.headers.get("content-type") || "";
+
+        // 🔥 Проверяем на временное сообщение
+        if (isTemporaryMessage(text)) {
+          console.log(`[Decoder] Attempt ${attempts}: Got temporary message, waiting...`);
+          lastError = "Сервер готовит конфиг (временное сообщение)";
+          continue;
+        }
 
         if (isStubResponse(text)) {
           lastError = "Сервер вернул заглушку (0.0.0.0 / App not supported)";
@@ -358,14 +352,14 @@ async function fetchSubscription(url) {
                         const nestedRes = await fetchWithRedirects(nestedUrl, nestedHeaders);
                         if (nestedRes.ok) {
                           const nestedText = await nestedRes.text();
-                          if (!isStubResponse(nestedText)) {
+                          if (!isStubResponse(nestedText) && !isTemporaryMessage(nestedText)) {
                             allContents.push(nestedText);
                           }
                         }
                       } catch {}
                     }
                   } else {
-                    if (!isStubResponse(subText)) {
+                    if (!isStubResponse(subText) && !isTemporaryMessage(subText)) {
                       allContents.push(subText);
                     }
                   }
@@ -380,7 +374,14 @@ async function fetchSubscription(url) {
           lastError = "HTML не содержит рабочей подписки";
           continue;
         } else {
-          return { ok: true, content: text, contentType: ct, attempts };
+          // 🔥 Сохраняем лучший контент (не временный и не заглушку)
+          bestContent = text;
+          bestContentType = ct;
+          
+          // Если получили нормальный контент (не HTML), возвращаем сразу
+          if (text.includes("://") && !text.includes("0.0.0.0")) {
+            return { ok: true, content: text, contentType: ct, attempts };
+          }
         }
       } catch (e) {
         lastError = e.message;
@@ -388,9 +389,14 @@ async function fetchSubscription(url) {
       }
     }
 
+    // 🔥 Если после всех попыток есть лучший контент — возвращаем его
+    if (bestContent) {
+      return { ok: true, content: bestContent, contentType: bestContentType, attempts };
+    }
+
     return {
       ok: false,
-      error: `❌ <b>Не удалось получить подписку</b>\n\nБот попробовал <b>${attempts}</b> раз с эмуляцией Happ.\n\nПоследняя ошибка: <code>${escapeHtml(lastError)}</code>\n\n💡 <b>Решение:</b> Эти серверы требуют реальное приложение Happ. Открой ссылку в Happ → скопируй рабочую ссылку → отправь мне.`,
+      error: `❌ <b>Не удалось получить подписку</b>\n\nБот попробовал <b>${attempts}</b> раз с ожиданием.\n\nПоследняя ошибка: <code>${escapeHtml(lastError)}</code>\n\n💡 <b>Решение:</b> Эти серверы требуют реальное приложение Happ.`,
       attempts
     };
 
@@ -426,7 +432,7 @@ export async function decodeSubscription(url) {
   const result = await fetchSubscription(url);
   if (!result.ok) return { ok: false, error: result.error, attempts: result.attempts || 0 };
   if (isStubResponse(result.content)) {
-    return { ok: false, error: `❌ <b>Обнаружена заглушка!</b>\n\nСервер вернул фейковые ключи (0.0.0.0). Открой ссылку в браузере и скопируй прямую ссылку.`, attempts: result.attempts || 0 };
+    return { ok: false, error: `❌ <b>Обнаружена заглушка!</b>\n\nСервер вернул фейковые ключи (0.0.0.0).`, attempts: result.attempts || 0 };
   }
   
   const format = detectFormat(result.content);
