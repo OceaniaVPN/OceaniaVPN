@@ -19,23 +19,23 @@ const AUTO_UPDATE_CONFIG = {
 const COUNTRIES = [
   { keys: ["ru", "russia", "россия", "moscow", "москва", "spb", "peter", "петербург"], flag: "🇷🇺", name: "Россия" },
   { keys: ["de", "germany", "германия", "berlin", "берлин", "frankfurt", "франкфурт", "german"], flag: "🇩", name: "Германия" },
-  { keys: ["fi", "finland", "финляндия", "helsinki", "хельсинки", "finnish"], flag: "🇮", name: "Финляндия" },
-  { keys: ["lv", "latvia", "латвия", "riga", "рига", "latvian"], flag: "🇱🇻", name: "Латвия" },
+  { keys: ["fi", "finland", "финляндия", "helsinki", "хельсинки", "finnish"], flag: "🇫🇮", name: "Финляндия" },
+  { keys: ["lv", "latvia", "латвия", "riga", "рига", "latvian"], flag: "🇻", name: "Латвия" },
   { keys: ["us", "usa", "america", "сша", "new york", "los angeles", "chicago"], flag: "🇺🇸", name: "США" },
   { keys: ["nl", "netherlands", "нидерланды", "amsterdam", "амстердам", "dutch"], flag: "🇳🇱", name: "Нидерланды" },
   { keys: ["gb", "uk", "британия", "london", "лондон", "england", "англия"], flag: "🇬🇧", name: "Великобритания" },
-  { keys: ["fr", "france", "франция", "paris", "париж", "french"], flag: "🇫🇷", name: "Франция" },
+  { keys: ["fr", "france", "франция", "paris", "париж", "french"], flag: "🇫", name: "Франция" },
   { keys: ["ua", "ukraine", "украина", "kiev", "киев", "kyiv"], flag: "🇺🇦", name: "Украина" },
   { keys: ["ee", "estonia", "эстония", "tallinn", "таллин"], flag: "🇪", name: "Эстония" },
-  { keys: ["cz", "czech", "чехия", "prague", "прага", "czechia"], flag: "🇨🇿", name: "Чехия" },
-  { keys: ["jp", "japan", "япония", "tokyo", "токио"], flag: "🇵", name: "Япония" },
-  { keys: ["au", "australia", "австралия", "sydney", "сидней", "melbourne"], flag: "🇦🇺", name: "Австралия" },
+  { keys: ["cz", "czech", "чехия", "prague", "прага", "czechia"], flag: "🇿", name: "Чехия" },
+  { keys: ["jp", "japan", "япония", "tokyo", "токио"], flag: "🇯", name: "Япония" },
+  { keys: ["au", "australia", "австралия", "sydney", "сидней", "melbourne"], flag: "🇦", name: "Австралия" },
   { keys: ["hk", "hong kong", "гонконг", "hongkong"], flag: "🇭🇰", name: "Гонконг" },
-  { keys: ["sg", "singapore", "сингапур"], flag: "🇬", name: "Сингапур" },
+  { keys: ["sg", "singapore", "сингапур"], flag: "🇸🇬", name: "Сингапур" },
   { keys: ["kr", "korea", "корея", "seoul", "сеул", "south korea"], flag: "🇰🇷", name: "Южная Корея" },
-  { keys: ["it", "italy", "италия", "milan", "милан", "rome", "рим"], flag: "🇮🇹", name: "Италия" },
-  { keys: ["es", "spain", "испания", "madrid", "мадрид", "barcelona"], flag: "🇸", name: "Испания" },
-  { keys: ["ca", "canada", "канада", "toronto", "торонто", "vancouver"], flag: "🇦", name: "Канада" },
+  { keys: ["it", "italy", "италия", "milan", "милан", "rome", "рим"], flag: "🇮", name: "Италия" },
+  { keys: ["es", "spain", "испания", "madrid", "мадрид", "barcelona"], flag: "🇪🇸", name: "Испания" },
+  { keys: ["ca", "canada", "канада", "toronto", "торонто", "vancouver"], flag: "🇨🇦", name: "Канада" },
   { keys: ["br", "brazil", "бразилия", "sao paulo", "сан-паулу"], flag: "🇧🇷", name: "Бразилия" },
   { keys: ["in", "india", "индия", "mumbai", "мумбаи", "delhi"], flag: "🇮🇳", name: "Индия" },
   { keys: ["tr", "turkey", "турция", "istanbul", "стамбул"], flag: "🇹🇷", name: "Турция" },
@@ -45,7 +45,7 @@ const COUNTRIES = [
 ];
 
 function getSuperscript(n) {
-  const sup = ['', '¹', '²', '³', '⁴', '⁵', '⁶', '⁷', '⁸', '⁹', '¹⁰', '¹¹', '¹²', '¹³', '¹⁴', '¹⁵', '¹⁶', '¹⁷', '¹⁸', '¹⁹', '²⁰'];
+  const sup = ['', '¹', '²', '³', '', '⁵', '⁶', '', '⁸', '⁹', '¹⁰', '¹¹', '¹²', '¹³', '¹⁴', '¹⁵', '¹⁶', '¹⁷', '¹⁸', '¹⁹', '²'];
   return n <= 20 ? sup[n] : `#${n}`;
 }
 
@@ -80,20 +80,30 @@ function applyRename(uris) {
       }
     }
 
-    const displayName = country ? country.name : "Рандом";
-    const counterKey = country ? country.name : "Рандом";
+    let displayName, flag, counterKey;
+    if (country) {
+      flag = country.flag;
+      displayName = country.name;
+      counterKey = country.name;
+    } else {
+      flag = "🌍";
+      displayName = "Рандом";
+      counterKey = "Рандом";
+    }
 
     counters[counterKey]++;
     const index = counters[counterKey];
     const superscript = getSuperscript(index);
 
-    return `${baseUri}#${encodeURIComponent(`${displayName} [БС] ${superscript}`)}`;
+    // Формат: 🇷🇺 Россия | БС¹
+    const newName = `${flag} ${displayName} | БС${superscript}`;
+    return `${baseUri}#${encodeURIComponent(newName)}`;
   });
 }
 
 async function manualUpdate(cfg, chatId) {
   if (chatId !== cfg.adminId) {
-    return sendMessage(cfg.telegramToken, chatId, "⛔️ Эта команда доступна только администратору.");
+    return sendMessage(cfg.telegramToken, chatId, "️ Эта команда доступна только администратору.");
   }
 
   const { targetUrl, targetFilename, title, interval, webpage, announce, userinfo, doRename } = AUTO_UPDATE_CONFIG;
@@ -103,7 +113,7 @@ async function manualUpdate(cfg, chatId) {
   try {
     const result = await decodeSubscription(targetUrl);
     if (!result.ok) {
-      await sendMessage(cfg.telegramToken, chatId, " <b>Ошибка обновления</b>\n\n" + result.error);
+      await sendMessage(cfg.telegramToken, chatId, "❌ <b>Ошибка обновления</b>\n\n" + result.error);
       return;
     }
 
@@ -120,7 +130,7 @@ async function manualUpdate(cfg, chatId) {
       const rawUrl = "https://raw.githubusercontent.com/" + cfg.configRepoOwner + "/" + cfg.configRepoName + "/" + cfg.branch + "/" + cfg.configsFolder + "/" + targetFilename;
       await sendMessage(
         cfg.telegramToken, chatId,
-        "✅ <b>Подписка обновлена!</b>\n\n📡 Серверов: <code>" + finalUris.length + "</code>\n📁 Файл: <code>" + targetFilename + "</code>\n🔗 <a href=\"" + rawUrl + "\">Открыть</a>",
+        "✅ <b>Подписка обновлена!</b>\n\n📡 Серверов: <code>" + finalUris.length + "</code>\n📁 Файл: <code>" + targetFilename + "</code>\n <a href=\"" + rawUrl + "\">Открыть</a>",
         { inline_keyboard: [[{ text: "🔄 Обновить ещё раз", callback_data: "manual_update" }]] }
       );
     } else {
@@ -178,12 +188,12 @@ export async function cmdStart(cfg, chatId) {
   const kb = {
     inline_keyboard: [
       [{ text: "✨ Создать подписку", callback_data: "create" }, { text: "🔍 Декодер", callback_data: "decode" }],
-      [{ text: "📋 Моя подписка", callback_data: "my" }, { text: " Экспорт", callback_data: "export" }],
+      [{ text: "📋 Моя подписка", callback_data: "my" }, { text: "📤 Экспорт", callback_data: "export" }],
       [{ text: "🔄 Обновить whitelist", callback_data: "manual_update" }],
-      [{ text: "ℹ️ Помощь", callback_data: "help" }],
+      [{ text: "️ Помощь", callback_data: "help" }],
     ]
   };
-  await sendMessage(cfg.telegramToken, chatId, "🌊 <b>OceaniaVPN Bot</b>\n\n👋 <b>Привет!</b>\n\nСоздай персональную VPN подписку или расшифруй чужую.\n\n<b>🎯 Что я умею:</b>\n✨ <b>/create</b> — пошаговое создание\n🔍 <b>/decode</b> — расшифровка чужой подписки\n➕ <b>/add</b> — добавить сервер\n📤 <b>/export</b> — получить raw ссылку\n🗑 <b>/delete</b> — удалить подписку\n🔄 <b>/update</b> — обновить whitelist (только админ)\n\n<i>Выбери действие ниже:</i>", kb);
+  await sendMessage(cfg.telegramToken, chatId, "🌊 <b>OceaniaVPN Bot</b>\n\n <b>Привет!</b>\n\nСоздай персональную VPN подписку или расшифруй чужую.\n\n<b> Что я умею:</b>\n✨ <b>/create</b> — пошаговое создание\n <b>/decode</b> — расшифровка чужой подписки\n➕ <b>/add</b> — добавить сервер\n📤 <b>/export</b> — получить raw ссылку\n <b>/delete</b> — удалить подписку\n🔄 <b>/update</b> — обновить whitelist (только админ)\n\n<i>Выбери действие ниже:</i>", kb);
 }
 
 export async function cmdHelp(cfg, chatId) {
@@ -219,7 +229,7 @@ export async function cmdDecode(cfg, chatId, url) {
   try {
     const loadingMsg = await sendMessage(
       cfg.telegramToken, chatId,
-      "⏳ <b>Декодирую подписку...</b>\n\n🔗 URL: <code>" + escapeHtml(url.substring(0, 60)) + "...</code>\n🥷 Маскируюсь под Happ\n🔍 Определяю формат..."
+      "⏳ <b>Декодирую подписку...</b>\n\n URL: <code>" + escapeHtml(url.substring(0, 60)) + "...</code>\n🥷 Маскируюсь под Happ\n Определяю формат..."
     );
     
     if (loadingMsg && loadingMsg.result && loadingMsg.result.message_id) {
@@ -229,7 +239,7 @@ export async function cmdDecode(cfg, chatId, url) {
     const result = await decodeSubscription(url);
     
     if (!result.ok) {
-      const errorMsg = "❌ <b>Не удалось расшифровать</b>\n\n" + result.error;
+      const errorMsg = " <b>Не удалось расшифровать</b>\n\n" + result.error;
       if (loadingMsgId) {
         await editMessage(cfg.telegramToken, chatId, loadingMsgId, errorMsg);
       } else {
@@ -276,9 +286,9 @@ export async function cmdDecode(cfg, chatId, url) {
       else stats.other++;
     }
     
-    const kb = { inline_keyboard: [[{ text: " Открыть подписку", url: rawUrl }]] };
+    const kb = { inline_keyboard: [[{ text: "📋 Открыть подписку", url: rawUrl }]] };
     
-    const successMsg = "✅ <b>Успешно расшифровано!</b>\n\n━━━━━━━━━━━━━━━━━━━━\n <b>Серверов найдено:</b> <code>" + uris.length + "</code>\n\n<b>Протоколы:</b>\n" +
+    const successMsg = "✅ <b>Успешно расшифровано!</b>\n\n━━━━━━━━━━━━━━━━━━━━\n📡 <b>Серверов найдено:</b> <code>" + uris.length + "</code>\n\n<b>Протоколы:</b>\n" +
       (stats.vless ? "• VLESS: <b>" + stats.vless + "</b>\n" : "") +
       (stats.vmess ? "• VMess: <b>" + stats.vmess + "</b>\n" : "") +
       (stats.trojan ? "• Trojan: <b>" + stats.trojan + "</b>\n" : "") +
@@ -291,7 +301,7 @@ export async function cmdDecode(cfg, chatId, url) {
     else await sendMessage(cfg.telegramToken, chatId, successMsg, kb);
     
   } catch (err) {
-    const errorMsg = "⚠️ <b>Ошибка декодирования</b>\n\n<code>" + escapeHtml(err.message) + "</code>\n\nПопробуй ещё раз.";
+    const errorMsg = "️ <b>Ошибка декодирования</b>\n\n<code>" + escapeHtml(err.message) + "</code>\n\nПопробуй ещё раз.";
     if (loadingMsgId) {
       try { await editMessage(cfg.telegramToken, chatId, loadingMsgId, errorMsg); }
       catch { await sendMessage(cfg.telegramToken, chatId, errorMsg); }
@@ -304,7 +314,7 @@ export async function cmdDecode(cfg, chatId, url) {
 export async function cmdMy(cfg, chatId) {
   const content = await getFileContent(cfg, "user_" + chatId + ".txt");
   if (!content) {
-    return sendMessage(cfg.telegramToken, chatId, " <b>Подписки нет</b>\n\nСоздай через /create или расшифруй через /decode");
+    return sendMessage(cfg.telegramToken, chatId, "📭 <b>Подписки нет</b>\n\nСоздай через /create или расшифруй через /decode");
   }
   
   const lines = content.split("\n");
@@ -315,7 +325,7 @@ export async function cmdMy(cfg, chatId) {
   
   const kb = {
     inline_keyboard: [
-      [{ text: " Экспорт", callback_data: "export" }],
+      [{ text: "📤 Экспорт", callback_data: "export" }],
       [{ text: "🗑 Удалить", callback_data: "delete" }],
     ]
   };
@@ -328,9 +338,9 @@ export async function cmdExport(cfg, chatId) {
   if (!content) return sendMessage(cfg.telegramToken, chatId, "📭 Сначала /create или /decode");
   
   const rawUrl = "https://raw.githubusercontent.com/" + cfg.configRepoOwner + "/" + cfg.configRepoName + "/" + cfg.branch + "/" + cfg.configsFolder + "/user_" + chatId + ".txt";
-  const kb = { inline_keyboard: [[{ text: " Открыть", url: rawUrl }]] };
+  const kb = { inline_keyboard: [[{ text: "🔗 Открыть", url: rawUrl }]] };
   
-  await sendMessage(cfg.telegramToken, chatId, "📤 <b>Экспорт подписки</b>\n\n━━━━━━━━━━━━━━━━━━━━\n🔗 <b>Raw ссылка:</b>\n<code>" + rawUrl + "</code>\n━━━━━━━━━━━━━━━━━━━━", kb);
+  await sendMessage(cfg.telegramToken, chatId, " <b>Экспорт подписки</b>\n\n━━━━━━━━━━━━━━━━━━━━\n🔗 <b>Raw ссылка:</b>\n<code>" + rawUrl + "</code>\n━━━━━━━━━━━━━━━━━━━━", kb);
 }
 
 export async function cmdAdd(cfg, chatId, url) {
@@ -377,7 +387,7 @@ export async function cmdDelete(cfg, chatId) {
 export async function cmdUsers(cfg, chatId, userId) {
   if (userId !== cfg.adminId) return sendMessage(cfg.telegramToken, chatId, "⛔️ Нет прав");
   const users = await listAllUsers(cfg);
-  if (users.length === 0) return sendMessage(cfg.telegramToken, chatId, " Пользователей нет");
+  if (users.length === 0) return sendMessage(cfg.telegramToken, chatId, "📭 Пользователей нет");
   let msg = "👥 <b>Пользователей:</b> <code>" + users.length + "</code>\n\n";
   for (const f of users.slice(0, 50)) {
     const id = f.replace("user_", "").replace(".txt", "");
@@ -389,7 +399,7 @@ export async function cmdUsers(cfg, chatId, userId) {
 export async function cmdStats(cfg, chatId, userId) {
   if (userId !== cfg.adminId) return sendMessage(cfg.telegramToken, chatId, "⛔️ Нет прав");
   const users = await listAllUsers(cfg);
-  await sendMessage(cfg.telegramToken, chatId, "📊 <b>Статистика OceaniaVPN</b>\n\n <b>Пользователей:</b> <code>" + users.length + "</code>");
+  await sendMessage(cfg.telegramToken, chatId, "📊 <b>Статистика OceaniaVPN</b>\n\n👥 <b>Пользователей:</b> <code>" + users.length + "</code>");
 }
 
 export async function handleCallback(cfg, cb) {
@@ -453,4 +463,4 @@ export async function handleMessage(cfg, msg) {
   if (cmd === "/update") return cmdUpdate(cfg, chatId);
   if (cmd === "/users") return cmdUsers(cfg, chatId, userId);
   if (cmd === "/stats") return cmdStats(cfg, chatId, userId);
-}
+  }
