@@ -10,24 +10,72 @@ import { escapeHtml } from "./config.js";
 import { COUNTRIES } from "./contries.js";
 
 // ==========================================
-// КОНФИГУРАЦИЯ АВТО-ОБНОВЛЕНИЯ
+// КОНФИГУРАЦИЯ АВТО-ОБНОВЛЕНИЯ (МНОЖЕСТВЕННЫЕ ИСТОЧНИКИ)
 // ==========================================
 const AUTO_UPDATE_CONFIG = {
-  targetUrl: "https://accargame.cfd/sub/wQu5TeYdOD9YMcp2",
+  sourcesFileUrl: "https://raw.githubusercontent.com/OceaniaVPN/StekloVPN/main/configs/sources.txt",
   targetFilename: "whitelist.txt",
   title: "Steklo_VPN whitelist",
   interval: 4,
   webpage: "https://t.me/free_vpn123456",
   announce: "Steklo vpn besplatno",
   userinfo: "upload=0; download=12884901888; total=536870912000; expire=0",
-  doRename: true
+  doRename: true,
+  fallbackSources: [
+    "https://gitlab.com/igareck/vpn-configs-for-russia/-/raw/main/Vless-Reality-White-Lists-Rus-Mobile.txt?ref_type=heads",
+    "https://gitlab.com/igareck/vpn-configs-for-russia/-/raw/main/WHITE-CIDR-RU-all.txt?ref_type=heads",
+    "https://gitlab.com/igareck/vpn-configs-for-russia/-/raw/main/WHITE-SNI-RU-all.txt?ref_type=heads"
+  ]
 };
 
 // ==========================================
 // ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
 // ==========================================
 
-// Функция для получения верхнего индекса (¹, ², ³...) или обычного номера для больших чисел
+// Извлечение UID для фильтрации дубликатов
+function extractUid(uri) {
+  const match = uri.match(/^[a-z0-9]+:\/\/([a-f0-9\-]{36})@/i);
+  return match ? match[1] : uri;
+}
+
+// Скачивание, объединение и фильтрация дубликатов по UID
+async function fetchAndMergeSources(sourcesUrls) {
+  const allUris = [];
+  
+  for (const url of sourcesUrls) {
+    try {
+      const res = await fetch(url.trim(), { method: "GET" });
+      if (res.ok) {
+        const text = await res.text();
+        const lines = text.split("\n");
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (trimmed && /^(vless|vmess|trojan|ss|hysteria|tuic|wireguard):\/\//i.test(trimmed)) {
+            allUris.push(trimmed);
+          }
+        }
+      }
+    } catch (e) {
+      console.error(`[Commands] Failed to fetch ${url}:`, e.message);
+    }
+  }
+  
+  // Фильтрация дубликатов
+  const seenUids = new Set();
+  const uniqueUris = [];
+  
+  for (const uri of allUris) {
+    const uid = extractUid(uri);
+    if (!seenUids.has(uid)) {
+      seenUids.add(uid);
+      uniqueUris.push(uri);
+    }
+  }
+  
+  return uniqueUris;
+}
+
+// Функция для получения верхнего индекса
 function getSuperscript(n) {
   const sup = [
     '', '¹', '²', '³', '⁴', '⁵', '⁶', '⁷', '⁸', '⁹', 
@@ -40,7 +88,6 @@ function getSuperscript(n) {
 function applyRename(uris) {
   const counters = {};
   
-  // Инициализируем счетчики для всех стран и для "Рандом"
   COUNTRIES.forEach(c => {
     counters[c.name] = 0;
   });
@@ -53,7 +100,6 @@ function applyRename(uris) {
 
     let country = null;
     
-    // 1. Ищем страну по ключевым словам в имени сервера
     for (const c of COUNTRIES) {
       if (c.keys.some(key => originalName.includes(key))) {
         country = c;
@@ -61,7 +107,6 @@ function applyRename(uris) {
       }
     }
     
-    // 2. Если не нашли, ищем по домену или IP (хосту)
     if (!country) {
       const hostMatch = baseUri.match(/@([^:/]+)/);
       if (hostMatch) {
@@ -75,7 +120,6 @@ function applyRename(uris) {
       }
     }
 
-    // Определяем итоговое имя, флаг и ключ для счетчика
     let displayName, flag, counterKey;
     if (country) {
       flag = country.flag;
@@ -87,14 +131,11 @@ function applyRename(uris) {
       counterKey = "Рандом";
     }
 
-    // Увеличиваем счетчик для этой страны
     counters[counterKey]++;
     const index = counters[counterKey];
     const superscript = getSuperscript(index);
 
-    // Формируем новое имя в формате: 🇷🇺 Россия | БС¹
     const newName = `${flag} ${displayName} | БС${superscript}`;
-    
     return `${baseUri}#${encodeURIComponent(newName)}`;
   });
 }
@@ -104,35 +145,46 @@ function applyRename(uris) {
 // ==========================================
 
 async function manualUpdate(cfg, chatId) {
-  // Проверка прав администратора
   if (chatId !== cfg.adminId) {
     return sendMessage(cfg.telegramToken, chatId, "⛔️ Эта команда доступна только администратору.");
   }
 
-  const { targetUrl, targetFilename, title, interval, webpage, announce, userinfo, doRename } = AUTO_UPDATE_CONFIG;
+  const { sourcesFileUrl, fallbackSources, targetFilename, title, interval, webpage, announce, userinfo, doRename } = AUTO_UPDATE_CONFIG;
   
-  const loadingMsg = await sendMessage(
-    cfg.telegramToken, 
-    chatId, 
-    "⏳ <b>Обновляю подписку...</b>\n\nСкачиваю серверы и переименовываю..."
-  );
+  await sendMessage(cfg.telegramToken, chatId, "⏳ <b>Обновляю подписку...</b>\n\nСкачиваю источники и фильтрую дубликаты по UID...");
 
   try {
-    const result = await decodeSubscription(targetUrl);
+    let sourcesToUse = fallbackSources;
     
-    if (!result.ok) {
-      await sendMessage(cfg.telegramToken, chatId, "❌ <b>Ошибка обновления</b>\n\n" + result.error);
-      return;
+    // Пытаемся загрузить источники из твоего файла на GitHub
+    try {
+      const res = await fetch(sourcesFileUrl, { method: "GET" });
+      if (res.ok) {
+        const text = await res.text();
+        const lines = text.split("\n").map(l => l.trim()).filter(l => l && l.startsWith("http"));
+        if (lines.length > 0) {
+          sourcesToUse = lines;
+        }
+      }
+    } catch (e) {
+      console.log("[Commands] Fallback to default sources due to error:", e.message);
     }
 
-    let finalUris = result.uris;
-    if (doRename && finalUris.length > 0) {
+    // Скачиваем, объединяем и фильтруем
+    const uniqueUris = await fetchAndMergeSources(sourcesToUse);
+    
+    if (uniqueUris.length === 0) {
+      return sendMessage(cfg.telegramToken, chatId, "❌ Не удалось получить серверы из источников.");
+    }
+
+    let finalUris = uniqueUris;
+    if (doRename) {
       finalUris = applyRename(finalUris);
     }
 
     const profileMetadata = { title, interval, webpage, announce, userinfo };
     const content = buildFile(profileMetadata, finalUris);
-    const saveResult = await createOrUpdateFile(cfg, targetFilename, content, "Manual update");
+    const saveResult = await createOrUpdateFile(cfg, targetFilename, content, "Manual update: " + finalUris.length + " unique nodes");
 
     if (saveResult.content || saveResult.sha) {
       const rawUrl = `https://raw.githubusercontent.com/${cfg.configRepoOwner}/${cfg.configRepoName}/${cfg.branch}/${cfg.configsFolder}/${targetFilename}`;
@@ -144,7 +196,7 @@ async function manualUpdate(cfg, chatId) {
       await sendMessage(
         cfg.telegramToken, 
         chatId,
-        `✅ <b>Подписка обновлена!</b>\n\n📡 Серверов: <code>${finalUris.length}</code>\n📁 Файл: <code>${targetFilename}</code>\n🔗 <a href="${rawUrl}">Открыть</a>`,
+        `✅ <b>Подписка обновлена!</b>\n\n📡 Уникальных серверов: <code>${finalUris.length}</code>\n📁 Файл: <code>${targetFilename}</code>\n🔗 <a href="${rawUrl}">Открыть</a>`,
         keyboard
       );
     } else {
@@ -449,19 +501,16 @@ export async function handleMessage(cfg, msg) {
   const text = msg.text || "";
   const state = await getState(cfg, chatId);
   
-  // Обработка пошагового создания подписки
   if (state && state.step && !text.startsWith("/")) { 
     await handleStepAnswer(cfg, chatId, text, state); 
     return; 
   }
   
-  // Автоматический декодер при отправке ссылки без команды
   if (!text.startsWith("/") && /^https?:\/\//.test(text.trim())) { 
     await cmdDecode(cfg, chatId, text.trim()); 
     return; 
   }
   
-  // Игнорируем сообщения без слэша
   if (!text.startsWith("/")) {
     return;
   }
@@ -470,7 +519,6 @@ export async function handleMessage(cfg, msg) {
   const cmd = parts[0].split("@")[0].toLowerCase();
   const userId = msg.from.id;
   
-  // Маршрутизация команд
   if (cmd === "/start") return cmdStart(cfg, chatId);
   if (cmd === "/help") return cmdHelp(cfg, chatId);
   if (cmd === "/create") return cmdCreate(cfg, chatId);
@@ -483,4 +531,4 @@ export async function handleMessage(cfg, msg) {
   if (cmd === "/update") return cmdUpdate(cfg, chatId);
   if (cmd === "/users") return cmdUsers(cfg, chatId, userId);
   if (cmd === "/stats") return cmdStats(cfg, chatId, userId);
-    }
+        }
