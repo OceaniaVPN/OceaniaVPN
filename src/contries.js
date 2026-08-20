@@ -1,4 +1,4 @@
-const COUNTRIES = [
+export const COUNTRIES = [
   // Европа
   { keys: ["al", "albania", "албания", "тирана"], flag: "🇦🇱", name: "Албания" },
   { keys: ["ad", "andorra", "андорра", "андорра-ла-велья"], flag: "🇦🇩", name: "Андорра" },
@@ -64,7 +64,7 @@ const COUNTRIES = [
   { keys: ["il", "israel", "израиль", "иерусалим"], flag: "🇮🇱", name: "Израиль" },
   { keys: ["jo", "jordan", "иордания", "амман"], flag: "🇯🇴", name: "Иордания" },
   { keys: ["kz", "kazakhstan", "казахстан", "астана"], flag: "🇰🇿", name: "Казахстан" },
-  { keys: ["kw", "kuwait", "кувейт", "эль-кувейт"], flag: "🇰🇼", name: "Кувейн" },
+  { keys: ["kw", "kuwait", "кувейт", "эль-кувейт"], flag: "🇰🇼", name: "Кувейт" },
   { keys: ["kg", "kyrgyzstan", "кыргызстан", "бишкек"], flag: "🇰🇬", name: "Кыргызстан" },
   { keys: ["la", "laos", "лаос", "вьентьян"], flag: "🇱🇦", name: "Лаос" },
   { keys: ["lb", "lebanon", "ливан", "бейрут"], flag: "🇱🇧", name: "Ливан" },
