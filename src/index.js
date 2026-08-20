@@ -8,7 +8,7 @@ import { COUNTRIES } from "./contries.js";
 
 const AUTO_UPDATE_CONFIG = {
   // Ссылка на твой файл со списком источников в GitHub
-  sourcesFileUrl: "https://raw.githubusercontent.com/OceaniaVPN/StekloVPN/main/configs/sources.txt",
+  sourcesFileUrl: "https://github.com/OceaniaVPN/OceaniaVPN/blob/main/src/sources.txt",
   targetFilename: "whitelist.txt",
   title: "Steklo_VPN whitelist",
   interval: 4,
