@@ -30,7 +30,7 @@ const AUTO_UPDATE_CONFIG = {
 };
 
 // ==========================================
-// ВТОРАЯ КОНФИГУРАЦИЯ (Okeania)
+// ВТОРАЯ КОНФИГУРАЦИЯ (Okeania - только для обновления)
 // ==========================================
 const SECONDARY_CONFIG = {
   targetUrl: "https://okeaniavpn.dimastekolnikov1.workers.dev/sub?token=4ffeddfb-54ec-41ad-b76d-13f3834f8d9e",
@@ -241,6 +241,7 @@ async function secondaryManualUpdate(cfg, chatId) {
   await sendMessage(cfg.telegramToken, chatId, "⏳ <b>Обновляю второй конфиг (Okeania)...</b>");
 
   try {
+    // Здесь decodeSubscription вызывается напрямую, без проверок команд, поэтому обновление сработает
     const result = await decodeSubscription(SECONDARY_CONFIG.targetUrl);
     
     if (!result.ok || !result.uris || result.uris.length === 0) {
@@ -457,6 +458,11 @@ export async function cmdDecode(cfg, chatId, url) {
     return sendMessage(cfg.telegramToken, chatId, "❌ <b>Используй:</b>\n<code>/decode https://example.com/sub</code>");
   }
   
+  // 🔥 ЗАЩИТА: Запрещаем ручное декодирование внутренней ссылки обновления
+  if (url.includes("okeaniavpn.dimastekolnikov1.workers.dev")) {
+    return sendMessage(cfg.telegramToken, chatId, "⛔️ <b>Этот домен запрещен для ручного декодирования.</b>\nДля его использования предназначена только функция авто-обновления.");
+  }
+  
   let loadingMsgId = null;
   
   try {
@@ -563,6 +569,11 @@ export async function cmdAdd(cfg, chatId, url) {
   
   let toAdd = [url];
   if (/^https?:\/\//.test(url)) {
+    // 🔥 ЗАЩИТА: Запрещаем добавление внутренней ссылки обновления вручную
+    if (url.includes("okeaniavpn.dimastekolnikov1.workers.dev")) {
+      return sendMessage(cfg.telegramToken, chatId, "⛔️ <b>Этот домен запрещен для добавления вручную.</b>");
+    }
+    
     const result = await decodeSubscription(url);
     if (result.ok && result.uris && result.uris.length > 0) {
       toAdd = result.uris;
@@ -706,4 +717,4 @@ export async function handleMessage(cfg, msg) {
   if (cmd === "/testload") return cmdTestLoad(cfg, chatId, parts.slice(1).join(" "));
   if (cmd === "/users") return cmdUsers(cfg, chatId, userId);
   if (cmd === "/stats") return cmdStats(cfg, chatId, userId);
-      }
+        }
