@@ -7,8 +7,6 @@ import { sendMessage } from "./telegram.js";
 import { COUNTRIES } from "./contries.js";
 
 const AUTO_UPDATE_CONFIG = {
-  // Ссылка на твой файл со списком источников в GitHub
-  sourcesFileUrl: "https://github.com/OceaniaVPN/OceaniaVPN/blob/main/src/sources.txt",
   targetFilename: "whitelist.txt",
   title: "Steklo_VPN whitelist",
   interval: 4,
@@ -16,58 +14,41 @@ const AUTO_UPDATE_CONFIG = {
   announce: "Steklo vpn besplatno",
   userinfo: "upload=0; download=12884901888; total=536870912000; expire=0",
   doRename: true,
-  // Резервные источники, если файл sources.txt еще не создан или недоступен
-  fallbackSources: [
+  sources: [
+    "https://accargame.cfd/sub/wQu5TeYdOD9YMcp2",
     "https://gitlab.com/igareck/vpn-configs-for-russia/-/raw/main/Vless-Reality-White-Lists-Rus-Mobile.txt?ref_type=heads",
     "https://gitlab.com/igareck/vpn-configs-for-russia/-/raw/main/WHITE-CIDR-RU-all.txt?ref_type=heads",
-    "https://gitlab.com/igareck/vpn-configs-for-russia/-/raw/main/WHITE-SNI-RU-all.txt?ref_type=heads",
-    "https://accargame.cfd/sub/wQu5TeYdOD9YMcp2"
+    "https://gitlab.com/igareck/vpn-configs-for-russia/-/raw/main/WHITE-SNI-RU-all.txt?ref_type=heads"
   ]
 };
 
-// 🔥 Функция для извлечения UID из ссылки (для фильтрации дубликатов)
-function extractUid(uri) {
-  // Ищем паттерн protocol://UUID@...
-  const match = uri.match(/^[a-z0-9]+:\/\/([a-f0-9\-]{36})@/i);
-  return match ? match[1] : uri; // Если UID не найден, используем всю строку как уникальный ключ
-}
-
-// 🔥 Функция скачивания и объединения источников с фильтрацией дубликатов
+// 🔥 ИСПОЛЬЗУЕМ УМНЫЙ ДЕКОДЕР ВМЕСТО ПРОСТОГО FETCH
 async function fetchAndMergeSources(sourcesUrls) {
   const allUris = [];
+  const stats = {};
   
   for (const url of sourcesUrls) {
     try {
-      const res = await fetch(url.trim(), { method: "GET" });
-      if (res.ok) {
-        const text = await res.text();
-        const lines = text.split("\n");
-        for (const line of lines) {
-          const trimmed = line.trim();
-          // Проверяем, что это валидная VPN ссылка
-          if (trimmed && /^(vless|vmess|trojan|ss|hysteria|tuic|wireguard):\/\//i.test(trimmed)) {
-            allUris.push(trimmed);
-          }
-        }
+      console.log(`[Merge] Decoding source: ${url}`);
+      const result = await decodeSubscription(url);
+      
+      if (result.ok && result.uris && result.uris.length > 0) {
+        allUris.push(...result.uris);
+        stats[url] = result.uris.length;
+        console.log(`[Merge] Success: Found ${result.uris.length} URIs`);
+      } else {
+        stats[url] = 0;
+        console.log(`[Merge] Failed or empty: ${result.error}`);
       }
     } catch (e) {
-      console.error(`[Auto-Update] Failed to fetch ${url}:`, e.message);
+      console.error(`[Merge] Error on ${url}:`, e.message);
+      stats[url] = 0;
     }
   }
   
-  // Фильтрация дубликатов по UID
-  const seenUids = new Set();
-  const uniqueUris = [];
-  
-  for (const uri of allUris) {
-    const uid = extractUid(uri);
-    if (!seenUids.has(uid)) {
-      seenUids.add(uid);
-      uniqueUris.push(uri);
-    }
-  }
-  
-  return uniqueUris;
+  const uniqueUris = [...new Set(allUris)];
+  console.log(`[Merge] Total URIs: ${allUris.length}, After dedup: ${uniqueUris.length}`);
+  return { uris: uniqueUris, stats };
 }
 
 function getSuperscript(n) {
@@ -111,9 +92,7 @@ function applyRename(uris) {
     const counterKey = country ? country.name : "Рандом";
 
     counters[counterKey]++;
-    const index = counters[counterKey];
-    const superscript = getSuperscript(index);
-
+    const superscript = getSuperscript(counters[counterKey]);
     return `${baseUri}#${encodeURIComponent(`${flag} ${displayName} | БС${superscript}`)}`;
   });
 }
@@ -151,35 +130,13 @@ export default {
   async scheduled(event, env, ctx) {
     console.log("[Cron] Auto-update triggered at:", new Date().toISOString());
     const cfg = getConfig(env);
-    const { sourcesFileUrl, fallbackSources, targetFilename, title, interval, webpage, announce, userinfo, doRename } = AUTO_UPDATE_CONFIG;
+    const { sources, targetFilename, title, interval, webpage, announce, userinfo, doRename } = AUTO_UPDATE_CONFIG;
 
     try {
-      // 1. Пытаемся получить список источников из твоего файла
-      let sourcesToUse = fallbackSources;
-      try {
-        const res = await fetch(sourcesFileUrl, { method: "GET" });
-        if (res.ok) {
-          const text = await res.text();
-          const lines = text.split("\n").map(l => l.trim()).filter(l => l && l.startsWith("http"));
-          if (lines.length > 0) {
-            sourcesToUse = lines;
-            console.log(`[Cron] Loaded ${lines.length} sources from sources.txt`);
-          }
-        }
-      } catch (e) {
-        console.log("[Cron] Fallback to default sources due to error:", e.message);
-      }
-
-      // 2. Скачиваем, объединяем и фильтруем дубликаты по UID
-      const uniqueUris = await fetchAndMergeSources(sourcesToUse);
-      console.log(`[Cron] Total unique servers after UID filter: ${uniqueUris.length}`);
-
+      const { uris: uniqueUris, stats } = await fetchAndMergeSources(sources);
+      
       if (uniqueUris.length > 0) {
-        let finalUris = uniqueUris;
-        if (doRename) {
-          finalUris = applyRename(finalUris);
-        }
-
+        let finalUris = doRename ? applyRename(uniqueUris) : uniqueUris;
         const profileMetadata = { title, interval, webpage, announce, userinfo };
         const content = buildFile(profileMetadata, finalUris);
         const res = await createOrUpdateFile(cfg, targetFilename, content, "Auto update: " + finalUris.length + " unique nodes");
