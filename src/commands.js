@@ -39,19 +39,15 @@ function isStub(text) {
   return stubs.some(s => text.includes(s));
 }
 
-// 🔥 Функция случайной выборки элементов из массива
 function getRandomItems(arr, count) {
   const shuffled = [...arr].sort(() => 0.5 - Math.random());
   return shuffled.slice(0, Math.min(count, arr.length));
 }
 
-function extractUid(uri) {
-  const match = uri.match(/^[a-z0-9]+:\/\/([a-f0-9\-]{36})@/i);
-  return match ? match[1] : uri;
-}
-
+//  УПРОЩЕННАЯ ФИЛЬТРАЦИЯ: только полные дубликаты строк
 async function fetchAndMergeSources(sourcesUrls) {
   const allUris = [];
+  const stats = {};
   
   for (const url of sourcesUrls) {
     try {
@@ -59,7 +55,6 @@ async function fetchAndMergeSources(sourcesUrls) {
       const res = await fetch(url.trim(), { method: "GET" });
       if (res.ok) {
         const text = await res.text();
-        // 🔥 ИСПРАВЛЕНО: универсальный разделитель строк (\r\n или \n)
         const lines = text.split(/\r?\n/);
         let count = 0;
         for (const line of lines) {
@@ -69,32 +64,29 @@ async function fetchAndMergeSources(sourcesUrls) {
             count++;
           }
         }
+        stats[url] = count;
         console.log(`[Merge] Found ${count} URIs in ${url}`);
       } else {
         console.error(`[Merge] Failed ${url}, status: ${res.status}`);
+        stats[url] = 0;
       }
     } catch (e) {
       console.error(`[Merge] Error fetching ${url}:`, e.message);
+      stats[url] = 0;
     }
   }
   
-  const seenUids = new Set();
-  const uniqueUris = [];
+  // 🔥 Только удаление точных дубликатов (полное совпадение строк)
+  const uniqueUris = [...new Set(allUris)];
   
-  for (const uri of allUris) {
-    const uid = extractUid(uri);
-    if (!seenUids.has(uid)) {
-      seenUids.add(uid);
-      uniqueUris.push(uri);
-    }
-  }
+  console.log(`[Merge] Total URIs: ${allUris.length}, After dedup: ${uniqueUris.length}`);
+  console.log(`[Merge] Stats:`, stats);
   
-  console.log(`[Merge] Total unique URIs after filter: ${uniqueUris.length}`);
-  return uniqueUris;
+  return { uris: uniqueUris, stats };
 }
 
 function getSuperscript(n) {
-  const sup = ['', '¹', '²', '³', '⁴', '⁵', '⁶', '⁷', '⁸', '⁹', '¹⁰', '¹¹', '¹²', '¹³', '¹⁴', '¹⁵', '¹⁶', '¹⁷', '¹⁸', '¹', '²⁰'];
+  const sup = ['', '¹', '²', '³', '⁴', '⁵', '⁶', '⁷', '⁸', '⁹', '¹⁰', '¹¹', '¹²', '¹³', '¹⁴', '¹⁵', '¹⁶', '¹⁷', '¹⁸', '¹⁹', '²⁰'];
   return n <= 20 ? sup[n] : `#${n}`;
 }
 
@@ -147,7 +139,7 @@ async function manualUpdate(cfg, chatId) {
   if (chatId !== cfg.adminId) return sendMessage(cfg.telegramToken, chatId, "⛔️ Эта команда доступна только администратору.");
 
   const { sourcesFileUrl, fallbackSources, targetFilename, title, interval, webpage, announce, userinfo, doRename } = AUTO_UPDATE_CONFIG;
-  await sendMessage(cfg.telegramToken, chatId, "⏳ <b>Обновляю подписку...</b>\n\nСкачиваю источники и фильтрую дубликаты...");
+  await sendMessage(cfg.telegramToken, chatId, " <b>Обновляю подписку...</b>\n\nСкачиваю источники...");
 
   try {
     let sourcesToUse = fallbackSources;
@@ -160,17 +152,31 @@ async function manualUpdate(cfg, chatId) {
       }
     } catch (e) { console.log("[Update] Fallback to default sources"); }
 
-    const uniqueUris = await fetchAndMergeSources(sourcesToUse);
+    const { uris: uniqueUris, stats } = await fetchAndMergeSources(sourcesToUse);
+    
     if (uniqueUris.length === 0) return sendMessage(cfg.telegramToken, chatId, "❌ Не удалось получить серверы из источников.");
 
     let finalUris = doRename ? applyRename(uniqueUris) : uniqueUris;
     const profileMetadata = { title, interval, webpage, announce, userinfo };
     const content = buildFile(profileMetadata, finalUris);
-    const saveResult = await createOrUpdateFile(cfg, targetFilename, content, "Manual update: " + finalUris.length + " unique nodes");
+    const saveResult = await createOrUpdateFile(cfg, targetFilename, content, "Manual update: " + finalUris.length + " nodes");
 
     if (saveResult.content || saveResult.sha) {
       const rawUrl = `https://raw.githubusercontent.com/${cfg.configRepoOwner}/${cfg.configRepoName}/${cfg.branch}/${cfg.configsFolder}/${targetFilename}`;
-      await sendMessage(cfg.telegramToken, chatId, `✅ <b>Подписка обновлена!</b>\n\n📡 Уникальных серверов: <code>${finalUris.length}</code>\n📁 Файл: <code>${targetFilename}</code>\n🔗 <a href="${rawUrl}">Открыть</a>`, { inline_keyboard: [[{ text: " Обновить ещё раз", callback_data: "manual_update" }]] });
+      
+      // Формируем статистику по источникам
+      let statsText = "<b>📊 Статистика по источникам:</b>\n";
+      for (const [url, count] of Object.entries(stats)) {
+        const shortUrl = url.split('/').pop().substring(0, 30);
+        statsText += `• ${shortUrl}: <code>${count}</code> серверов\n`;
+      }
+      
+      await sendMessage(
+        cfg.telegramToken, 
+        chatId,
+        `✅ <b>Подписка обновлена!</b>\n\n📡 Всего серверов: <code>${finalUris.length}</code>\n\n${statsText}\n📁 Файл: <code>${targetFilename}</code>\n🔗 <a href="${rawUrl}">Открыть</a>`,
+        { inline_keyboard: [[{ text: "🔄 Обновить ещё раз", callback_data: "manual_update" }]], parse_mode: "HTML" }
+      );
     } else {
       await sendMessage(cfg.telegramToken, chatId, "❌ Ошибка сохранения в GitHub.");
     }
@@ -179,14 +185,12 @@ async function manualUpdate(cfg, chatId) {
   }
 }
 
-// 🔥 НОВАЯ ФУНКЦИЯ: ТЕСТИРОВАНИЕ НАГРУЗКИ И ОПРЕДЕЛЕНИЯ УСТРОЙСТВ
 export async function cmdTestLoad(cfg, chatId, url) {
   if (chatId !== cfg.adminId) return sendMessage(cfg.telegramToken, chatId, "⛔️ Эта команда доступна только администратору.");
   if (!url || !url.startsWith("http")) return sendMessage(cfg.telegramToken, chatId, "❌ <b>Используй:</b>\n<code>/testload https://example.com/sub</code>");
 
   await sendMessage(cfg.telegramToken, chatId, `⏳ <b>Запуск стресс-теста...</b>\n\nОтправляю 100 случайных запросов с разными User-Agent к:\n<code>${escapeHtml(url)}</code>\n\nЭто займет около 15-20 секунд...`);
 
-  // 🔥 Берём 100 СЛУЧАЙНЫХ User-Agent'ов из всего списка (а не первые 50!)
   const testCount = 100;
   const uasToTest = getRandomItems(TARGET_USER_AGENTS, testCount);
   
@@ -214,15 +218,12 @@ export async function cmdTestLoad(cfg, chatId, url) {
     }
   };
 
-  // Параллельный запуск запросов
   await Promise.all(uasToTest.map(ua => testOne(ua)));
 
-  // Формируем отчёт
   const successRate = ((successCount / testCount) * 100).toFixed(1);
   const stubRate = ((stubCount / testCount) * 100).toFixed(1);
   const errorRate = ((errorCount / testCount) * 100).toFixed(1);
 
-  // Показываем только первые 10 успешных UA, чтобы не перегружать сообщение
   const uaList = successfulUAs.slice(0, 10).map((ua, i) => `${i + 1}. <code>${escapeHtml(ua.substring(0, 60))}...</code>`).join("\n");
   const moreCount = successfulUAs.length > 10 ? `\n<i>...и ещё ${successfulUAs.length - 10} успешных UA</i>` : "";
 
@@ -232,7 +233,7 @@ export async function cmdTestLoad(cfg, chatId, url) {
     `✅ <b>Успешно (реальный конфиг):</b> <code>${successCount}</code> (${successRate}%)\n` +
     `⚠️ <b>Заглушка (0.0.0.0 / App not supported):</b> <code>${stubCount}</code> (${stubRate}%)\n` +
     `❌ <b>Ошибка сети:</b> <code>${errorCount}</code> (${errorRate}%)\n\n` +
-    `🏆 <b>Топ успешных User-Agent'ов:</b>\n${uaList}${moreCount}\n\n` +
+    ` <b>Топ успешных User-Agent'ов:</b>\n${uaList}${moreCount}\n\n` +
     `💡 <b>Вывод:</b> ${successCount > 50 ? 'Сервер плохо защищён, большинство UA проходят!' : successCount > 20 ? 'Сервер частично блокирует ботов.' : 'Сервер хорошо защищён, мало UA проходят.'}`;
 
   await sendMessage(cfg.telegramToken, chatId, report, { parse_mode: "HTML" });
@@ -264,16 +265,16 @@ async function finalizeSubscription(cfg, chatId, state, uris = []) {
     
     const kb = { 
       inline_keyboard: [
-        [{ text: " Моя подписка", callback_data: "my" }], 
+        [{ text: "📋 Моя подписка", callback_data: "my" }], 
         [{ text: "➕ Добавить сервер", callback_data: "add_prompt" }], 
-        [{ text: "🗑 Удалить", callback_data: "delete" }]
+        [{ text: " Удалить", callback_data: "delete" }]
       ] 
     };
     
     await sendMessage(
       cfg.telegramToken, 
       chatId, 
-      `✅ <b>Подписка создана!</b>\n\n━━━━━━━━━━━━━━━━━━━━\n📡 <b>Серверов:</b> <code>${uris.length}</code>\n <b>Raw ссылка:</b>\n<code>${rawUrl}</code>\n━━━━━━━━━━━━━━━━━━━━`, 
+      `✅ <b>Подписка создана!</b>\n\n━━━━━━━━━━━━━━━━━━━━\n📡 <b>Серверов:</b> <code>${uris.length}</code>\n🔗 <b>Raw ссылка:</b>\n<code>${rawUrl}</code>\n━━━━━━━━━━━━━━━━━━━━`, 
       kb
     );
   } else {
@@ -291,9 +292,9 @@ export async function cmdStart(cfg, chatId) {
   const kb = { 
     inline_keyboard: [
       [{ text: "✨ Создать подписку", callback_data: "create" }, { text: "🔍 Декодер", callback_data: "decode" }], 
-      [{ text: "📋 Моя подписка", callback_data: "my" }, { text: " Экспорт", callback_data: "export" }], 
+      [{ text: "📋 Моя подписка", callback_data: "my" }, { text: "📤 Экспорт", callback_data: "export" }], 
       [{ text: "🔄 Обновить whitelist", callback_data: "manual_update" }], 
-      [{ text: "🧪 Тест нагрузки", callback_data: "testload_prompt" }],
+      [{ text: " Тест нагрузки", callback_data: "testload_prompt" }],
       [{ text: "ℹ️ Помощь", callback_data: "help" }]
     ] 
   };
@@ -301,7 +302,7 @@ export async function cmdStart(cfg, chatId) {
   await sendMessage(
     cfg.telegramToken, 
     chatId, 
-    "🌊 <b>OceaniaVPN Bot</b>\n\n👋 <b>Привет!</b>\n\n✨ <b>/create</b> — создать подписку\n🔍 <b>/decode</b> — расшифровка\n➕ <b>/add</b> — добавить сервер\n <b>/export</b> — raw ссылка\n🗑 <b>/delete</b> — удалить\n🔄 <b>/update</b> — обновить whitelist (только админ)\n <b>/testload</b> — стресс-тест (только админ)", 
+    "🌊 <b>OceaniaVPN Bot</b>\n\n👋 <b>Привет!</b>\n\n✨ <b>/create</b> — создать подписку\n🔍 <b>/decode</b> — расшифровка\n➕ <b>/add</b> — добавить сервер\n📤 <b>/export</b> — raw ссылка\n🗑 <b>/delete</b> — удалить\n🔄 <b>/update</b> — обновить whitelist (только админ)\n🧪 <b>/testload</b> — стресс-тест (только админ)", 
     kb
   );
 }
@@ -323,7 +324,7 @@ export async function cmdCancel(cfg, chatId) {
   const state = await getState(cfg, chatId);
   if (state) { 
     await clearState(cfg, chatId); 
-    await sendMessage(cfg.telegramToken, chatId, " <b>Создание отменено.</b>"); 
+    await sendMessage(cfg.telegramToken, chatId, "❌ <b>Создание отменено.</b>"); 
   } else { 
     await sendMessage(cfg.telegramToken, chatId, "ℹ️ Нет активного процесса."); 
   }
@@ -341,7 +342,7 @@ export async function cmdDecode(cfg, chatId, url) {
   let loadingMsgId = null;
   
   try {
-    const loadingMsg = await sendMessage(cfg.telegramToken, chatId, " <b>Декодирую...</b>");
+    const loadingMsg = await sendMessage(cfg.telegramToken, chatId, "⏳ <b>Декодирую...</b>");
     if (loadingMsg && loadingMsg.result && loadingMsg.result.message_id) {
       loadingMsgId = loadingMsg.result.message_id;
     }
@@ -374,7 +375,7 @@ export async function cmdDecode(cfg, chatId, url) {
     
     const rawUrl = `https://raw.githubusercontent.com/${cfg.configRepoOwner}/${cfg.configRepoName}/${cfg.branch}/${cfg.configsFolder}/${filename}`;
     const kb = { inline_keyboard: [[{ text: "📋 Открыть", url: rawUrl }]] };
-    const successMsg = `✅ <b>Успешно!</b>\n\n📡 Серверов: <code>${uris.length}</code>\n🔗 <code>${rawUrl}</code>`;
+    const successMsg = `✅ <b>Успешно!</b>\n\n Серверов: <code>${uris.length}</code>\n🔗 <code>${rawUrl}</code>`;
     
     if (loadingMsgId) {
       await editMessage(cfg.telegramToken, chatId, loadingMsgId, successMsg, kb);
@@ -400,7 +401,7 @@ export async function cmdMy(cfg, chatId) {
   const kb = { 
     inline_keyboard: [
       [{ text: "📤 Экспорт", callback_data: "export" }], 
-      [{ text: " Удалить", callback_data: "delete" }]
+      [{ text: "🗑 Удалить", callback_data: "delete" }]
     ] 
   };
   
@@ -416,7 +417,7 @@ export async function cmdExport(cfg, chatId) {
   const rawUrl = `https://raw.githubusercontent.com/${cfg.configRepoOwner}/${cfg.configRepoName}/${cfg.branch}/${cfg.configsFolder}/user_${chatId}.txt`;
   const kb = { inline_keyboard: [[{ text: "🔗 Открыть", url: rawUrl }]] };
   
-  await sendMessage(cfg.telegramToken, chatId, `📤 <b>Экспорт</b>\n\n🔗 <code>${rawUrl}</code>`, kb);
+  await sendMessage(cfg.telegramToken, chatId, ` <b>Экспорт</b>\n\n🔗 <code>${rawUrl}</code>`, kb);
 }
 
 export async function cmdAdd(cfg, chatId, url) {
@@ -440,7 +441,7 @@ export async function cmdAdd(cfg, chatId, url) {
     if (result.ok && result.uris && result.uris.length > 0) {
       toAdd = result.uris;
     } else {
-      return sendMessage(cfg.telegramToken, chatId, "❌ Не удалось декодировать: " + result.error);
+      return sendMessage(cfg.telegramToken, chatId, " Не удалось декодировать: " + result.error);
     }
   }
   
@@ -530,7 +531,7 @@ export async function handleCallback(cfg, cb) {
     if (userId !== cfg.adminId) {
       await sendMessage(cfg.telegramToken, chatId, "⛔️ Эта кнопка только для администратора.");
     } else {
-      await sendMessage(cfg.telegramToken, chatId, "🧪 <b>Стресс-тест</b>\n\nОтправь мне URL подписки для тестирования, или используй:\n<code>/testload https://example.com/sub</code>\n\nБот отправит 100 случайных запросов с разными User-Agent и покажет отчёт.");
+      await sendMessage(cfg.telegramToken, chatId, " <b>Стресс-тест</b>\n\nОтправь мне URL подписки для тестирования, или используй:\n<code>/testload https://example.com/sub</code>\n\nБот отправит 100 случайных запросов с разными User-Agent и покажет отчёт.");
     }
   }
 }
@@ -571,4 +572,4 @@ export async function handleMessage(cfg, msg) {
   if (cmd === "/testload") return cmdTestLoad(cfg, chatId, parts.slice(1).join(" "));
   if (cmd === "/users") return cmdUsers(cfg, chatId, userId);
   if (cmd === "/stats") return cmdStats(cfg, chatId, userId);
-}
+                     }
