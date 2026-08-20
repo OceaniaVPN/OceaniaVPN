@@ -11,7 +11,7 @@ import { COUNTRIES } from "./contries.js";
 import { TARGET_USER_AGENTS } from "./useragents.js";
 
 // ==========================================
-// КОНФИГУРАЦИЯ АВТО-ОБНОВЛЕНИЯ
+// ОСНОВНАЯ КОНФИГУРАЦИЯ (4 источника)
 // ==========================================
 const AUTO_UPDATE_CONFIG = {
   targetFilename: "whitelist.txt",
@@ -27,6 +27,20 @@ const AUTO_UPDATE_CONFIG = {
     "https://gitlab.com/igareck/vpn-configs-for-russia/-/raw/main/WHITE-CIDR-RU-all.txt?ref_type=heads",
     "https://gitlab.com/igareck/vpn-configs-for-russia/-/raw/main/WHITE-SNI-RU-all.txt?ref_type=heads"
   ]
+};
+
+// ==========================================
+// ВТОРАЯ КОНФИГУРАЦИЯ (Okeania)
+// ==========================================
+const SECONDARY_CONFIG = {
+  targetUrl: "https://okeaniavpn.dimastekolnikov1.workers.dev/sub?token=4ffeddfb-54ec-41ad-b76d-13f3834f8d9e",
+  targetFilename: "okeania_auto.txt",
+  title: "OkeaniaVPN Auto",
+  interval: 4,
+  webpage: "https://t.me/free_vpn123456",
+  announce: "OkeaniaVPN Auto Update",
+  userinfo: "upload=0; download=0; total=536870912000; expire=0",
+  doRename: true
 };
 
 // ==========================================
@@ -73,7 +87,7 @@ async function fetchAndMergeSources(sourcesUrls) {
         console.log("[Merge] Success: Found " + result.uris.length + " URIs");
       } else {
         stats[url] = 0;
-        console.log("[Merge] Failed or empty: " + result.error);
+        console.log("[Merge] Failed or empty: " + (result.error || "Unknown error"));
       }
     } catch (e) {
       console.error("[Merge] Error on " + url + ": " + e.message);
@@ -82,7 +96,6 @@ async function fetchAndMergeSources(sourcesUrls) {
   }
   
   const uniqueUris = [...new Set(allUris)];
-  
   console.log("[Merge] Total URIs: " + allUris.length + ", After dedup: " + uniqueUris.length);
   return { uris: uniqueUris, stats };
 }
@@ -142,7 +155,7 @@ function applyRename(uris) {
       displayName = country.name;
       counterKey = country.name;
     } else {
-      flag = "";
+      flag = "🌍";
       displayName = "Рандом";
       counterKey = "Рандом";
     }
@@ -157,7 +170,7 @@ function applyRename(uris) {
 }
 
 // ==========================================
-// ОСНОВНЫЕ КОМАНДЫ
+// ФУНКЦИИ ОБНОВЛЕНИЯ
 // ==========================================
 
 async function manualUpdate(cfg, chatId) {
@@ -165,46 +178,37 @@ async function manualUpdate(cfg, chatId) {
     return sendMessage(cfg.telegramToken, chatId, "⛔️ Эта команда доступна только администратору.");
   }
 
-  const sources = AUTO_UPDATE_CONFIG.sources;
-  const targetFilename = AUTO_UPDATE_CONFIG.targetFilename;
-  const title = AUTO_UPDATE_CONFIG.title;
-  const interval = AUTO_UPDATE_CONFIG.interval;
-  const webpage = AUTO_UPDATE_CONFIG.webpage;
-  const announce = AUTO_UPDATE_CONFIG.announce;
-  const userinfo = AUTO_UPDATE_CONFIG.userinfo;
-  const doRename = AUTO_UPDATE_CONFIG.doRename;
-  
-  await sendMessage(cfg.telegramToken, chatId, "⏳ <b>Обновляю подписку...</b>\n\nСкачиваю и декодирую 4 источника...");
+  await sendMessage(cfg.telegramToken, chatId, "⏳ <b>Обновляю основной конфиг...</b>\n\nСкачиваю и декодирую 4 источника...");
 
   try {
-    const result = await fetchAndMergeSources(sources);
+    const result = await fetchAndMergeSources(AUTO_UPDATE_CONFIG.sources);
     const uniqueUris = result.uris;
     const stats = result.stats;
     
     if (uniqueUris.length === 0) {
-      return sendMessage(cfg.telegramToken, chatId, " Не удалось получить серверы из источников.");
+      return sendMessage(cfg.telegramToken, chatId, "❌ Не удалось получить серверы из источников.");
     }
 
     let finalUris;
-    if (doRename) {
+    if (AUTO_UPDATE_CONFIG.doRename) {
       finalUris = applyRename(uniqueUris);
     } else {
       finalUris = uniqueUris;
     }
     
     const profileMetadata = {
-      title: title,
-      interval: interval,
-      webpage: webpage,
-      announce: announce,
-      userinfo: userinfo
+      title: AUTO_UPDATE_CONFIG.title,
+      interval: AUTO_UPDATE_CONFIG.interval,
+      webpage: AUTO_UPDATE_CONFIG.webpage,
+      announce: AUTO_UPDATE_CONFIG.announce,
+      userinfo: AUTO_UPDATE_CONFIG.userinfo
     };
     
     const content = buildFile(profileMetadata, finalUris);
-    const saveResult = await createOrUpdateFile(cfg, targetFilename, content, "Manual update: " + finalUris.length + " nodes");
+    const saveResult = await createOrUpdateFile(cfg, AUTO_UPDATE_CONFIG.targetFilename, content, "Manual update: " + finalUris.length + " nodes");
 
     if (saveResult.content || saveResult.sha) {
-      const rawUrl = "https://raw.githubusercontent.com/" + cfg.configRepoOwner + "/" + cfg.configRepoName + "/" + cfg.branch + "/" + cfg.configsFolder + "/" + targetFilename;
+      const rawUrl = "https://raw.githubusercontent.com/" + cfg.configRepoOwner + "/" + cfg.configRepoName + "/" + cfg.branch + "/" + cfg.configsFolder + "/" + AUTO_UPDATE_CONFIG.targetFilename;
       
       let statsText = "<b>📊 Статистика по источникам:</b>\n";
       for (const url in stats) {
@@ -213,10 +217,60 @@ async function manualUpdate(cfg, chatId) {
         statsText = statsText + "• " + shortUrl + "\n  ↳ <code>" + count + "</code> серверов\n";
       }
       
-      const message = "✅ <b>Подписка обновлена!</b>\n\n📡 Всего уникальных серверов: <code>" + finalUris.length + "</code>\n\n" + statsText + "\n📁 Файл: <code>" + targetFilename + "</code>\n🔗 <a href=\"" + rawUrl + "\">Открыть</a>";
+      const message = "✅ <b>Основной конфиг обновлен!</b>\n\n📡 Всего уникальных серверов: <code>" + finalUris.length + "</code>\n\n" + statsText + "\n📁 Файл: <code>" + AUTO_UPDATE_CONFIG.targetFilename + "</code>\n🔗 <a href=\"" + rawUrl + "\">Открыть</a>";
       const keyboard = {
         inline_keyboard: [
           [{ text: "🔄 Обновить ещё раз", callback_data: "manual_update" }]
+        ]
+      };
+      
+      await sendMessage(cfg.telegramToken, chatId, message, keyboard);
+    } else {
+      await sendMessage(cfg.telegramToken, chatId, "❌ Ошибка сохранения в GitHub.");
+    }
+  } catch (e) {
+    await sendMessage(cfg.telegramToken, chatId, "💥 Ошибка: " + e.message);
+  }
+}
+
+async function secondaryManualUpdate(cfg, chatId) {
+  if (chatId !== cfg.adminId) {
+    return sendMessage(cfg.telegramToken, chatId, "⛔️ Эта команда доступна только администратору.");
+  }
+
+  await sendMessage(cfg.telegramToken, chatId, "⏳ <b>Обновляю второй конфиг (Okeania)...</b>");
+
+  try {
+    const result = await decodeSubscription(SECONDARY_CONFIG.targetUrl);
+    
+    if (!result.ok || !result.uris || result.uris.length === 0) {
+      return sendMessage(cfg.telegramToken, chatId, "❌ Не удалось получить серверы: " + (result.error || "Неизвестная ошибка"));
+    }
+
+    let finalUris;
+    if (SECONDARY_CONFIG.doRename) {
+      finalUris = applyRename(result.uris);
+    } else {
+      finalUris = result.uris;
+    }
+    
+    const profileMetadata = {
+      title: SECONDARY_CONFIG.title,
+      interval: SECONDARY_CONFIG.interval,
+      webpage: SECONDARY_CONFIG.webpage,
+      announce: SECONDARY_CONFIG.announce,
+      userinfo: SECONDARY_CONFIG.userinfo
+    };
+    
+    const content = buildFile(profileMetadata, finalUris);
+    const saveResult = await createOrUpdateFile(cfg, SECONDARY_CONFIG.targetFilename, content, "Secondary Manual update: " + finalUris.length + " nodes");
+
+    if (saveResult.content || saveResult.sha) {
+      const rawUrl = "https://raw.githubusercontent.com/" + cfg.configRepoOwner + "/" + cfg.configRepoName + "/" + cfg.branch + "/" + cfg.configsFolder + "/" + SECONDARY_CONFIG.targetFilename;
+      const message = "✅ <b>Второй конфиг (Okeania) обновлен!</b>\n\n📡 Серверов: <code>" + finalUris.length + "</code>\n📁 Файл: <code>" + SECONDARY_CONFIG.targetFilename + "</code>\n🔗 <a href=\"" + rawUrl + "\">Открыть</a>";
+      const keyboard = {
+        inline_keyboard: [
+          [{ text: "🔄 Обновить ещё раз", callback_data: "secondary_manual_update" }]
         ]
       };
       
@@ -237,7 +291,7 @@ export async function cmdTestLoad(cfg, chatId, url) {
     return sendMessage(cfg.telegramToken, chatId, "❌ <b>Используй:</b>\n<code>/testload https://example.com/sub</code>");
   }
 
-  await sendMessage(cfg.telegramToken, chatId, "⏳ <b>Запуск стресс-теста...</b>\n\nОтправляю 100 случайных запросов с разными User-Agent к:\n<code>" + escapeHtml(url) + "</code>\n\nЭто займет около 15-20 секунд...");
+  await sendMessage(cfg.telegramToken, chatId, "⏳ <b>Запуск стресс-теста...</b>\n\nОтправляю 100 случайных запросов с разными User-Agent.\nЭто займет около 15-20 секунд...");
 
   const testCount = 100;
   const uasToTest = getRandomItems(TARGET_USER_AGENTS, testCount);
@@ -295,7 +349,7 @@ export async function cmdTestLoad(cfg, chatId, url) {
   const report = "✅ <b>Тестирование завершено!</b>\n\n" +
     "🔗 <b>URL:</b> <code>" + escapeHtml(url.substring(0, 50)) + "...</code>\n" +
     "📊 <b>Всего запросов:</b> <code>" + testCount + "</code>\n\n" +
-    "✅ <b>Успешно (реальный конфиг):</b> <code>" + successCount + "</code> (" + successRate + "%)\n" +
+    "✅ <b>Успешно:</b> <code>" + successCount + "</code> (" + successRate + "%)\n" +
     "⚠️ <b>Заглушка:</b> <code>" + stubCount + "</code> (" + stubRate + "%)\n" +
     "❌ <b>Ошибка сети:</b> <code>" + errorCount + "</code> (" + errorRate + "%)\n\n" +
     "🏆 <b>Топ успешных User-Agent'ов:</b>\n" + uaList + moreCount + "\n\n" +
@@ -335,7 +389,7 @@ async function finalizeSubscription(cfg, chatId, state, uris) {
     
     const kb = {
       inline_keyboard: [
-        [{ text: " Моя подписка", callback_data: "my" }],
+        [{ text: "📋 Моя подписка", callback_data: "my" }],
         [{ text: "➕ Добавить сервер", callback_data: "add_prompt" }],
         [{ text: "🗑 Удалить", callback_data: "delete" }]
       ]
@@ -344,7 +398,7 @@ async function finalizeSubscription(cfg, chatId, state, uris) {
     const message = "✅ <b>Подписка создана!</b>\n\n━━━━━━━━━━━━━━━━━━━━\n📡 <b>Серверов:</b> <code>" + uris.length + "</code>\n🔗 <b>Raw ссылка:</b>\n<code>" + rawUrl + "</code>\n━━━━━━━━━━━━━━━━━━━━";
     await sendMessage(cfg.telegramToken, chatId, message, kb);
   } else {
-    await sendMessage(cfg.telegramToken, chatId, " Ошибка: " + (res.message || "неизвестно"));
+    await sendMessage(cfg.telegramToken, chatId, "❌ Ошибка: " + (res.message || "неизвестно"));
   }
 }
 
@@ -358,19 +412,20 @@ export async function cmdStart(cfg, chatId) {
   const kb = {
     inline_keyboard: [
       [{ text: "✨ Создать подписку", callback_data: "create" }, { text: "🔍 Декодер", callback_data: "decode" }],
-      [{ text: "📋 Моя подписка", callback_data: "my" }, { text: " Экспорт", callback_data: "export" }],
+      [{ text: "📋 Моя подписка", callback_data: "my" }, { text: "📤 Экспорт", callback_data: "export" }],
       [{ text: "🔄 Обновить whitelist", callback_data: "manual_update" }],
+      [{ text: "🔄 Обновить Okeania", callback_data: "secondary_manual_update" }],
       [{ text: "🧪 Тест нагрузки", callback_data: "testload_prompt" }],
       [{ text: "ℹ️ Помощь", callback_data: "help" }]
     ]
   };
   
-  const message = "🌊 <b>OceaniaVPN Bot</b>\n\n👋 <b>Привет!</b>\n\n✨ <b>/create</b> — создать подписку\n🔍 <b>/decode</b> — расшифровка\n➕ <b>/add</b> — добавить сервер\n📤 <b>/export</b> — raw ссылка\n🗑 <b>/delete</b> — удалить\n🔄 <b>/update</b> — обновить whitelist (только админ)\n🧪 <b>/testload</b> — стресс-тест (только админ)";
+  const message = "🌊 <b>OceaniaVPN Bot</b>\n\n👋 <b>Привет!</b>\n\n✨ <b>/create</b> — создать подписку\n🔍 <b>/decode</b> — расшифровка\n➕ <b>/add</b> — добавить сервер\n📤 <b>/export</b> — raw ссылка\n🗑 <b>/delete</b> — удалить\n🔄 <b>/update</b> — обновить whitelist (админ)\n🔄 <b>/updateokeania</b> — обновить Okeania (админ)\n🧪 <b>/testload</b> — стресс-тест (админ)";
   await sendMessage(cfg.telegramToken, chatId, message, kb);
 }
 
 export async function cmdHelp(cfg, chatId) {
-  const message = "ℹ️ <b>Помощь</b>\n/start — меню\n/create — создать\n/decode <url> — расшифровать\n/my — моя подписка\n/export — raw ссылка\n/add <url> — добавить\n/delete — удалить\n/update — обновить whitelist (админ)\n/testload <url> — стресс-тест 100 ботами (админ)\n/cancel — отмена";
+  const message = "ℹ️ <b>Помощь</b>\n/start — меню\n/create — создать\n/decode <url> — расшифровать\n/my — моя подписка\n/export — raw ссылка\n/add <url> — добавить\n/delete — удалить\n/update — обновить whitelist (админ)\n/updateokeania — обновить Okeania (админ)\n/testload <url> — стресс-тест (админ)\n/cancel — отмена";
   await sendMessage(cfg.telegramToken, chatId, message);
 }
 
@@ -391,6 +446,10 @@ export async function cmdCancel(cfg, chatId) {
 
 export async function cmdUpdate(cfg, chatId) {
   await manualUpdate(cfg, chatId);
+}
+
+export async function cmdUpdateOkeania(cfg, chatId) {
+  await secondaryManualUpdate(cfg, chatId);
 }
 
 export async function cmdDecode(cfg, chatId, url) {
@@ -438,7 +497,7 @@ export async function cmdDecode(cfg, chatId, url) {
         [{ text: "📋 Открыть", url: rawUrl }]
       ]
     };
-    const successMsg = "✅ <b>Успешно!</b>\n\n📡 Серверов: <code>" + uris.length + "</code>\n <code>" + rawUrl + "</code>";
+    const successMsg = "✅ <b>Успешно!</b>\n\n📡 Серверов: <code>" + uris.length + "</code>\n🔗 <code>" + rawUrl + "</code>";
     
     if (loadingMsgId) {
       await editMessage(cfg.telegramToken, chatId, loadingMsgId, successMsg, kb);
@@ -534,7 +593,7 @@ export async function cmdDelete(cfg, chatId) {
 
 export async function cmdUsers(cfg, chatId, userId) {
   if (userId !== cfg.adminId) {
-    return sendMessage(cfg.telegramToken, chatId, "️ Нет прав");
+    return sendMessage(cfg.telegramToken, chatId, "⛔️ Нет прав");
   }
   
   const users = await listAllUsers(cfg);
@@ -552,7 +611,7 @@ export async function cmdUsers(cfg, chatId, userId) {
 
 export async function cmdStats(cfg, chatId, userId) {
   if (userId !== cfg.adminId) {
-    return sendMessage(cfg.telegramToken, chatId, "️ Нет прав");
+    return sendMessage(cfg.telegramToken, chatId, "⛔️ Нет прав");
   }
   
   const users = await listAllUsers(cfg);
@@ -589,9 +648,16 @@ export async function handleCallback(cfg, cb) {
   }
   else if (cb.data === "manual_update") {
     if (userId !== cfg.adminId) {
-      await sendMessage(cfg.telegramToken, chatId, "️ Эта кнопка только для администратора.");
+      await sendMessage(cfg.telegramToken, chatId, "⛔️ Эта кнопка только для администратора.");
     } else {
       await manualUpdate(cfg, chatId);
+    }
+  }
+  else if (cb.data === "secondary_manual_update") {
+    if (userId !== cfg.adminId) {
+      await sendMessage(cfg.telegramToken, chatId, "⛔️ Эта кнопка только для администратора.");
+    } else {
+      await secondaryManualUpdate(cfg, chatId);
     }
   }
   else if (cb.data === "testload_prompt") {
@@ -636,7 +702,8 @@ export async function handleMessage(cfg, msg) {
   if (cmd === "/delete") return cmdDelete(cfg, chatId);
   if (cmd === "/cancel") return cmdCancel(cfg, chatId);
   if (cmd === "/update") return cmdUpdate(cfg, chatId);
+  if (cmd === "/updateokeania") return cmdUpdateOkeania(cfg, chatId);
   if (cmd === "/testload") return cmdTestLoad(cfg, chatId, parts.slice(1).join(" "));
   if (cmd === "/users") return cmdUsers(cfg, chatId, userId);
   if (cmd === "/stats") return cmdStats(cfg, chatId, userId);
-    }
+      }
