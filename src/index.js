@@ -13,35 +13,43 @@ const AUTO_UPDATE_CONFIG = {
   webpage: "https://t.me/free_vpn123456",
   announce: "Steklo vpn besplatno",
   userinfo: "upload=0; download=12884901888; total=536870912000; expire=0",
-  renameServers: true
+  doRename: true
 };
 
 const COUNTRIES = [
-  { keys: ["us", "usa", "america", "new york", "los angeles"], flag: "🇸", name: "США" },
-  { keys: ["ru", "russia", "moscow", "spb", "peter"], flag: "🇷🇺", name: "Россия" },
-  { keys: ["de", "germany", "berlin", "frankfurt"], flag: "🇩🇪", name: "Германия" },
-  { keys: ["nl", "netherlands", "amsterdam"], flag: "🇳🇱", name: "Нидерланды" },
-  { keys: ["gb", "uk", "london", "england"], flag: "🇬🇧", name: "Великобритания" },
-  { keys: ["fr", "france", "paris"], flag: "🇫🇷", name: "Франция" },
-  { keys: ["fi", "finland", "helsinki"], flag: "🇫🇮", name: "Финляндия" },
-  { keys: ["kz", "kazakhstan", "almaty", "astana"], flag: "🇰", name: "Казахстан" },
-  { keys: ["ua", "ukraine", "kiev"], flag: "🇺🇦", name: "Украина" },
-  { keys: ["jp", "japan", "tokyo"], flag: "🇯🇵", name: "Япония" },
-  { keys: ["sg", "singapore"], flag: "🇸", name: "Сингапур" },
-  { keys: ["kr", "korea", "seoul"], flag: "🇰", name: "Корея" },
-  { keys: ["it", "italy", "milan", "rome"], flag: "🇹", name: "Италия" },
-  { keys: ["es", "spain", "madrid", "barcelona"], flag: "🇪🇸", name: "Испания" },
-  { keys: ["ca", "canada", "toronto", "vancouver"], flag: "🇨🇦", name: "Канада" },
-  { keys: ["au", "australia", "sydney", "melbourne"], flag: "🇦🇺", name: "Австралия" },
-  { keys: ["br", "brazil", "sao paulo"], flag: "🇧", name: "Бразилия" },
-  { keys: ["in", "india", "mumbai", "delhi"], flag: "🇳", name: "Индия" },
-  { keys: ["tr", "turkey", "istanbul"], flag: "🇹", name: "Турция" },
-  { keys: ["pl", "poland", "warsaw"], flag: "🇵", name: "Польша" }
+  { keys: ["ru", "russia", "россия", "moscow", "москва", "spb", "peter", "петербург"], flag: "🇷🇺", name: "Россия" },
+  { keys: ["de", "germany", "германия", "berlin", "берлин", "frankfurt", "франкфурт", "german"], flag: "🇩🇪", name: "Германия" },
+  { keys: ["fi", "finland", "финляндия", "helsinki", "хельсинки", "finnish"], flag: "🇫🇮", name: "Финляндия" },
+  { keys: ["lv", "latvia", "латвия", "riga", "рига", "latvian"], flag: "🇱🇻", name: "Латвия" },
+  { keys: ["us", "usa", "america", "сша", "new york", "los angeles", "chicago"], flag: "🇺🇸", name: "США" },
+  { keys: ["nl", "netherlands", "нидерланды", "amsterdam", "амстердам", "dutch"], flag: "🇳🇱", name: "Нидерланды" },
+  { keys: ["gb", "uk", "британия", "london", "лондон", "england", "англия"], flag: "🇬🇧", name: "Великобритания" },
+  { keys: ["fr", "france", "франция", "paris", "париж", "french"], flag: "🇫🇷", name: "Франция" },
+  { keys: ["ua", "ukraine", "украина", "kiev", "киев", "kyiv"], flag: "🇺🇦", name: "Украина" },
+  { keys: ["ee", "estonia", "эстония", "tallinn", "таллин"], flag: "🇪🇪", name: "Эстония" },
+  { keys: ["cz", "czech", "чехия", "prague", "прага", "czechia"], flag: "🇨🇿", name: "Чехия" },
+  { keys: ["jp", "japan", "япония", "tokyo", "токио"], flag: "🇯🇵", name: "Япония" },
+  { keys: ["au", "australia", "австралия", "sydney", "сидней", "melbourne"], flag: "🇦🇺", name: "Австралия" },
+  { keys: ["hk", "hong kong", "гонконг", "hongkong"], flag: "🇭🇰", name: "Гонконг" },
+  { keys: ["sg", "singapore", "сингапур"], flag: "🇸🇬", name: "Сингапур" },
+  { keys: ["kr", "korea", "корея", "seoul", "сеул", "south korea"], flag: "🇰🇷", name: "Южная Корея" },
+  { keys: ["it", "italy", "италия", "milan", "милан", "rome", "рим"], flag: "🇮🇹", name: "Италия" },
+  { keys: ["es", "spain", "испания", "madrid", "мадрид", "barcelona"], flag: "🇪🇸", name: "Испания" },
+  { keys: ["ca", "canada", "канада", "toronto", "торонто", "vancouver"], flag: "🇨🇦", name: "Канада" },
+  { keys: ["br", "brazil", "бразилия", "sao paulo", "сан-паулу"], flag: "🇧🇷", name: "Бразилия" },
+  { keys: ["in", "india", "индия", "mumbai", "мумбаи", "delhi"], flag: "🇮🇳", name: "Индия" },
+  { keys: ["tr", "turkey", "турция", "istanbul", "стамбул"], flag: "🇹🇷", name: "Турция" },
+  { keys: ["pl", "poland", "польша", "warsaw", "варшава"], flag: "🇵🇱", name: "Польша" },
+  { keys: ["ro", "romania", "румыния", "bucharest", "бухарест"], flag: "🇷🇴", name: "Румыния" },
+  { keys: ["kz", "kazakhstan", "казахстан", "almaty", "алматы", "astana"], flag: "🇰🇿", name: "Казахстан" }
 ];
 
-const SUP = ['', '¹', '²', '³', '⁴', '⁵', '⁶', '⁷', '⁸', '⁹', '¹⁰', '¹¹', '¹²', '¹³', '¹⁴', '¹⁵', '¹⁶', '¹⁷', '¹⁸', '¹⁹', '²⁰'];
+function getSuperscript(n) {
+  const sup = ['', '¹', '²', '³', '⁴', '⁵', '⁶', '⁷', '⁸', '⁹', '¹⁰', '¹¹', '¹²', '¹³', '¹⁴', '¹⁵', '¹⁶', '¹⁷', '¹⁸', '¹⁹', '²⁰'];
+  return n <= 20 ? sup[n] : `#${n}`;
+}
 
-function renameServers(uris) {
+function applyRename(uris) {
   const counters = {};
   COUNTRIES.forEach(c => counters[c.name] = 0);
   counters["Рандом"] = 0;
@@ -58,21 +66,28 @@ function renameServers(uris) {
         break;
       }
     }
-
-    let displayName, counterKey;
-    if (country) {
-      displayName = country.flag + " " + country.name;
-      counterKey = country.name;
-    } else {
-      displayName = "Рандом";
-      counterKey = "Рандом";
+    
+    if (!country) {
+      const hostMatch = baseUri.match(/@([^:/]+)/);
+      if (hostMatch) {
+        const host = hostMatch[1].toLowerCase();
+        for (const c of COUNTRIES) {
+          if (c.keys.some(key => host.includes(key))) {
+            country = c;
+            break;
+          }
+        }
+      }
     }
+
+    const displayName = country ? country.name : "Рандом";
+    const counterKey = country ? country.name : "Рандом";
 
     counters[counterKey]++;
     const index = counters[counterKey];
-    const superscript = SUP[Math.min(index, 20)] || ("_" + index);
+    const superscript = getSuperscript(index);
 
-    return baseUri + "#" + encodeURIComponent(displayName + " | БС" + superscript);
+    return `${baseUri}#${encodeURIComponent(`${displayName} [БС] ${superscript}`)}`;
   });
 }
 
@@ -83,93 +98,56 @@ export default {
 
     if (request.method === "GET") {
       if (url.pathname === "/") {
-        return new Response("OceaniaVPN Bot OK", {
-          headers: { "Content-Type": "text/plain; charset=utf-8" }
-        });
+        return new Response("OceaniaVPN Bot OK", { headers: { "Content-Type": "text/plain; charset=utf-8" } });
       }
-
-      if (url.pathname === "/debug-auto-update") {
-        try {
-          const { targetUrl, targetFilename, title, interval, webpage, announce, userinfo, renameServers } = AUTO_UPDATE_CONFIG;
-
-          const result = await decodeSubscription(targetUrl);
-
-          if (!result.ok) {
-            return new Response("ERROR: " + result.error, {
-              headers: { "Content-Type": "text/plain; charset=utf-8" }
-            });
-          }
-
-          let finalUris = result.uris;
-          if (renameServers && finalUris.length > 0) {
-            finalUris = renameServers(finalUris);
-          }
-
-          const profileMetadata = { title, interval, webpage, announce, userinfo };
-          const content = buildFile(profileMetadata, finalUris);
-          const saveResult = await createOrUpdateFile(cfg, targetFilename, content, "Debug update");
-
-          return new Response("OK! Servers: " + result.uris.length + "\n\nFirst 3:\n" + finalUris.slice(0, 3).join("\n"), {
-            headers: { "Content-Type": "text/plain; charset=utf-8" }
-          });
-
-        } catch (e) {
-          return new Response("ERROR: " + e.message, {
-            status: 500,
-            headers: { "Content-Type": "text/plain; charset=utf-8" }
-          });
-        }
-      }
-
       if (url.pathname === "/set-webhook") {
         const workerUrl = url.protocol + "//" + url.host;
         const res = await fetch("https://api.telegram.org/bot" + cfg.telegramToken + "/setWebhook?url=" + workerUrl, { method: "POST" });
         return new Response(await res.text(), { headers: { "Content-Type": "application/json" } });
       }
-
       return new Response("Not found", { status: 404 });
     }
 
     if (request.method === "POST") {
       try {
         const update = await request.json();
-        if (update.callback_query) {
-          await handleCallback(cfg, update.callback_query);
-        } else if (update.message) {
-          await handleMessage(cfg, update.message);
-        }
+        if (update.callback_query) await handleCallback(cfg, update.callback_query);
+        else if (update.message) await handleMessage(cfg, update.message);
         return new Response("OK", { status: 200 });
       } catch (e) {
         return new Response("Error: " + e.message, { status: 500 });
       }
     }
-
     return new Response("Method not allowed", { status: 405 });
   },
 
   async scheduled(event, env, ctx) {
+    console.log("[Cron] Auto-update triggered at:", new Date().toISOString());
     const cfg = getConfig(env);
-    const { targetUrl, targetFilename, title, interval, webpage, announce, userinfo, renameServers } = AUTO_UPDATE_CONFIG;
+    const { targetUrl, targetFilename, title, interval, webpage, announce, userinfo, doRename } = AUTO_UPDATE_CONFIG;
 
     try {
       const result = await decodeSubscription(targetUrl);
       if (result.ok && result.uris && result.uris.length > 0) {
         let finalUris = result.uris;
-        if (renameServers) {
-          finalUris = renameServers(finalUris);
+        if (doRename) {
+          finalUris = applyRename(finalUris);
         }
 
         const profileMetadata = { title, interval, webpage, announce, userinfo };
         const content = buildFile(profileMetadata, finalUris);
-        const res = await createOrUpdateFile(cfg, targetFilename, content, "Auto update");
+        const res = await createOrUpdateFile(cfg, targetFilename, content, "Auto update: " + finalUris.length + " nodes");
 
         if ((res.content || res.sha) && cfg.adminId && cfg.adminId > 0) {
           const rawUrl = "https://raw.githubusercontent.com/" + cfg.configRepoOwner + "/" + cfg.configRepoName + "/" + cfg.branch + "/" + cfg.configsFolder + "/" + targetFilename;
-          await sendMessage(cfg.telegramToken, cfg.adminId, "Auto-update OK! Servers: " + finalUris.length);
+          await sendMessage(cfg.telegramToken, cfg.adminId, "✅ Авто-обновление успешно!\n\n📡 Серверов: <code>" + finalUris.length + "</code>\n🔗 <a href=\"" + rawUrl + "\">Открыть</a>");
         }
+        console.log("[Cron] Success: " + finalUris.length + " servers saved");
+      } else {
+        console.error("[Cron] Decode failed:", result.error);
       }
     } catch (e) {
-      console.error("Auto-update error:", e);
+      console.error("[Cron] Error:", e);
     }
   }
 };
