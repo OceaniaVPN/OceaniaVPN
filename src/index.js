@@ -6,6 +6,9 @@ import { createOrUpdateFile } from "./github.js";
 import { sendMessage } from "./telegram.js";
 import { COUNTRIES } from "./contries.js";
 
+// ==========================================
+// ОСНОВНАЯ КОНФИГУРАЦИЯ (4 источника)
+// ==========================================
 const AUTO_UPDATE_CONFIG = {
   targetFilename: "whitelist.txt",
   title: "Steklo_VPN whitelist",
@@ -22,53 +25,73 @@ const AUTO_UPDATE_CONFIG = {
   ]
 };
 
-// 🔥 ИСПОЛЬЗУЕМ УМНЫЙ ДЕКОДЕР ВМЕСТО ПРОСТОГО FETCH
+// ==========================================
+// ВТОРАЯ КОНФИГУРАЦИЯ (Только одна ссылка)
+// ==========================================
+const SECONDARY_CONFIG = {
+  targetUrl: "https://okeaniavpn.dimastekolnikov1.workers.dev/sub?token=4ffeddfb-54ec-41ad-b76d-13f3834f8d9e",
+  targetFilename: "okeania_auto.txt", // Имя файла для этой подписки
+  title: "OkeaniaVPN Auto",
+  interval: 4,
+  webpage: "https://t.me/free_vpn123456",
+  announce: "OkeaniaVPN Auto Update",
+  userinfo: "upload=0; download=0; total=536870912000; expire=0",
+  doRename: true
+};
+
+// ==========================================
+// ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
+// ==========================================
+
 async function fetchAndMergeSources(sourcesUrls) {
   const allUris = [];
   const stats = {};
   
   for (const url of sourcesUrls) {
     try {
-      console.log(`[Merge] Decoding source: ${url}`);
+      console.log("[Merge] Decoding source: " + url);
       const result = await decodeSubscription(url);
       
       if (result.ok && result.uris && result.uris.length > 0) {
         allUris.push(...result.uris);
         stats[url] = result.uris.length;
-        console.log(`[Merge] Success: Found ${result.uris.length} URIs`);
+        console.log("[Merge] Success: Found " + result.uris.length + " URIs");
       } else {
         stats[url] = 0;
-        console.log(`[Merge] Failed or empty: ${result.error}`);
+        console.log("[Merge] Failed or empty: " + result.error);
       }
     } catch (e) {
-      console.error(`[Merge] Error on ${url}:`, e.message);
+      console.error("[Merge] Error on " + url + ": " + e.message);
       stats[url] = 0;
     }
   }
   
   const uniqueUris = [...new Set(allUris)];
-  console.log(`[Merge] Total URIs: ${allUris.length}, After dedup: ${uniqueUris.length}`);
+  console.log("[Merge] Total URIs: " + allUris.length + ", After dedup: " + uniqueUris.length);
   return { uris: uniqueUris, stats };
 }
 
 function getSuperscript(n) {
   const sup = ['', '¹', '²', '³', '⁴', '⁵', '⁶', '⁷', '⁸', '⁹', '¹⁰', '¹¹', '¹²', '¹³', '¹⁴', '¹⁵', '¹⁶', '¹⁷', '¹⁸', '¹⁹', '²⁰'];
-  return n <= 20 ? sup[n] : `#${n}`;
+  if (n <= 20) {
+    return sup[n];
+  }
+  return "#" + n;
 }
 
 function applyRename(uris) {
   const counters = {};
-  COUNTRIES.forEach(c => counters[c.name] = 0);
+  COUNTRIES.forEach(function(c) { counters[c.name] = 0; });
   counters["Рандом"] = 0;
 
-  return uris.map((uri) => {
+  return uris.map(function(uri) {
     const hashIndex = uri.lastIndexOf('#');
     const baseUri = hashIndex === -1 ? uri : uri.substring(0, hashIndex);
     const originalName = hashIndex === -1 ? "" : decodeURIComponent(uri.substring(hashIndex + 1)).toLowerCase();
 
     let country = null;
     for (const c of COUNTRIES) {
-      if (c.keys.some(key => originalName.includes(key))) {
+      if (c.keys.some(function(key) { return originalName.includes(key); })) {
         country = c;
         break;
       }
@@ -79,7 +102,7 @@ function applyRename(uris) {
       if (hostMatch) {
         const host = hostMatch[1].toLowerCase();
         for (const c of COUNTRIES) {
-          if (c.keys.some(key => host.includes(key))) {
+          if (c.keys.some(function(key) { return host.includes(key); })) {
             country = c;
             break;
           }
@@ -93,9 +116,13 @@ function applyRename(uris) {
 
     counters[counterKey]++;
     const superscript = getSuperscript(counters[counterKey]);
-    return `${baseUri}#${encodeURIComponent(`${flag} ${displayName} | БС${superscript}`)}`;
+    return baseUri + "#" + encodeURIComponent(flag + " " + displayName + " | БС" + superscript);
   });
 }
+
+// ==========================================
+// ОСНОВНОЙ ЭКСПОРТ WORKER
+// ==========================================
 
 export default {
   async fetch(request, env, ctx) {
@@ -130,27 +157,58 @@ export default {
   async scheduled(event, env, ctx) {
     console.log("[Cron] Auto-update triggered at:", new Date().toISOString());
     const cfg = getConfig(env);
-    const { sources, targetFilename, title, interval, webpage, announce, userinfo, doRename } = AUTO_UPDATE_CONFIG;
 
+    // 1. Обновление основного whitelist.txt (4 источника)
     try {
-      const { uris: uniqueUris, stats } = await fetchAndMergeSources(sources);
-      
+      const { uris: uniqueUris, stats } = await fetchAndMergeSources(AUTO_UPDATE_CONFIG.sources);
       if (uniqueUris.length > 0) {
-        let finalUris = doRename ? applyRename(uniqueUris) : uniqueUris;
-        const profileMetadata = { title, interval, webpage, announce, userinfo };
+        let finalUris = AUTO_UPDATE_CONFIG.doRename ? applyRename(uniqueUris) : uniqueUris;
+        const profileMetadata = { 
+          title: AUTO_UPDATE_CONFIG.title, 
+          interval: AUTO_UPDATE_CONFIG.interval, 
+          webpage: AUTO_UPDATE_CONFIG.webpage, 
+          announce: AUTO_UPDATE_CONFIG.announce, 
+          userinfo: AUTO_UPDATE_CONFIG.userinfo 
+        };
         const content = buildFile(profileMetadata, finalUris);
-        const res = await createOrUpdateFile(cfg, targetFilename, content, "Auto update: " + finalUris.length + " unique nodes");
+        const res = await createOrUpdateFile(cfg, AUTO_UPDATE_CONFIG.targetFilename, content, "Auto update: " + finalUris.length + " nodes");
 
         if ((res.content || res.sha) && cfg.adminId && cfg.adminId > 0) {
-          const rawUrl = `https://raw.githubusercontent.com/${cfg.configRepoOwner}/${cfg.configRepoName}/${cfg.branch}/${cfg.configsFolder}/${targetFilename}`;
-          await sendMessage(cfg.telegramToken, cfg.adminId, `✅ <b>Авто-обновление успешно!</b>\n\n📡 Уникальных серверов: <code>${finalUris.length}</code>\n🔗 <a href="${rawUrl}">Открыть</a>`);
+          const rawUrl = `https://raw.githubusercontent.com/${cfg.configRepoOwner}/${cfg.configRepoName}/${cfg.branch}/${cfg.configsFolder}/${AUTO_UPDATE_CONFIG.targetFilename}`;
+          await sendMessage(cfg.telegramToken, cfg.adminId, `✅ <b>Основной конфиг обновлен!</b>\n\n📡 Серверов: <code>${finalUris.length}</code>\n🔗 <a href="${rawUrl}">Открыть</a>`);
         }
-        console.log("[Cron] Success: " + finalUris.length + " servers saved");
-      } else {
-        console.error("[Cron] No servers found in any source.");
       }
     } catch (e) {
-      console.error("[Cron] Error:", e);
+      console.error("[Cron] Main Update Error:", e);
+    }
+
+    // 2. Обновление второго конфига (okeania_auto.txt)
+    try {
+      console.log("[Cron] Decoding secondary source: " + SECONDARY_CONFIG.targetUrl);
+      const result2 = await decodeSubscription(SECONDARY_CONFIG.targetUrl);
+      
+      if (result2.ok && result2.uris && result2.uris.length > 0) {
+        let finalUris2 = SECONDARY_CONFIG.doRename ? applyRename(result2.uris) : result2.uris;
+        const profileMetadata2 = { 
+          title: SECONDARY_CONFIG.title, 
+          interval: SECONDARY_CONFIG.interval, 
+          webpage: SECONDARY_CONFIG.webpage, 
+          announce: SECONDARY_CONFIG.announce, 
+          userinfo: SECONDARY_CONFIG.userinfo 
+        };
+        const content2 = buildFile(profileMetadata2, finalUris2);
+        const res2 = await createOrUpdateFile(cfg, SECONDARY_CONFIG.targetFilename, content2, "Secondary Auto update: " + finalUris2.length + " nodes");
+
+        if ((res2.content || res2.sha) && cfg.adminId && cfg.adminId > 0) {
+          const rawUrl2 = `https://raw.githubusercontent.com/${cfg.configRepoOwner}/${cfg.configRepoName}/${cfg.branch}/${cfg.configsFolder}/${SECONDARY_CONFIG.targetFilename}`;
+          await sendMessage(cfg.telegramToken, cfg.adminId, `✅ <b>Второй конфиг (Okeania) обновлен!</b>\n\n📡 Серверов: <code>${finalUris2.length}</code>\n🔗 <a href="${rawUrl2}">Открыть</a>`);
+        }
+        console.log("[Cron] Secondary Success: " + finalUris2.length + " servers saved");
+      } else {
+        console.error("[Cron] Secondary Failed:", result2.error);
+      }
+    } catch (e) {
+      console.error("[Cron] Secondary Update Error:", e);
     }
   }
 };
