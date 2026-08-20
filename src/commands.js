@@ -14,7 +14,7 @@ import { TARGET_USER_AGENTS } from "./useragents.js";
 // КОНФИГУРАЦИЯ АВТО-ОБНОВЛЕНИЯ
 // ==========================================
 const AUTO_UPDATE_CONFIG = {
-  sourcesFileUrl: "https://raw.githubusercontent.com/OceaniaVPN/StekloVPN/main/configs/sources.txt",
+  sourcesFileUrl: "https://github.com/OceaniaVPN/OceaniaVPN/blob/main/src/sources.txt",
   targetFilename: "whitelist.txt",
   title: "Steklo_VPN whitelist",
   interval: 4,
