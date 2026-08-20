@@ -4,45 +4,70 @@ import { decodeSubscription } from "./decoder.js";
 import { buildFile } from "./build.js";
 import { createOrUpdateFile } from "./github.js";
 import { sendMessage } from "./telegram.js";
+import { COUNTRIES } from "./contries.js";
 
 const AUTO_UPDATE_CONFIG = {
-  targetUrl: "https://accargame.cfd/sub/wQu5TeYdOD9YMcp2",
+  // Ссылка на твой файл со списком источников в GitHub
+  sourcesFileUrl: "https://raw.githubusercontent.com/OceaniaVPN/StekloVPN/main/configs/sources.txt",
   targetFilename: "whitelist.txt",
   title: "Steklo_VPN whitelist",
   interval: 4,
   webpage: "https://t.me/free_vpn123456",
   announce: "Steklo vpn besplatno",
   userinfo: "upload=0; download=12884901888; total=536870912000; expire=0",
-  doRename: true
+  doRename: true,
+  // Резервные источники, если файл sources.txt еще не создан или недоступен
+  fallbackSources: [
+    "https://gitlab.com/igareck/vpn-configs-for-russia/-/raw/main/Vless-Reality-White-Lists-Rus-Mobile.txt?ref_type=heads",
+    "https://gitlab.com/igareck/vpn-configs-for-russia/-/raw/main/WHITE-CIDR-RU-all.txt?ref_type=heads",
+    "https://gitlab.com/igareck/vpn-configs-for-russia/-/raw/main/WHITE-SNI-RU-all.txt?ref_type=heads"
+  ]
 };
 
-const COUNTRIES = [
-  { keys: ["ru", "russia", "россия", "moscow", "москва", "spb", "peter", "петербург"], flag: "🇷🇺", name: "Россия" },
-  { keys: ["de", "germany", "германия", "berlin", "берлин", "frankfurt", "франкфурт", "german"], flag: "🇩🇪", name: "Германия" },
-  { keys: ["fi", "finland", "финляндия", "helsinki", "хельсинки", "finnish"], flag: "🇫🇮", name: "Финляндия" },
-  { keys: ["lv", "latvia", "латвия", "riga", "рига", "latvian"], flag: "🇱🇻", name: "Латвия" },
-  { keys: ["us", "usa", "america", "сша", "new york", "los angeles", "chicago"], flag: "🇺🇸", name: "США" },
-  { keys: ["nl", "netherlands", "нидерланды", "amsterdam", "амстердам", "dutch"], flag: "🇳🇱", name: "Нидерланды" },
-  { keys: ["gb", "uk", "британия", "london", "лондон", "england", "англия"], flag: "🇬🇧", name: "Великобритания" },
-  { keys: ["fr", "france", "франция", "paris", "париж", "french"], flag: "🇫🇷", name: "Франция" },
-  { keys: ["ua", "ukraine", "украина", "kiev", "киев", "kyiv"], flag: "🇺🇦", name: "Украина" },
-  { keys: ["ee", "estonia", "эстония", "tallinn", "таллин"], flag: "🇪🇪", name: "Эстония" },
-  { keys: ["cz", "czech", "чехия", "prague", "прага", "czechia"], flag: "🇨🇿", name: "Чехия" },
-  { keys: ["jp", "japan", "япония", "tokyo", "токио"], flag: "🇯🇵", name: "Япония" },
-  { keys: ["au", "australia", "австралия", "sydney", "сидней", "melbourne"], flag: "🇦🇺", name: "Австралия" },
-  { keys: ["hk", "hong kong", "гонконг", "hongkong"], flag: "🇭🇰", name: "Гонконг" },
-  { keys: ["sg", "singapore", "сингапур"], flag: "🇸🇬", name: "Сингапур" },
-  { keys: ["kr", "korea", "корея", "seoul", "сеул", "south korea"], flag: "🇰🇷", name: "Южная Корея" },
-  { keys: ["it", "italy", "италия", "milan", "милан", "rome", "рим"], flag: "🇮🇹", name: "Италия" },
-  { keys: ["es", "spain", "испания", "madrid", "мадрид", "barcelona"], flag: "🇪🇸", name: "Испания" },
-  { keys: ["ca", "canada", "канада", "toronto", "торонто", "vancouver"], flag: "🇨🇦", name: "Канада" },
-  { keys: ["br", "brazil", "бразилия", "sao paulo", "сан-паулу"], flag: "🇧🇷", name: "Бразилия" },
-  { keys: ["in", "india", "индия", "mumbai", "мумбаи", "delhi"], flag: "🇮🇳", name: "Индия" },
-  { keys: ["tr", "turkey", "турция", "istanbul", "стамбул"], flag: "🇹🇷", name: "Турция" },
-  { keys: ["pl", "poland", "польша", "warsaw", "варшава"], flag: "🇵🇱", name: "Польша" },
-  { keys: ["ro", "romania", "румыния", "bucharest", "бухарест"], flag: "🇷🇴", name: "Румыния" },
-  { keys: ["kz", "kazakhstan", "казахстан", "almaty", "алматы", "astana"], flag: "🇰🇿", name: "Казахстан" }
-];
+// 🔥 Функция для извлечения UID из ссылки (для фильтрации дубликатов)
+function extractUid(uri) {
+  // Ищем паттерн protocol://UUID@...
+  const match = uri.match(/^[a-z0-9]+:\/\/([a-f0-9\-]{36})@/i);
+  return match ? match[1] : uri; // Если UID не найден, используем всю строку как уникальный ключ
+}
+
+// 🔥 Функция скачивания и объединения источников с фильтрацией дубликатов
+async function fetchAndMergeSources(sourcesUrls) {
+  const allUris = [];
+  
+  for (const url of sourcesUrls) {
+    try {
+      const res = await fetch(url.trim(), { method: "GET" });
+      if (res.ok) {
+        const text = await res.text();
+        const lines = text.split("\n");
+        for (const line of lines) {
+          const trimmed = line.trim();
+          // Проверяем, что это валидная VPN ссылка
+          if (trimmed && /^(vless|vmess|trojan|ss|hysteria|tuic|wireguard):\/\//i.test(trimmed)) {
+            allUris.push(trimmed);
+          }
+        }
+      }
+    } catch (e) {
+      console.error(`[Auto-Update] Failed to fetch ${url}:`, e.message);
+    }
+  }
+  
+  // Фильтрация дубликатов по UID
+  const seenUids = new Set();
+  const uniqueUris = [];
+  
+  for (const uri of allUris) {
+    const uid = extractUid(uri);
+    if (!seenUids.has(uid)) {
+      seenUids.add(uid);
+      uniqueUris.push(uri);
+    }
+  }
+  
+  return uniqueUris;
+}
 
 function getSuperscript(n) {
   const sup = ['', '¹', '²', '³', '⁴', '⁵', '⁶', '⁷', '⁸', '⁹', '¹⁰', '¹¹', '¹²', '¹³', '¹⁴', '¹⁵', '¹⁶', '¹⁷', '¹⁸', '¹⁹', '²⁰'];
@@ -81,13 +106,14 @@ function applyRename(uris) {
     }
 
     const displayName = country ? country.name : "Рандом";
+    const flag = country ? country.flag : "🌍";
     const counterKey = country ? country.name : "Рандом";
 
     counters[counterKey]++;
     const index = counters[counterKey];
     const superscript = getSuperscript(index);
 
-    return `${baseUri}#${encodeURIComponent(`${displayName} [БС] ${superscript}`)}`;
+    return `${baseUri}#${encodeURIComponent(`${flag} ${displayName} | БС${superscript}`)}`;
   });
 }
 
@@ -124,27 +150,46 @@ export default {
   async scheduled(event, env, ctx) {
     console.log("[Cron] Auto-update triggered at:", new Date().toISOString());
     const cfg = getConfig(env);
-    const { targetUrl, targetFilename, title, interval, webpage, announce, userinfo, doRename } = AUTO_UPDATE_CONFIG;
+    const { sourcesFileUrl, fallbackSources, targetFilename, title, interval, webpage, announce, userinfo, doRename } = AUTO_UPDATE_CONFIG;
 
     try {
-      const result = await decodeSubscription(targetUrl);
-      if (result.ok && result.uris && result.uris.length > 0) {
-        let finalUris = result.uris;
+      // 1. Пытаемся получить список источников из твоего файла
+      let sourcesToUse = fallbackSources;
+      try {
+        const res = await fetch(sourcesFileUrl, { method: "GET" });
+        if (res.ok) {
+          const text = await res.text();
+          const lines = text.split("\n").map(l => l.trim()).filter(l => l && l.startsWith("http"));
+          if (lines.length > 0) {
+            sourcesToUse = lines;
+            console.log(`[Cron] Loaded ${lines.length} sources from sources.txt`);
+          }
+        }
+      } catch (e) {
+        console.log("[Cron] Fallback to default sources due to error:", e.message);
+      }
+
+      // 2. Скачиваем, объединяем и фильтруем дубликаты по UID
+      const uniqueUris = await fetchAndMergeSources(sourcesToUse);
+      console.log(`[Cron] Total unique servers after UID filter: ${uniqueUris.length}`);
+
+      if (uniqueUris.length > 0) {
+        let finalUris = uniqueUris;
         if (doRename) {
           finalUris = applyRename(finalUris);
         }
 
         const profileMetadata = { title, interval, webpage, announce, userinfo };
         const content = buildFile(profileMetadata, finalUris);
-        const res = await createOrUpdateFile(cfg, targetFilename, content, "Auto update: " + finalUris.length + " nodes");
+        const res = await createOrUpdateFile(cfg, targetFilename, content, "Auto update: " + finalUris.length + " unique nodes");
 
         if ((res.content || res.sha) && cfg.adminId && cfg.adminId > 0) {
-          const rawUrl = "https://raw.githubusercontent.com/" + cfg.configRepoOwner + "/" + cfg.configRepoName + "/" + cfg.branch + "/" + cfg.configsFolder + "/" + targetFilename;
-          await sendMessage(cfg.telegramToken, cfg.adminId, "✅ Авто-обновление успешно!\n\n📡 Серверов: <code>" + finalUris.length + "</code>\n🔗 <a href=\"" + rawUrl + "\">Открыть</a>");
+          const rawUrl = `https://raw.githubusercontent.com/${cfg.configRepoOwner}/${cfg.configRepoName}/${cfg.branch}/${cfg.configsFolder}/${targetFilename}`;
+          await sendMessage(cfg.telegramToken, cfg.adminId, `✅ <b>Авто-обновление успешно!</b>\n\n📡 Уникальных серверов: <code>${finalUris.length}</code>\n🔗 <a href="${rawUrl}">Открыть</a>`);
         }
         console.log("[Cron] Success: " + finalUris.length + " servers saved");
       } else {
-        console.error("[Cron] Decode failed:", result.error);
+        console.error("[Cron] No servers found in any source.");
       }
     } catch (e) {
       console.error("[Cron] Error:", e);
