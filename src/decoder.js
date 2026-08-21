@@ -17,12 +17,18 @@ const TRUSTED_BOT_SECRET = "d2a27a0c959353ad5a695917e4c022b35f2376b6b84a66c8";
 
 function isStubResponse(text) {
   if (!text) return true;
+  const trimmed = text.trim();
+  // Настоящая заглушка ВСЕГДА короткая (это HTML-страница с одним
+  // сообщением, а не список из десятков рабочих серверов). Если текста
+  // много (>2000 символов) — это точно реальная подписка, даже если
+  // где-то в её середине затесалась одна мёртвая запись с 0.0.0.0.
+  if (trimmed.length > 2000) return false;
   const stubs = [
     "0.0.0.0", "00000000-0000", "127.0.0.1", "localhost",
     "App not supported", "not supported", "Unsupported app",
     "invalid subscription", "subscription not found"
   ];
-  return stubs.some(s => text.includes(s));
+  return stubs.some(s => trimmed.includes(s));
 }
 
 // 🔥 ПРОВЕРКА НА "ВРЕМЕННОЕ" СООБЩЕНИЕ (конфиг загружается)
