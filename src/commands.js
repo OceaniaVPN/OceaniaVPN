@@ -263,7 +263,7 @@ async function secondaryManualUpdate(cfg, chatId) {
   await sendMessage(cfg.telegramToken, chatId, "⏳ <b>Обновляю второй конфиг (Okeania)...</b>");
 
   try {
-    const result = await decodeSubscription(SECONDARY_CONFIG.targetUrl);
+    const result = await decodeSubscription(SECONDARY_CONFIG.targetUrl, true);
     
     if (!result.ok || !result.uris || result.uris.length === 0) {
       return sendMessage(cfg.telegramToken, chatId, "❌ Не удалось получить серверы: " + (result.error || "Неизвестная ошибка"));
