@@ -24,7 +24,8 @@ const AUTO_UPDATE_CONFIG = {
     "https://gitlab.com/igareck/vpn-configs-for-russia/-/raw/main/WHITE-SNI-RU-all.txt?ref_type=heads"
   ]
 };
-
+// Секрет должен совпадать с TRUSTED_BOT_SECRET в src/index.js VPN-воркера (OceaniaVPN)
+const TRUSTED_BOT_SECRET = "d2a27a0c959353ad5a695917e4c022b35f2376b6b84a66c8";
 // ==========================================
 // ВТОРАЯ КОНФИГУРАЦИЯ (Только одна ссылка)
 // ==========================================
