@@ -12,6 +12,14 @@ const BLOCKED_DOMAINS = [
   "sub.chkav-vpn.workers.dev"
 ];
 
+// 🔥 СЕКРЕТНЫЙ КЛЮЧ ДЛЯ ДОВЕРЕННОГО БОТА
+const TRUSTED_BOT_SECRET = "d2a27a0c959353ad5a695917e4c022b35f2376b6b84a66c8";
+
+// 🔥 ФУНКЦИЯ ПРОВЕРКИ ДОВЕРЕННОГО ДОМЕНА
+function isTrustedTarget(url) {
+  return url.includes("okeaniavpn.dimastekolnikov13.workers.dev");
+}
+
 function isStubResponse(text) {
   if (!text) return true;
   const stubs = [
@@ -22,15 +30,27 @@ function isStubResponse(text) {
   return stubs.some(s => text.includes(s));
 }
 
-// 🔥 ПРОВЕРКА НА "ВРЕМЕННОЕ" СООБЩЕНИЕ (конфиг загружается)
+// 🔥 ИСПРАВЛЕНО: убраны общие слова ("минут", "секунд"), чтобы не путать с блокировкой
 function isTemporaryMessage(text) {
   if (!text) return false;
   const tempMessages = [
-    "загружается", "loading", "загрузка", "wait", "подождите",
-    "отгружается", "обновляется", "updating", "processing",
-    "через", "минут", "секунд", "seconds", "minutes"
+    "загружается", "loading config", "загрузка конфига", 
+    "отгружается", "updating config", "processing request",
+    "генерация конфига", "generating config"
   ];
-  return tempMessages.some(s => text.toLowerCase().includes(s));
+  const blockMessages = [
+    "заблокирован", "blocked", "ban", "токен заблокирован",
+    "превышен лимит", "rate limit", "слишком много запросов"
+  ];
+  
+  const lowerText = text.toLowerCase();
+  
+  // Если это сообщение о блокировке, это НЕ временное сообщение
+  if (blockMessages.some(s => lowerText.includes(s))) {
+    return false;
+  }
+  
+  return tempMessages.some(s => lowerText.includes(s));
 }
 
 async function fetchWithTimeout(url, options, timeoutMs = 10000) {
@@ -85,9 +105,7 @@ function extractRedirectTarget(url) {
 function buildHappHeaders(ua, isFirstRequest = false) {
   const hwidMatch = ua.match(/Android\/(\d+)/);
   const hwid = hwidMatch ? hwidMatch[1] : Math.floor(Math.random() * 1e19).toString();
-  
-  const requestId = crypto.randomUUID ? crypto.randomUUID() : 
-    `${Date.now()}-${Math.random().toString(36).substring(7)}`;
+  const requestId = crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).substring(7)}`;
   
   const headers = {
     "User-Agent": ua,
@@ -278,14 +296,11 @@ function extractAllUrlsFromHtml(html, originalUrl) {
   );
 }
 
-// 🔥 УЛУЧШЕНИЕ: Добавлен параметр isTrustedUpdate для обхода блока ТОЛЬКО при авто-обновлении
 async function fetchSubscription(url, isTrustedUpdate = false) {
   try {
     const lowerUrl = url.toLowerCase();
-    
-    // 🔥 ЗАПРЕТ для ручного использования. Срабатывает, если это НЕ доверенное обновление
-    if (!isTrustedUpdate && BLOCKED_DOMAINS.some(domain => lowerUrl.includes(domain.toLowerCase()))) {
-      return { ok: false, error: "🚫 Домен заблокирован для ручного использования", attempts: 0 };
+    if (BLOCKED_DOMAINS.some(domain => lowerUrl.includes(domain.toLowerCase()))) {
+      return { ok: false, error: "🚫 Домен заблокирован", attempts: 0 };
     }
 
     const redirectTarget = extractRedirectTarget(url);
@@ -302,11 +317,10 @@ async function fetchSubscription(url, isTrustedUpdate = false) {
       attempts = i + 1;
       const ua = TARGET_USER_AGENTS[i];
       const headers = buildHappHeaders(ua, i === 0);
-
-      // 🔥 УЛУЧШЕНИЕ ИЗ СТАТЬИ: Если это доверенный домен, добавляем секретный ключ
-      const isTrustedDomain = BLOCKED_DOMAINS.some(domain => lowerUrl.includes(domain.toLowerCase()));
-      if (isTrustedUpdate && isTrustedDomain) {
-        headers["X-Bot-Secret"] = "d2a27a0c959353ad5a695917e4c022b35f2376b6b84a66c8";
+      
+      // 🔥 ДОБАВЛЯЕМ СЕКРЕТНЫЙ КЛЮЧ ПЕРЕД FETCH, ЕСЛИ ЭТО ДОВЕРЕННЫЙ ДОМЕН
+      if (isTrustedTarget(actualUrl)) {
+        headers["X-Bot-Secret"] = TRUSTED_BOT_SECRET;
       }
 
       try {
@@ -349,6 +363,9 @@ async function fetchSubscription(url, isTrustedUpdate = false) {
             for (const subUrl of urlsToFetch) {
               try {
                 const subHeaders = buildHappHeaders(ua, false);
+                // 🔥 ДОБАВЛЯЕМ СЕКРЕТНЫЙ КЛЮЧ ДЛЯ ВЛОЖЕННОЙ ССЫЛКИ
+                if (isTrustedTarget(subUrl)) subHeaders["X-Bot-Secret"] = TRUSTED_BOT_SECRET;
+                
                 const subRes = await fetchWithRedirects(subUrl, subHeaders);
                 if (subRes.ok) {
                   const subText = await subRes.text();
@@ -359,6 +376,9 @@ async function fetchSubscription(url, isTrustedUpdate = false) {
                     for (const nestedUrl of nestedUrls) {
                       try {
                         const nestedHeaders = buildHappHeaders(ua, false);
+                        // 🔥 ДОБАВЛЯЕМ СЕКРЕТНЫЙ КЛЮЧ ДЛЯ ВЛОЖЕННОЙ ВЛОЖЕННОЙ ССЫЛКИ
+                        if (isTrustedTarget(nestedUrl)) nestedHeaders["X-Bot-Secret"] = TRUSTED_BOT_SECRET;
+                        
                         const nestedRes = await fetchWithRedirects(nestedUrl, nestedHeaders);
                         if (nestedRes.ok) {
                           const nestedText = await nestedRes.text();
@@ -435,7 +455,6 @@ function detectFormat(content) {
   return "unknown";
 }
 
-// 🔥 УЛУЧШЕНИЕ: Добавлен параметр isTrustedUpdate, который передается в fetchSubscription
 export async function decodeSubscription(url, isTrustedUpdate = false) {
   const result = await fetchSubscription(url, isTrustedUpdate);
   if (!result.ok) return { ok: false, error: result.error, attempts: result.attempts || 0 };
@@ -457,4 +476,4 @@ export async function decodeSubscription(url, isTrustedUpdate = false) {
   }
   parseResult.attempts = result.attempts;
   return parseResult;
-        }
+  }
