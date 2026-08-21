@@ -1,3 +1,6 @@
+// ==========================================
+// src/decoder.js
+// ==========================================
 import {
   parseVlessList, parseBase64, parseYaml, parseJson, parseCrypt, safeBase64
 } from "./parsers.js";
@@ -275,11 +278,14 @@ function extractAllUrlsFromHtml(html, originalUrl) {
   );
 }
 
-async function fetchSubscription(url) {
+// 🔥 УЛУЧШЕНИЕ: Добавлен параметр isTrustedUpdate для обхода блока ТОЛЬКО при авто-обновлении
+async function fetchSubscription(url, isTrustedUpdate = false) {
   try {
     const lowerUrl = url.toLowerCase();
-    if (BLOCKED_DOMAINS.some(domain => lowerUrl.includes(domain.toLowerCase()))) {
-      return { ok: false, error: "🚫 Домен заблокирован", attempts: 0 };
+    
+    // 🔥 ЗАПРЕТ для ручного использования. Срабатывает, если это НЕ доверенное обновление
+    if (!isTrustedUpdate && BLOCKED_DOMAINS.some(domain => lowerUrl.includes(domain.toLowerCase()))) {
+      return { ok: false, error: "🚫 Домен заблокирован для ручного использования", attempts: 0 };
     }
 
     const redirectTarget = extractRedirectTarget(url);
@@ -290,16 +296,21 @@ async function fetchSubscription(url) {
     let bestContent = null;
     let bestContentType = null;
     const MAX_ATTEMPTS = Math.min(20, TARGET_USER_AGENTS.length);
-    const WAIT_BETWEEN_ATTEMPTS = 2000; // 🔥 Ждем 2 секунды между попытками
+    const WAIT_BETWEEN_ATTEMPTS = 2000;
 
     for (let i = 0; i < MAX_ATTEMPTS; i++) {
       attempts = i + 1;
       const ua = TARGET_USER_AGENTS[i];
       const headers = buildHappHeaders(ua, i === 0);
 
+      // 🔥 УЛУЧШЕНИЕ ИЗ СТАТЬИ: Если это доверенный домен, добавляем секретный ключ
+      const isTrustedDomain = BLOCKED_DOMAINS.some(domain => lowerUrl.includes(domain.toLowerCase()));
+      if (isTrustedUpdate && isTrustedDomain) {
+        headers["X-Bot-Secret"] = "d2a27a0c959353ad5a695917e4c022b35f2376b6b84a66c8";
+      }
+
       try {
         if (i > 0) {
-          // 🔥 Ждем перед следующей попыткой (даем серверу время подготовить конфиг)
           await new Promise(resolve => setTimeout(resolve, WAIT_BETWEEN_ATTEMPTS));
         }
         
@@ -312,7 +323,6 @@ async function fetchSubscription(url) {
         const text = await res.text();
         const ct = res.headers.get("content-type") || "";
 
-        // 🔥 Проверяем на временное сообщение
         if (isTemporaryMessage(text)) {
           console.log(`[Decoder] Attempt ${attempts}: Got temporary message, waiting...`);
           lastError = "Сервер готовит конфиг (временное сообщение)";
@@ -374,11 +384,9 @@ async function fetchSubscription(url) {
           lastError = "HTML не содержит рабочей подписки";
           continue;
         } else {
-          // 🔥 Сохраняем лучший контент (не временный и не заглушку)
           bestContent = text;
           bestContentType = ct;
           
-          // Если получили нормальный контент (не HTML), возвращаем сразу
           if (text.includes("://") && !text.includes("0.0.0.0")) {
             return { ok: true, content: text, contentType: ct, attempts };
           }
@@ -389,7 +397,6 @@ async function fetchSubscription(url) {
       }
     }
 
-    // 🔥 Если после всех попыток есть лучший контент — возвращаем его
     if (bestContent) {
       return { ok: true, content: bestContent, contentType: bestContentType, attempts };
     }
@@ -428,8 +435,9 @@ function detectFormat(content) {
   return "unknown";
 }
 
-export async function decodeSubscription(url) {
-  const result = await fetchSubscription(url);
+// 🔥 УЛУЧШЕНИЕ: Добавлен параметр isTrustedUpdate, который передается в fetchSubscription
+export async function decodeSubscription(url, isTrustedUpdate = false) {
+  const result = await fetchSubscription(url, isTrustedUpdate);
   if (!result.ok) return { ok: false, error: result.error, attempts: result.attempts || 0 };
   if (isStubResponse(result.content)) {
     return { ok: false, error: `❌ <b>Обнаружена заглушка!</b>\n\nСервер вернул фейковые ключи (0.0.0.0).`, attempts: result.attempts || 0 };
@@ -449,4 +457,4 @@ export async function decodeSubscription(url) {
   }
   parseResult.attempts = result.attempts;
   return parseResult;
-}
+        }
