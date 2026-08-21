@@ -29,7 +29,7 @@ const AUTO_UPDATE_CONFIG = {
 // ВТОРАЯ КОНФИГУРАЦИЯ (Только одна ссылка)
 // ==========================================
 const SECONDARY_CONFIG = {
-  targetUrl: "https://okeaniavpn.dimastekolnikov1.workers.dev/sub?token=4ffeddfb-54ec-41ad-b76d-13f3834f8d9e",
+  targetUrl: "https://okeaniavpn.dimastekolnikov1.workers.dev/sub?token=10da1f96-8798-4a95-a409-a34cfe9cdc1b",
   targetFilename: "okeania_auto.txt", // Имя файла для этой подписки
   title: "OkeaniaVPN Auto",
   interval: 4,
