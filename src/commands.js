@@ -33,7 +33,7 @@ const AUTO_UPDATE_CONFIG = {
 };
 
 const SECONDARY_CONFIG = {
-  targetUrl: "https://okeaniavpn.dimastekolnikov1.workers.dev/sub?token=10da1f96-8798-4a95-a409-a34cfe9cdc1b",
+  targetUrl: "https://okeaniavpn.dimastekolnikov1.workers.dev/sub?token=0fe191f6-7ec7-44ec-aed7-cc6423745ca8",
   targetFilename: "okeania_auto.txt",
   title: "OkeaniaVPN Auto",
   interval: 4,
