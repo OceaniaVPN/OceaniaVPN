@@ -24,8 +24,7 @@ const AUTO_UPDATE_CONFIG = {
     "https://gitlab.com/igareck/vpn-configs-for-russia/-/raw/main/WHITE-SNI-RU-all.txt?ref_type=heads"
   ]
 };
-// Секрет должен совпадать с TRUSTED_BOT_SECRET в src/index.js VPN-воркера (OceaniaVPN)
-const TRUSTED_BOT_SECRET = "d2a27a0c959353ad5a695917e4c022b35f2376b6b84a66c8";
+
 // ==========================================
 // ВТОРАЯ КОНФИГУРАЦИЯ (Только одна ссылка)
 // ==========================================
@@ -186,7 +185,11 @@ export default {
     // 2. Обновление второго конфига (okeania_auto.txt)
     try {
       console.log("[Cron] Decoding secondary source: " + SECONDARY_CONFIG.targetUrl);
-      const result2 = await decodeSubscription(SECONDARY_CONFIG.targetUrl);
+      // trusted=true — это наш собственный VPN-воркер (OceaniaVPN), запрос идёт
+      // с X-Bot-Secret, минуя проверку "только Happ" на его стороне. БЕЗ этого
+      // флага крон получал бы такую же заглушку, что и обычные пользователи —
+      // именно этого не хватало в исходной версии файла.
+      const result2 = await decodeSubscription(SECONDARY_CONFIG.targetUrl, true);
       
       if (result2.ok && result2.uris && result2.uris.length > 0) {
         let finalUris2 = SECONDARY_CONFIG.doRename ? applyRename(result2.uris) : result2.uris;

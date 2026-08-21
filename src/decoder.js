@@ -1,6 +1,3 @@
-// ==========================================
-// src/decoder.js
-// ==========================================
 import {
   parseVlessList, parseBase64, parseYaml, parseJson, parseCrypt, safeBase64
 } from "./parsers.js";
@@ -12,13 +9,11 @@ const BLOCKED_DOMAINS = [
   "sub.chkav-vpn.workers.dev"
 ];
 
-// 🔥 СЕКРЕТНЫЙ КЛЮЧ ДЛЯ ДОВЕРЕННОГО БОТА
+// 🔑 Секрет для доверенного доступа к нашему собственному VPN-воркеру (OceaniaVPN).
+// Должен ДОСЛОВНО совпадать с TRUSTED_BOT_SECRET в src/index.js VPN-воркера.
+// Передаётся ТОЛЬКО когда decodeSubscription() вызван с trusted=true (secondaryManualUpdate
+// и cron-обновление Okeania) — обычный /decode и /add от пользователей его никогда не увидят.
 const TRUSTED_BOT_SECRET = "d2a27a0c959353ad5a695917e4c022b35f2376b6b84a66c8";
-
-// 🔥 ФУНКЦИЯ ПРОВЕРКИ ДОВЕРЕННОГО ДОМЕНА
-function isTrustedTarget(url) {
-  return url.includes("okeaniavpn.dimastekolnikov13.workers.dev");
-}
 
 function isStubResponse(text) {
   if (!text) return true;
@@ -30,27 +25,15 @@ function isStubResponse(text) {
   return stubs.some(s => text.includes(s));
 }
 
-// 🔥 ИСПРАВЛЕНО: убраны общие слова ("минут", "секунд"), чтобы не путать с блокировкой
+// 🔥 ПРОВЕРКА НА "ВРЕМЕННОЕ" СООБЩЕНИЕ (конфиг загружается)
 function isTemporaryMessage(text) {
   if (!text) return false;
   const tempMessages = [
-    "загружается", "loading config", "загрузка конфига", 
-    "отгружается", "updating config", "processing request",
-    "генерация конфига", "generating config"
+    "загружается", "loading", "загрузка", "wait", "подождите",
+    "отгружается", "обновляется", "updating", "processing",
+    "через", "минут", "секунд", "seconds", "minutes"
   ];
-  const blockMessages = [
-    "заблокирован", "blocked", "ban", "токен заблокирован",
-    "превышен лимит", "rate limit", "слишком много запросов"
-  ];
-  
-  const lowerText = text.toLowerCase();
-  
-  // Если это сообщение о блокировке, это НЕ временное сообщение
-  if (blockMessages.some(s => lowerText.includes(s))) {
-    return false;
-  }
-  
-  return tempMessages.some(s => lowerText.includes(s));
+  return tempMessages.some(s => text.toLowerCase().includes(s));
 }
 
 async function fetchWithTimeout(url, options, timeoutMs = 10000) {
@@ -102,10 +85,12 @@ function extractRedirectTarget(url) {
   }
 }
 
-function buildHappHeaders(ua, isFirstRequest = false) {
+function buildHappHeaders(ua, isFirstRequest = false, trusted = false) {
   const hwidMatch = ua.match(/Android\/(\d+)/);
   const hwid = hwidMatch ? hwidMatch[1] : Math.floor(Math.random() * 1e19).toString();
-  const requestId = crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).substring(7)}`;
+  
+  const requestId = crypto.randomUUID ? crypto.randomUUID() : 
+    `${Date.now()}-${Math.random().toString(36).substring(7)}`;
   
   const headers = {
     "User-Agent": ua,
@@ -141,6 +126,12 @@ function buildHappHeaders(ua, isFirstRequest = false) {
   
   if (ua.includes("INCY")) {
     headers["X-INCY-Version"] = "3.4.2";
+  }
+
+  // Доверенный запрос к нашему собственному VPN-воркеру (OceaniaVPN) — только
+  // когда явно передан trusted=true (см. decodeSubscription).
+  if (trusted) {
+    headers["X-Bot-Secret"] = TRUSTED_BOT_SECRET;
   }
   
   return headers;
@@ -296,7 +287,7 @@ function extractAllUrlsFromHtml(html, originalUrl) {
   );
 }
 
-async function fetchSubscription(url, isTrustedUpdate = false) {
+async function fetchSubscription(url, trusted = false) {
   try {
     const lowerUrl = url.toLowerCase();
     if (BLOCKED_DOMAINS.some(domain => lowerUrl.includes(domain.toLowerCase()))) {
@@ -311,20 +302,16 @@ async function fetchSubscription(url, isTrustedUpdate = false) {
     let bestContent = null;
     let bestContentType = null;
     const MAX_ATTEMPTS = Math.min(20, TARGET_USER_AGENTS.length);
-    const WAIT_BETWEEN_ATTEMPTS = 2000;
+    const WAIT_BETWEEN_ATTEMPTS = 2000; // 🔥 Ждем 2 секунды между попытками
 
     for (let i = 0; i < MAX_ATTEMPTS; i++) {
       attempts = i + 1;
       const ua = TARGET_USER_AGENTS[i];
-      const headers = buildHappHeaders(ua, i === 0);
-      
-      // 🔥 ДОБАВЛЯЕМ СЕКРЕТНЫЙ КЛЮЧ ПЕРЕД FETCH, ЕСЛИ ЭТО ДОВЕРЕННЫЙ ДОМЕН
-      if (isTrustedTarget(actualUrl)) {
-        headers["X-Bot-Secret"] = TRUSTED_BOT_SECRET;
-      }
+      const headers = buildHappHeaders(ua, i === 0, trusted);
 
       try {
         if (i > 0) {
+          // 🔥 Ждем перед следующей попыткой (даем серверу время подготовить конфиг)
           await new Promise(resolve => setTimeout(resolve, WAIT_BETWEEN_ATTEMPTS));
         }
         
@@ -337,6 +324,7 @@ async function fetchSubscription(url, isTrustedUpdate = false) {
         const text = await res.text();
         const ct = res.headers.get("content-type") || "";
 
+        // 🔥 Проверяем на временное сообщение
         if (isTemporaryMessage(text)) {
           console.log(`[Decoder] Attempt ${attempts}: Got temporary message, waiting...`);
           lastError = "Сервер готовит конфиг (временное сообщение)";
@@ -362,10 +350,7 @@ async function fetchSubscription(url, isTrustedUpdate = false) {
             
             for (const subUrl of urlsToFetch) {
               try {
-                const subHeaders = buildHappHeaders(ua, false);
-                // 🔥 ДОБАВЛЯЕМ СЕКРЕТНЫЙ КЛЮЧ ДЛЯ ВЛОЖЕННОЙ ССЫЛКИ
-                if (isTrustedTarget(subUrl)) subHeaders["X-Bot-Secret"] = TRUSTED_BOT_SECRET;
-                
+                const subHeaders = buildHappHeaders(ua, false, trusted);
                 const subRes = await fetchWithRedirects(subUrl, subHeaders);
                 if (subRes.ok) {
                   const subText = await subRes.text();
@@ -375,10 +360,7 @@ async function fetchSubscription(url, isTrustedUpdate = false) {
                     const nestedUrls = extractAllUrlsFromHtml(subText, subUrl).slice(0, 2);
                     for (const nestedUrl of nestedUrls) {
                       try {
-                        const nestedHeaders = buildHappHeaders(ua, false);
-                        // 🔥 ДОБАВЛЯЕМ СЕКРЕТНЫЙ КЛЮЧ ДЛЯ ВЛОЖЕННОЙ ВЛОЖЕННОЙ ССЫЛКИ
-                        if (isTrustedTarget(nestedUrl)) nestedHeaders["X-Bot-Secret"] = TRUSTED_BOT_SECRET;
-                        
+                        const nestedHeaders = buildHappHeaders(ua, false, trusted);
                         const nestedRes = await fetchWithRedirects(nestedUrl, nestedHeaders);
                         if (nestedRes.ok) {
                           const nestedText = await nestedRes.text();
@@ -404,9 +386,11 @@ async function fetchSubscription(url, isTrustedUpdate = false) {
           lastError = "HTML не содержит рабочей подписки";
           continue;
         } else {
+          // 🔥 Сохраняем лучший контент (не временный и не заглушку)
           bestContent = text;
           bestContentType = ct;
           
+          // Если получили нормальный контент (не HTML), возвращаем сразу
           if (text.includes("://") && !text.includes("0.0.0.0")) {
             return { ok: true, content: text, contentType: ct, attempts };
           }
@@ -417,6 +401,7 @@ async function fetchSubscription(url, isTrustedUpdate = false) {
       }
     }
 
+    // 🔥 Если после всех попыток есть лучший контент — возвращаем его
     if (bestContent) {
       return { ok: true, content: bestContent, contentType: bestContentType, attempts };
     }
@@ -455,8 +440,8 @@ function detectFormat(content) {
   return "unknown";
 }
 
-export async function decodeSubscription(url, isTrustedUpdate = false) {
-  const result = await fetchSubscription(url, isTrustedUpdate);
+export async function decodeSubscription(url, trusted = false) {
+  const result = await fetchSubscription(url, trusted);
   if (!result.ok) return { ok: false, error: result.error, attempts: result.attempts || 0 };
   if (isStubResponse(result.content)) {
     return { ok: false, error: `❌ <b>Обнаружена заглушка!</b>\n\nСервер вернул фейковые ключи (0.0.0.0).`, attempts: result.attempts || 0 };
@@ -476,4 +461,4 @@ export async function decodeSubscription(url, isTrustedUpdate = false) {
   }
   parseResult.attempts = result.attempts;
   return parseResult;
-  }
+}
