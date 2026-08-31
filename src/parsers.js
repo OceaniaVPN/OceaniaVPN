@@ -30,6 +30,7 @@ export function extractHeaders(content) {
 // ═══════════════════════════════════════════
 export function normalizeUris(uris) {
   if (!uris || !Array.isArray(uris)) return uris;
+
   const seenNames = new Set(); // Гарантирует уникальность имен для Hiddify/Happ
 
   return uris.map(uri => {
@@ -52,6 +53,7 @@ export function normalizeUris(uris) {
 
     // 2. Определяем страну (используем ту же безопасную логику, что и в commands.js)
     const textToCheck = cleanName.toLowerCase() + " " + (baseUri.match(/@([^:/?#]+)/)?.[1].toLowerCase() || "");
+
     let country = null;
     for (const c of COUNTRIES) {
       for (const k of c.keys) {
@@ -67,7 +69,7 @@ export function normalizeUris(uris) {
 
     // 3. Формируем новое имя
     let finalName = cleanName;
-    
+
     if (!finalName || finalName.toLowerCase() === "server" || finalName.toLowerCase() === "node") {
       finalName = country ? `${country.flag} ${country.name}` : "🌍 Server";
     } else if (country) {
@@ -98,46 +100,8 @@ export function normalizeUris(uris) {
 }
 
 // ═══════════════════════════════════════════
-// ПАРСЕРЫ ФОРМАТОВ
+// YAML PROXY → URI (Clash / Mihomo)
 // ═══════════════════════════════════════════
-export function parseVlessList(content) {
-  const uris = [];
-  for (const line of content.split("\n")) {
-    const l = line.trim();
-    if (l && !l.startsWith("#") && /^[a-z0-9]+:\/\//i.test(l)) {
-      uris.push(l);
-    }
-  }
-  return { ok: true, uris, metadata: extractHeaders(content) };
-}
-
-export function parseBase64(content) {
-  const decoded = safeBase64(content.replace(/\s/g, ""));
-  if (!decoded) return { ok: false, error: "Invalid base64" };
-  return parseVlessList(decoded);
-}
-
-export function parseYaml(content) {
-  try {
-    const cfg = yaml.load(content);
-    const uris = [];
-    const proxies = cfg?.proxies || [];
-    for (const p of proxies) {
-      const uri = proxyToUri(p);
-      if (uri) uris.push(uri);
-    }
-    return {
-      ok: true,
-      uris,
-      metadata: extractHeaders(content),
-      title: cfg?.["profile-title"] || cfg?.name,
-      interval: cfg?.["profile-update-interval"],
-    };
-  } catch (e) {
-    return { ok: false, error: `YAML: ${e.message}` };
-  }
-}
-
 export function proxyToUri(p) {
   if (!p || !p.type) return null;
   const t = p.type.toLowerCase();
@@ -217,6 +181,9 @@ export function proxyToUri(p) {
   return null;
 }
 
+// ═══════════════════════════════════════════
+// XRAY OUTBOUND → URI
+// ═══════════════════════════════════════════
 export function xrayToUri(ob) {
   if (!ob || !ob.protocol) return null;
   const proto = ob.protocol.toLowerCase();
@@ -240,10 +207,14 @@ export function xrayToUri(ob) {
     if (ss.realitySettings) {
       params.set("security", "reality");
       if (ss.realitySettings.serverName) params.set("sni", ss.realitySettings.serverName);
+      if (ss.realitySettings.fingerprint) params.set("fp", ss.realitySettings.fingerprint);
       if (ss.realitySettings.publicKey) params.set("pbk", ss.realitySettings.publicKey);
       if (ss.realitySettings.shortId) params.set("sid", ss.realitySettings.shortId);
     }
-    if (ss.tlsSettings?.serverName) params.set("sni", ss.tlsSettings.serverName);
+    if (ss.tlsSettings) {
+      if (ss.tlsSettings.serverName) params.set("sni", ss.tlsSettings.serverName);
+      if (ss.tlsSettings.fingerprint) params.set("fp", ss.tlsSettings.fingerprint);
+    }
     if (usr.flow) params.set("flow", usr.flow);
     const q = params.toString();
     return `vless://${usr.id}@${srv.address}:${srv.port}${q ? "?" + q : ""}#${encodeURIComponent(name)}`;
@@ -258,6 +229,8 @@ export function xrayToUri(ob) {
       aid: usr.alterId || 0, net: ss.network || "tcp", type: "none",
       host: ss.wsSettings?.headers?.Host || "", path: ss.wsSettings?.path || "",
       tls: ss.security === "tls" ? "tls" : "",
+      sni: ss.tlsSettings?.serverName || ss.realitySettings?.serverName || "",
+      fp: ss.tlsSettings?.fingerprint || ss.realitySettings?.fingerprint || "",
     };
     return `vmess://${btoa(JSON.stringify(v))}`;
   }
@@ -281,6 +254,9 @@ export function xrayToUri(ob) {
   return null;
 }
 
+// ═══════════════════════════════════════════
+// SING-BOX OUTBOUND → URI (Happ / Hiddify)
+// ═══════════════════════════════════════════
 export function singboxToUri(ob) {
   if (!ob || !ob.type || !ob.server || !ob.server_port) return null;
   const t = ob.type.toLowerCase();
@@ -318,6 +294,7 @@ export function singboxToUri(ob) {
       aid: ob.alter_id || 0, net: tr.type || "tcp", type: "none",
       host: tr.headers?.Host || "", path: tr.path || "",
       tls: tls.enabled ? "tls" : "", sni: tls.server_name || "",
+      fp: tls.utls?.fingerprint || "",
     };
     return `vmess://${btoa(JSON.stringify(v))}`;
   }
@@ -358,6 +335,47 @@ export function singboxToUri(ob) {
   return null;
 }
 
+// ═══════════════════════════════════════════
+// ПАРСЕРЫ ФОРМАТОВ
+// ═══════════════════════════════════════════
+export function parseVlessList(content) {
+  const uris = [];
+  for (const line of content.split("\n")) {
+    const l = line.trim();
+    if (l && !l.startsWith("#") && /^[a-z0-9]+:\/\//i.test(l)) {
+      uris.push(l);
+    }
+  }
+  return { ok: true, uris, metadata: extractHeaders(content) };
+}
+
+export function parseBase64(content) {
+  const decoded = safeBase64(content.replace(/\s/g, ""));
+  if (!decoded) return { ok: false, error: "Invalid base64" };
+  return parseVlessList(decoded);
+}
+
+export function parseYaml(content) {
+  try {
+    const cfg = yaml.load(content);
+    const uris = [];
+    const proxies = cfg?.proxies || [];
+    for (const p of proxies) {
+      const uri = proxyToUri(p);
+      if (uri) uris.push(uri);
+    }
+    return {
+      ok: true,
+      uris,
+      metadata: extractHeaders(content),
+      title: cfg?.["profile-title"] || cfg?.name,
+      interval: cfg?.["profile-update-interval"],
+    };
+  } catch (e) {
+    return { ok: false, error: `YAML: ${e.message}` };
+  }
+}
+
 export function parseJson(content) {
   try {
     const data = JSON.parse(content);
@@ -370,6 +388,7 @@ export function parseJson(content) {
       return uri;
     };
 
+    // 1. { outbounds: [...] } — Одиночный Xray / Sing-box конфиг
     if (Array.isArray(data?.outbounds)) {
       const skip = ["direct", "block", "dns", "selector", "urltest", "fallback"];
       for (const ob of data.outbounds) {
@@ -379,6 +398,7 @@ export function parseJson(content) {
       }
     }
 
+    // 2. Hiddify: { configs: [{ url }] }
     if (Array.isArray(data?.configs)) {
       for (const c of data.configs) {
         if (typeof c === "string") uris.push(c);
@@ -387,6 +407,7 @@ export function parseJson(content) {
       }
     }
 
+    // 3. Массив строк или объектов (включая массив полных конфигов Hiddify/Xray)
     if (Array.isArray(data)) {
       for (const item of data) {
         if (typeof item === "string" && item.includes("://")) {
@@ -405,6 +426,7 @@ export function parseJson(content) {
       }
     }
 
+    // 4. Один объект (без outbounds на верхнем уровне, но с type)
     if (data?.type && !Array.isArray(data)) {
       const uri = tryConvert(data);
       if (uri) uris.push(uri);
@@ -421,6 +443,14 @@ export function parseJson(content) {
   }
 }
 
+// 🔧 ЧЕСТНАЯ ОБРАБОТКА crypt5/crypt4.
+// Раньше здесь была попытка декодировать содержимое как обычный base64 — но
+// crypt5/crypt4 в Happ/Hiddify это НАСТОЯЩЕЕ AES-шифрование (см. официальный
+// API https://crypto.happ.su/api-v2.php), а не просто base64. Такая попытка
+// никогда не могла сработать и была мёртвым кодом, который вводил в заблуждение
+// (создавал видимость, что бот "иногда умеет" расшифровывать crypt-ссылки).
+// Бот эту функцию не реализует — сразу честно объясняем это и подсказываем
+// единственный реальный способ (экспорт из самого приложения).
 export function parseCrypt(content) {
   const m = content.match(/^crypt[45]:\/\/(.+)$/i);
   if (!m) return { ok: false, error: "Некорректный crypt формат" };
@@ -430,4 +460,4 @@ export function parseCrypt(content) {
       `Это настоящее AES-шифрование, бот не умеет его расшифровывать — это технически невозможно без ключа.\n\n` +
       `💡 <b>Решение:</b> открой ссылку в Happ или Hiddify → экспортируй как обычную vless-подписку → отправь мне уже её.`
   };
-}
+          }
