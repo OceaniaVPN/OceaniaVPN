@@ -3,6 +3,7 @@ import {
 } from "./parsers.js";
 import { escapeHtml } from "./config.js";
 import { TARGET_USER_AGENTS } from "./useragents.js";
+import { connect } from "cloudflare:sockets";
 
 const BLOCKED_DOMAINS = [
   "okeaniavpn.dimastekolnikov13.workers.dev",
@@ -446,7 +447,66 @@ function detectFormat(content) {
   return "unknown";
 }
 
-export async function decodeSubscription(url, trusted = false) {
+// ═══════════════════════════════════════════
+// 🟢🔴 ПРОВЕРКА РАБОТОСПОСОБНОСТИ СЕРВЕРОВ (TCP-пинг)
+// Настоящий сетевой connect на host:port сервера — не HTTP-запрос, а именно
+// проверка, поднимается ли там вообще TCP-соединение (Cloudflare Workers TCP
+// Sockets API). Если сервер не отвечает за timeoutMs — считаем нерабочим.
+// ═══════════════════════════════════════════
+
+function extractHostPort(uri) {
+  try {
+    if (uri.startsWith("vmess://")) {
+      const decoded = safeBase64(uri.substring(8));
+      if (!decoded) return null;
+      const json = JSON.parse(decoded);
+      const port = parseInt(json.port, 10);
+      if (json.add && port) return { host: json.add, port };
+      return null;
+    }
+    // vless:// / trojan:// / ss:// / hysteria2:// / tuic:// — общий паттерн user@host:port
+    const m = uri.match(/@([^:/?#]+):(\d+)/);
+    if (m) return { host: m[1], port: parseInt(m[2], 10) };
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+export async function checkServerAlive(uri, timeoutMs = 2500) {
+  const hp = extractHostPort(uri);
+  if (!hp || !hp.host || !hp.port) return false;
+  let socket;
+  try {
+    socket = connect({ hostname: hp.host, port: hp.port });
+    const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), timeoutMs));
+    await Promise.race([socket.opened, timeout]);
+    return true;
+  } catch {
+    return false;
+  } finally {
+    try { if (socket) socket.close(); } catch {}
+  }
+}
+
+// Проверяет список серверов параллельно (с ограничением одновременных
+// соединений, чтобы не упереться в лимит субзапросов Cloudflare Workers).
+// Возвращает массив true/false того же порядка и длины, что uris.
+export async function checkServersAlive(uris, { concurrency = 8, timeoutMs = 2500 } = {}) {
+  const results = new Array(uris.length).fill(false);
+  let idx = 0;
+  async function worker() {
+    while (idx < uris.length) {
+      const i = idx++;
+      results[i] = await checkServerAlive(uris[i], timeoutMs);
+    }
+  }
+  const workerCount = Math.max(1, Math.min(concurrency, uris.length));
+  await Promise.all(Array.from({ length: workerCount }, () => worker()));
+  return results;
+}
+
+export async function decodeSubscription(url, trusted = false, pingCheck = false) {
   const result = await fetchSubscription(url, trusted);
   if (!result.ok) return { ok: false, error: result.error, attempts: result.attempts || 0 };
   if (isStubResponse(result.content)) {
@@ -466,5 +526,13 @@ export async function decodeSubscription(url, trusted = false) {
     default: parseResult = { ok: false, error: `❓ Неизвестный формат` };
   }
   parseResult.attempts = result.attempts;
+
+  if (pingCheck && parseResult.ok && parseResult.uris?.length > 0) {
+    const alive = await checkServersAlive(parseResult.uris, { concurrency: 8, timeoutMs: 2500 });
+    parseResult.aliveFlags = alive;
+    parseResult.aliveCount = alive.filter(Boolean).length;
+    parseResult.deadCount = alive.length - parseResult.aliveCount;
+  }
+
   return parseResult;
 }

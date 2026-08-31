@@ -1,4 +1,4 @@
-export const STEPS = ["title", "announce", "webpage", "interval"];
+export const STEPS = ["title", "announce", "webpage", "interval", "expireDays"];
 
 export async function getState(cfg, chatId) {
   return await cfg.kv.get(`state_${chatId}`, "json");
@@ -13,7 +13,7 @@ export async function clearState(cfg, chatId) {
 }
 
 export const STEP_MSG = {
-  title: `📝 <b>Шаг 1/4 — Имя подписки</b>
+  title: `📝 <b>Шаг 1/5 — Имя подписки</b>
 
 Как будет называться твоя подписка в приложении?
 
@@ -21,7 +21,7 @@ export const STEP_MSG = {
 
 Отправь <code>none</code> чтобы пропустить.`,
 
-  announce: `📢 <b>Шаг 2/4 — Описание</b>
+  announce: `📢 <b>Шаг 2/5 — Описание</b>
 
 Объявление для пользователей (видно в приложении).
 
@@ -29,7 +29,7 @@ export const STEP_MSG = {
 
 Отправь <code>none</code> чтобы пропустить.`,
 
-  webpage: `🌐 <b>Шаг 3/4 — Ссылка поддержки</b>
+  webpage: `🌐 <b>Шаг 3/5 — Ссылка поддержки</b>
 
 Ссылка на канал или поддержку.
 
@@ -37,11 +37,19 @@ export const STEP_MSG = {
 
 Отправь <code>none</code> чтобы пропустить.`,
 
-  interval: `⏰ <b>Шаг 4/4 — Интервал обновления</b>
+  interval: `⏰ <b>Шаг 4/5 — Интервал обновления</b>
 
 Через сколько часов приложение должно обновлять подписку?
 
 <i>Пример:</i> <code>4</code>
 
 Отправь <code>none</code> чтобы пропустить.`,
+
+  expireDays: `⏳ <b>Шаг 5/5 — Срок действия</b>
+
+Сколько дней должна действовать подписка? По истечении срока приложение покажет, что подписка истекла.
+
+<i>Пример:</i> <code>30</code> — подписка на 30 дней
+
+Отправь <code>0</code> или <code>none</code> для безлимитного срока (без ограничения).`,
 };

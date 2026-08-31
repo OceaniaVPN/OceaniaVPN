@@ -1,7 +1,7 @@
 import yaml from "js-yaml";
 
 // ═══════════════════════════════════════════
-//  УТИЛИТЫ
+// УТИЛИТЫ
 // ═══════════════════════════════════════════
 export function safeBase64(data) {
   try {
@@ -25,13 +25,13 @@ export function extractHeaders(content) {
 }
 
 // ═══════════════════════════════════════════
-//  YAML PROXY → URI (Clash / Mihomo)
+// YAML PROXY → URI (Clash / Mihomo)
 // ═══════════════════════════════════════════
 export function proxyToUri(p) {
   if (!p || !p.type) return null;
   const t = p.type.toLowerCase();
   const name = p.name || "Server";
-  
+
   if (t === "vless") {
     const params = new URLSearchParams();
     if (p.network) params.set("type", p.network);
@@ -48,7 +48,7 @@ export function proxyToUri(p) {
     const q = params.toString();
     return `vless://${p.uuid}@${p.server}:${p.port}${q ? "?" + q : ""}#${encodeURIComponent(name)}`;
   }
-  
+
   if (t === "vmess") {
     const v = {
       v: "2", ps: name, add: p.server, port: p.port, id: p.uuid,
@@ -58,7 +58,7 @@ export function proxyToUri(p) {
     };
     return `vmess://${btoa(JSON.stringify(v))}`;
   }
-  
+
   if (t === "trojan") {
     const params = new URLSearchParams();
     params.set("security", "tls");
@@ -69,12 +69,12 @@ export function proxyToUri(p) {
     const q = params.toString();
     return `trojan://${p.password}@${p.server}:${p.port}${q ? "?" + q : ""}#${encodeURIComponent(name)}`;
   }
-  
+
   if (t === "ss" || t === "shadowsocks") {
     const ui = btoa(`${p.cipher}:${p.password}`);
     return `ss://${ui}@${p.server}:${p.port}#${encodeURIComponent(name)}`;
   }
-  
+
   if (t === "hysteria" || t === "hysteria2") {
     const params = new URLSearchParams();
     if (p.sni) params.set("sni", p.sni);
@@ -84,7 +84,7 @@ export function proxyToUri(p) {
     const q = params.toString();
     return `hysteria2://${p.password}@${p.server}:${p.port}${q ? "?" + q : ""}#${encodeURIComponent(name)}`;
   }
-  
+
   if (t === "tuic") {
     const params = new URLSearchParams();
     if (p.sni) params.set("sni", p.sni);
@@ -93,7 +93,7 @@ export function proxyToUri(p) {
     const q = params.toString();
     return `tuic://${p.uuid}:${p.password}@${p.server}:${p.port}${q ? "?" + q : ""}#${encodeURIComponent(name)}`;
   }
-  
+
   if (t === "wireguard" || t === "wg") {
     const params = new URLSearchParams();
     if (p["private-key"]) params.set("private_key", p["private-key"]);
@@ -102,19 +102,19 @@ export function proxyToUri(p) {
     const q = params.toString();
     return `wg://${p.server}:${p.port}${q ? "?" + q : ""}#${encodeURIComponent(name)}`;
   }
-  
+
   return null;
 }
 
 // ═══════════════════════════════════════════
-//  XRAY OUTBOUND → URI
+// XRAY OUTBOUND → URI
 // ═══════════════════════════════════════════
 export function xrayToUri(ob) {
   if (!ob || !ob.protocol) return null;
   const proto = ob.protocol.toLowerCase();
   const name = ob.tag || "Server";
   const ss = ob.streamSettings || {};
-  
+
   if (proto === "vless" && ob.settings?.vnext?.[0]) {
     const srv = ob.settings.vnext[0];
     const usr = srv.users?.[0];
@@ -140,7 +140,7 @@ export function xrayToUri(ob) {
     const q = params.toString();
     return `vless://${usr.id}@${srv.address}:${srv.port}${q ? "?" + q : ""}#${encodeURIComponent(name)}`;
   }
-  
+
   if (proto === "vmess" && ob.settings?.vnext?.[0]) {
     const srv = ob.settings.vnext[0];
     const usr = srv.users?.[0];
@@ -153,7 +153,7 @@ export function xrayToUri(ob) {
     };
     return `vmess://${btoa(JSON.stringify(v))}`;
   }
-  
+
   if (proto === "trojan" && ob.settings?.servers?.[0]) {
     const srv = ob.settings.servers[0];
     const params = new URLSearchParams();
@@ -163,18 +163,18 @@ export function xrayToUri(ob) {
     const q = params.toString();
     return `trojan://${srv.password}@${srv.address}:${srv.port}${q ? "?" + q : ""}#${encodeURIComponent(name)}`;
   }
-  
+
   if (proto === "shadowsocks" && ob.settings?.servers?.[0]) {
     const srv = ob.settings.servers[0];
     const ui = btoa(`${srv.method}:${srv.password}`);
     return `ss://${ui}@${srv.address}:${srv.port}#${encodeURIComponent(name)}`;
   }
-  
+
   return null;
 }
 
 // ═══════════════════════════════════════════
-//  SING-BOX OUTBOUND → URI (Happ / Hiddify)
+// SING-BOX OUTBOUND → URI (Happ / Hiddify)
 // ═══════════════════════════════════════════
 export function singboxToUri(ob) {
   if (!ob || !ob.type || !ob.server || !ob.server_port) return null;
@@ -182,7 +182,7 @@ export function singboxToUri(ob) {
   const name = ob.tag || "Server";
   const server = ob.server;
   const port = ob.server_port;
-  
+
   if (t === "vless") {
     const params = new URLSearchParams();
     const tr = ob.transport || {};
@@ -204,7 +204,7 @@ export function singboxToUri(ob) {
     const q = params.toString();
     return `vless://${ob.uuid}@${server}:${port}${q ? "?" + q : ""}#${encodeURIComponent(name)}`;
   }
-  
+
   if (t === "vmess") {
     const tr = ob.transport || {};
     const tls = ob.tls || {};
@@ -216,7 +216,7 @@ export function singboxToUri(ob) {
     };
     return `vmess://${btoa(JSON.stringify(v))}`;
   }
-  
+
   if (t === "trojan") {
     const params = new URLSearchParams();
     const tls = ob.tls || {};
@@ -228,12 +228,12 @@ export function singboxToUri(ob) {
     const q = params.toString();
     return `trojan://${ob.password}@${server}:${port}${q ? "?" + q : ""}#${encodeURIComponent(name)}`;
   }
-  
+
   if (t === "shadowsocks") {
     const ui = btoa(`${ob.method}:${ob.password}`);
     return `ss://${ui}@${server}:${port}#${encodeURIComponent(name)}`;
   }
-  
+
   if (t === "hysteria2" || t === "hysteria") {
     const params = new URLSearchParams();
     if (ob.tls?.server_name) params.set("sni", ob.tls.server_name);
@@ -241,7 +241,7 @@ export function singboxToUri(ob) {
     const q = params.toString();
     return `hysteria2://${ob.password}@${server}:${port}${q ? "?" + q : ""}#${encodeURIComponent(name)}`;
   }
-  
+
   if (t === "tuic") {
     const params = new URLSearchParams();
     if (ob.tls?.server_name) params.set("sni", ob.tls.server_name);
@@ -249,12 +249,12 @@ export function singboxToUri(ob) {
     const q = params.toString();
     return `tuic://${ob.uuid}:${ob.password}@${server}:${port}${q ? "?" + q : ""}#${encodeURIComponent(name)}`;
   }
-  
+
   return null;
 }
 
 // ═══════════════════════════════════════════
-//  ПАРСЕРЫ ФОРМАТОВ
+// ПАРСЕРЫ ФОРМАТОВ
 // ═══════════════════════════════════════════
 export function parseVlessList(content) {
   const uris = [];
@@ -298,7 +298,7 @@ export function parseJson(content) {
   try {
     const data = JSON.parse(content);
     const uris = [];
-    
+
     const tryConvert = (ob) => {
       let uri = singboxToUri(ob);
       if (!uri) uri = xrayToUri(ob);
@@ -306,6 +306,7 @@ export function parseJson(content) {
       return uri;
     };
 
+    // 1. { outbounds: [...] } — Одиночный Xray / Sing-box конфиг
     if (Array.isArray(data?.outbounds)) {
       const skip = ["direct", "block", "dns", "selector", "urltest", "fallback"];
       for (const ob of data.outbounds) {
@@ -315,6 +316,7 @@ export function parseJson(content) {
       }
     }
 
+    // 2. Hiddify: { configs: [{ url }] }
     if (Array.isArray(data?.configs)) {
       for (const c of data.configs) {
         if (typeof c === "string") uris.push(c);
@@ -323,6 +325,7 @@ export function parseJson(content) {
       }
     }
 
+    // 3. Массив строк или объектов (включая массив полных конфигов Hiddify/Xray)
     if (Array.isArray(data)) {
       for (const item of data) {
         if (typeof item === "string" && item.includes("://")) {
@@ -341,6 +344,7 @@ export function parseJson(content) {
       }
     }
 
+    // 4. Один объект (без outbounds на верхнем уровне, но с type)
     if (data?.type && !Array.isArray(data)) {
       const uri = tryConvert(data);
       if (uri) uris.push(uri);
@@ -357,166 +361,21 @@ export function parseJson(content) {
   }
 }
 
+// 🔧 ЧЕСТНАЯ ОБРАБОТКА crypt5/crypt4.
+// Раньше здесь была попытка декодировать содержимое как обычный base64 — но
+// crypt5/crypt4 в Happ/Hiddify это НАСТОЯЩЕЕ AES-шифрование (см. официальный
+// API https://crypto.happ.su/api-v2.php), а не просто base64. Такая попытка
+// никогда не могла сработать и была мёртвым кодом, который вводил в заблуждение
+// (создавал видимость, что бот "иногда умеет" расшифровывать crypt-ссылки).
+// Бот эту функцию не реализует — сразу честно объясняем это и подсказываем
+// единственный реальный способ (экспорт из самого приложения).
 export function parseCrypt(content) {
   const m = content.match(/^crypt[45]:\/\/(.+)$/i);
   if (!m) return { ok: false, error: "Некорректный crypt формат" };
-  const decoded = safeBase64(m[1]);
-  if (decoded && decoded.includes("://")) {
-    return parseVlessList(decoded);
-  }
   return {
     ok: false,
-    error: `⚠️ <b>crypt5/crypt4</b> — зашифрованный формат Happ/Hiddify\n\nТребуется AES-ключ для дешифровки.\n\n💡 <b>Решение:</b> открой ссылку в Happ или Hiddify → экспортируй как обычную vless подписку → отправь мне снова.`
+    error: `⚠️ <b>crypt5/crypt4</b> — зашифрованный формат Happ/Hiddify\n\n` +
+      `Это настоящее AES-шифрование, бот не умеет его расшифровывать — это технически невозможно без ключа.\n\n` +
+      `💡 <b>Решение:</b> открой ссылку в Happ или Hiddify → экспортируй как обычную vless-подписку → отправь мне уже её.`
   };
 }
-
-// ═══════════════════════════════════════════
-// HTML → сбор конфигов со страницы
-// ═══════════════════════════════════════════
-
-const PROXY_SCHEMES = [
-  "vless", "vmess", "trojan", "ss", "ssr",
-  "hysteria", "hysteria2", "hy2", "tuic", "wg", "wireguard",
-  "socks", "socks5", "http",
-];
-
-function buildProxyUriRegex() {
-  const schemes = PROXY_SCHEMES.join("|");
-  // 🔥 ИСПРАВЛЕНО: убрана лишняя закрывающая скобка ']', которая ломала парсинг
-  return new RegExp(`(?:${schemes})://[^\\s"'<>&]+`, "gi");
-}
-
-function buildSubLinkRegex() {
-  return /https?:\/\/[^\s"'<>\)\]]+/gi;
-}
-
-const SUB_LINK_IGNORE = /\.(png|jpe?g|gif|svg|webp|ico|css|woff2?|ttf|map)(\?|#|$)/i;
-const SUB_LINK_IGNORE_HOSTS = /(github\.com\/(?!.*\/raw\/)|githubusercontent\.com\/.*\.md$|twitter\.com|t\.me\/(?!.*[?&#]|.*\/joinchat)|youtube\.com|vk\.com|facebook\.com|instagram\.com)/i;
-const SUB_LINK_LIKELY = /(sub|config|clash|singbox|sing-box|v2ray|xray|proxy|nodes?|link|raw\.githubusercontent|\/api\/|token=|\.ya?ml($|\?)|\.json($|\?)|\.txt($|\?))/i;
-
-function stripHtmlEntities(str) {
-  return str
-    .replace(/&amp;/g, "&")
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">");
-}
-
-function extractCodeBlocks(html) {
-  const blocks = [];
-  const re = /<(pre|code|textarea)[^>]*>([\s\S]*?)<\/\1>/gi;
-  let m;
-  while ((m = re.exec(html)) !== null) {
-    const text = stripHtmlEntities(m[2].replace(/<[^>]+>/g, ""));
-    if (text.trim()) blocks.push(text);
-  }
-  return blocks;
-}
-
-export function parseHtml(html, pageUrl) {
-  if (!html || typeof html !== "string") {
-    return { ok: false, error: "Пустой HTML" };
-  }
-
-  const uris = new Set();
-  const subLinks = new Set();
-
-  const uriRe = buildProxyUriRegex();
-  const linkRe = buildSubLinkRegex();
-
-  const cleanedHtml = stripHtmlEntities(html);
-  for (const match of cleanedHtml.matchAll(uriRe)) {
-    uris.add(match[0].replace(/[.,;]+$/, ""));
-  }
-
-  for (const block of extractCodeBlocks(html)) {
-    const listResult = parseVlessList(block);
-    if (listResult.ok) {
-      for (const u of listResult.uris) uris.add(u);
-    }
-    if (!/:\/\//.test(block)) {
-      const b64Result = parseBase64(block);
-      if (b64Result.ok) {
-        for (const u of b64Result.uris) uris.add(u);
-      }
-    }
-  }
-
-  for (const match of cleanedHtml.matchAll(linkRe)) {
-    const url = match[0].replace(/[.,;]+$/, "");
-    if (SUB_LINK_IGNORE.test(url)) continue;
-    if (SUB_LINK_IGNORE_HOSTS.test(url)) continue;
-    if (SUB_LINK_LIKELY.test(url) || /\/raw\//.test(url)) {
-      subLinks.add(url);
-    }
-  }
-
-  const normalizedSubLinks = [...subLinks].map((u) => {
-    const blobMatch = u.match(/^https:\/\/github\.com\/([^/]+)\/([^/]+)\/blob\/(.+)$/i);
-    if (blobMatch) {
-      return `https://raw.githubusercontent.com/${blobMatch[1]}/${blobMatch[2]}/${blobMatch[3]}`;
-    }
-    return u;
-  });
-
-  if (uris.size === 0 && normalizedSubLinks.length === 0) {
-    return { ok: false, error: "На странице не найдено конфигов или ссылок на подписки" };
-  }
-
-  return {
-    ok: true,
-    uris: [...uris],
-    subLinks: normalizedSubLinks,
-    metadata: extractHeaders(html),
-  };
-}
-
-export async function parseUrl(url, fetcher, depth = 0) {
-  let content;
-  try {
-    content = await fetcher(url);
-  } catch (e) {
-    return { ok: false, error: `Не удалось скачать: ${e.message}` };
-  }
-
-  const trimmed = content.trim();
-  const looksLikeHtml = /^<!doctype html|^<html[\s>]/i.test(trimmed) || /<\/html>/i.test(trimmed);
-
-  if (looksLikeHtml) {
-    const htmlResult = parseHtml(content, url);
-    if (!htmlResult.ok) return htmlResult;
-
-    let allUris = [...htmlResult.uris];
-
-    if (depth === 0) {
-      for (const sub of htmlResult.subLinks.slice(0, 10)) {
-        const nested = await parseUrl(sub, fetcher, depth + 1);
-        if (nested.ok) allUris.push(...nested.uris);
-      }
-    }
-
-    const uniqueUris = [...new Set(allUris)];
-    if (uniqueUris.length === 0) {
-      return { ok: false, error: "Конфиги не найдены ни на странице, ни по вложенным ссылкам" };
-    }
-    return { ok: true, uris: uniqueUris, metadata: htmlResult.metadata };
-  }
-
-  if (/^crypt[45]:\/\//i.test(trimmed)) return parseCrypt(trimmed);
-  if (/^[a-z0-9]+:\/\//i.test(trimmed) || trimmed.split("\n").some((l) => /^[a-z0-9]+:\/\//i.test(l.trim()))) {
-    return parseVlessList(trimmed);
-  }
-  try {
-    JSON.parse(trimmed);
-    return parseJson(trimmed);
-  } catch {}
-  
-  if (/^proxies:|^proxy-groups:/m.test(trimmed)) {
-    return parseYaml(trimmed);
-  }
-  const b64 = parseBase64(trimmed);
-  if (b64.ok) return b64;
-
-  return { ok: false, error: "Неизвестный формат содержимого по ссылке" };
-        }

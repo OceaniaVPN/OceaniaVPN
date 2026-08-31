@@ -1,7 +1,7 @@
 import { sendMessage, editMessage, answerCallback } from "./telegram.js";
 import { createOrUpdateFile, deleteFile, getFileContent, listAllUsers } from "./github.js";
 import { getState, setState, clearState, STEPS, STEP_MSG } from "./state.js";
-import { decodeSubscription } from "./decoder.js";
+import { decodeSubscription, checkServersAlive } from "./decoder.js";
 import { buildFile } from "./build.js";
 import { escapeHtml } from "./config.js";
 import { COUNTRIES } from "./contries.js";
@@ -225,7 +225,7 @@ export async function cmdDecode(cfg, chatId, url) {
       loadingMsgId = loadingMsg.result.message_id;
     }
 
-    const result = await decodeSubscription(url);
+    const result = await decodeSubscription(url, false, true);
 
     if (!result.ok) {
       const errorMsg = `❌ <b>Не удалось расшифровать</b>\n\n${result.error}`;
@@ -235,6 +235,11 @@ export async function cmdDecode(cfg, chatId, url) {
         await sendMessage(cfg.telegramToken, chatId, errorMsg);
       }
       return;
+    }
+
+    if (loadingMsgId) {
+      await editMessage(cfg.telegramToken, chatId, loadingMsgId,
+        `⏳ <b>Формат определён</b>\n\n📡 Найдено серверов: <code>${(result.uris || []).length}</code>\n🟢 Проверяю, какие реально работают (пинг)...`);
     }
 
     const uris = result.uris || [];
@@ -275,17 +280,29 @@ export async function cmdDecode(cfg, chatId, url) {
       else stats.other++;
     }
 
-    const kb = {
-      inline_keyboard: [
-        [{ text: "📋 Открыть подписку", url: rawUrl }],
-      ]
-    };
+    // 🟢🔴 Результат пинга: сколько из найденных серверов реально живые.
+    const aliveFlags = result.aliveFlags || [];
+    const aliveCount = result.aliveCount ?? aliveFlags.filter(Boolean).length;
+    const deadCount = result.deadCount ?? (aliveFlags.length - aliveCount);
+    const aliveUris = uris.filter((_, i) => aliveFlags[i]);
+
+    const kb = { inline_keyboard: [[{ text: "📋 Открыть подписку", url: rawUrl }]] };
+    if (aliveFlags.length > 0 && deadCount > 0 && aliveCount > 0) {
+      // Кнопка появляется только если пинг реально что-то отсеял — сохраняем
+      // список живых на 10 минут в KV, чтобы не гонять пинг повторно при клике.
+      await cfg.kv.put(`pingcache_${chatId}`, JSON.stringify({ uris: aliveUris, title: meta["profile-title"] || `Decoded • ${hostname}` }), { expirationTtl: 600 });
+      kb.inline_keyboard.push([{ text: `✅ Сохранить только рабочие (${aliveCount})`, callback_data: "save_alive" }]);
+    }
+
+    const pingLine = aliveFlags.length > 0
+      ? `\n🟢 <b>Рабочих:</b> <code>${aliveCount}</code> · 🔴 <b>Не отвечают:</b> <code>${deadCount}</code>\n`
+      : "";
 
     const successMsg = `✅ <b>Успешно расшифровано!</b>
 
 ━━━━━━━━━━━━━━━━━━━━
 📡 <b>Серверов найдено:</b> <code>${uris.length}</code>
-
+${pingLine}
 <b>Протоколы:</b>
 ${stats.vless ? `• VLESS: <b>${stats.vless}</b>\n` : ""}` +
       `${stats.vmess ? `• VMess: <b>${stats.vmess}</b>\n` : ""}` +
@@ -364,12 +381,17 @@ export async function cmdList(cfg, chatId, page = 0) {
   const start = safePage * PER_PAGE;
   const pageLinks = links.slice(start, start + PER_PAGE);
 
+  // 🟢🔴 Пингуем именно эту страницу (до 20 серверов) в реальном времени —
+  // "если человек заходит в сервер лист, видит что у него не работает".
+  const aliveFlags = await checkServersAlive(pageLinks, { concurrency: 8, timeoutMs: 2000 });
+
   let msg = `📡 <b>Серверы подписки</b>\nВсего: <code>${links.length}</code> · Страница <code>${safePage + 1}/${totalPages}</code>\n\n`;
   pageLinks.forEach((uri, i) => {
     const num = start + i + 1;
     const country = detectCountry(uri);
     const label = country ? `${country.flag} ${country.name}` : "🌍 Неизвестно";
-    msg += `<b>${num}.</b> ${label} <i>(${protocolOf(uri)})</i>\n`;
+    const status = aliveFlags[i] ? "🟢" : "🔴";
+    msg += `<b>${num}.</b> ${status} ${label} <i>(${protocolOf(uri)})</i>\n`;
   });
   msg += `\n💡 <code>/delete N</code> — удалить сервер\n💡 <code>/replace N ссылка</code> — заменить сервер`;
 
@@ -438,8 +460,15 @@ export async function cmdAdd(cfg, chatId, url) {
   const res = await createOrUpdateFile(cfg, userFile, updated, `Add ${toAdd.length} nodes`);
 
   if (res.content || res.sha) {
+    // 🟢🔴 Пингуем только то, что реально добавили — не всю подписку заново.
+    const aliveFlags = await checkServersAlive(toAdd, { concurrency: 8, timeoutMs: 2500 });
+    const aliveCount = aliveFlags.filter(Boolean).length;
+    const deadCount = toAdd.length - aliveCount;
+    const pingLine = toAdd.length > 1
+      ? `\n🟢 Рабочих: <code>${aliveCount}</code> · 🔴 Не отвечают: <code>${deadCount}</code>`
+      : `\n${aliveFlags[0] ? "🟢 Сервер отвечает" : "🔴 Сервер не отвечает (добавлен, но может не работать)"}`;
     await sendMessage(cfg.telegramToken, chatId,
-      `✅ <b>Добавлено серверов:</b> <code>${toAdd.length}</code>\n📊 <b>Всего:</b> <code>${links.length}</code>`);
+      `✅ <b>Добавлено серверов:</b> <code>${toAdd.length}</code>\n📊 <b>Всего:</b> <code>${links.length}</code>${pingLine}`);
   } else {
     await sendMessage(cfg.telegramToken, chatId, `❌ Ошибка`);
   }
@@ -588,6 +617,23 @@ export async function handleCallback(cfg, cb) {
     await cmdExport(cfg, chatId);
   } else if (cb.data === "delete") {
     await cmdDelete(cfg, chatId);
+  } else if (cb.data === "save_alive") {
+    const cached = await cfg.kv.get(`pingcache_${chatId}`, "json");
+    if (!cached || !cached.uris?.length) {
+      await sendMessage(cfg.telegramToken, chatId, `⌛ <b>Список рабочих серверов устарел</b>\n\nЗапусти /decode заново.`);
+    } else {
+      const userFile = `user_${chatId}.txt`;
+      const content = buildFile({ title: cached.title, interval: 4 }, cached.uris);
+      const res = await createOrUpdateFile(cfg, userFile, content, `Save ${cached.uris.length} alive servers`);
+      if (res.content || res.sha) {
+        const rawUrl = `https://raw.githubusercontent.com/${cfg.configRepoOwner}/${cfg.configRepoName}/${cfg.branch}/${cfg.configsFolder}/${userFile}`;
+        await sendMessage(cfg.telegramToken, chatId,
+          `✅ <b>Подписка сохранена!</b>\n\n🟢 Только рабочие серверы: <code>${cached.uris.length}</code>\n🔗 <code>${rawUrl}</code>`,
+          { inline_keyboard: [[{ text: "🔗 Открыть", url: rawUrl }]] });
+      } else {
+        await sendMessage(cfg.telegramToken, chatId, `❌ Ошибка сохранения`);
+      }
+    }
   } else if (cb.data === "help") {
     await cmdHelp(cfg, chatId);
   }
