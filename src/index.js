@@ -30,7 +30,7 @@ const AUTO_UPDATE_CONFIG = {
 // ==========================================
 const SECONDARY_CONFIG = {
   targetUrl: "https://okeaniavpn.dimastekolnikov1.workers.dev/sub?token=0fe191f6-7ec7-44ec-aed7-cc6423745ca8",
-  targetFilename: "okeania_auto.txt", // Имя файла для этой подписки
+  targetFilename: "okeania_auto.txt",
   title: "OkeaniaVPN Auto",
   interval: 4,
   webpage: "https://t.me/free_vpn123456",
@@ -79,6 +79,16 @@ function getSuperscript(n) {
   return "#" + n;
 }
 
+// ✅ ИСПРАВЛЕНИЕ: Безопасная проверка ключей (чтобы "ro" не триггерилось на "proxy" или "trojan")
+function matchesCountryKey(text, key) {
+  if (key.length <= 2) {
+    // Для коротких ключей (ru, ro, in и т.д.) требуем, чтобы они были отдельным словом
+    const regex = new RegExp(`(^|[^a-zа-яё0-9])${key}([^a-zа-яё0-9]|$)`);
+    return regex.test(text);
+  }
+  return text.includes(key);
+}
+
 function applyRename(uris) {
   const counters = {};
   COUNTRIES.forEach(function(c) { counters[c.name] = 0; });
@@ -90,19 +100,22 @@ function applyRename(uris) {
     const originalName = hashIndex === -1 ? "" : decodeURIComponent(uri.substring(hashIndex + 1)).toLowerCase();
 
     let country = null;
+    
+    // 1. Сначала проверяем имя (remark) после #
     for (const c of COUNTRIES) {
-      if (c.keys.some(function(key) { return originalName.includes(key); })) {
+      if (c.keys.some(function(key) { return matchesCountryKey(originalName, key); })) {
         country = c;
         break;
       }
     }
     
+    // 2. Если не нашли, проверяем хост (домен или IP после @)
     if (!country) {
       const hostMatch = baseUri.match(/@([^:/]+)/);
       if (hostMatch) {
         const host = hostMatch[1].toLowerCase();
         for (const c of COUNTRIES) {
-          if (c.keys.some(function(key) { return host.includes(key); })) {
+          if (c.keys.some(function(key) { return matchesCountryKey(host, key); })) {
             country = c;
             break;
           }
@@ -185,9 +198,6 @@ export default {
     // 2. Обновление второго конфига (okeania_auto.txt)
     try {
       console.log("[Cron] Decoding secondary source: " + SECONDARY_CONFIG.targetUrl);
-      // trusted=true — это наш собственный VPN-воркер (OceaniaVPN), запрос идёт
-      // с X-Bot-Secret, минуя проверку "только Happ" на его стороне. БЕЗ этого
-      // флага крон получал бы такую же заглушку, что и обычные пользователи.
       const result2 = await decodeSubscription(SECONDARY_CONFIG.targetUrl, true);
       
       if (result2.ok && result2.uris && result2.uris.length > 0) {
