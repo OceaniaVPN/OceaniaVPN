@@ -26,29 +26,7 @@ export function extractHeaders(content) {
 }
 
 // ═══════════════════════════════════════════
-// УМНОЕ ОПРЕДЕЛЕНИЕ СТРАНЫ (Исправление бага "всё Румыния")
-// ═══════════════════════════════════════════
-export function detectCountrySafe(baseUri, name) {
-  const textToCheck = (name + " " + baseUri).toLowerCase();
-
-  for (const c of COUNTRIES) {
-    for (const k of c.keys) {
-      if (k.length <= 2) {
-        // Для коротких кодов (ro, de, us) требуем строгих границ слова.
-        // Это предотвращает совпадения типа "Euro" -> "ro" или "Proxy" -> "ro"
-        const regex = new RegExp(`(^|[^a-zа-яё0-9])${k}([^a-zа-яё0-9]|$)`);
-        if (regex.test(textToCheck)) return c;
-      } else {
-        // Для полных названий (германия, romania) допускаем частичное совпадение
-        if (textToCheck.includes(k)) return c;
-      }
-    }
-  }
-  return null;
-}
-
-// ═══════════════════════════════════════════
-// НОРМАЛИЗАЦИЯ ИМЕН (Исправление "ключи бьются" и удаление "БС")
+// НОРМАЛИЗАЦИЯ ИМЕН (Решение проблем "ключи бьются" и "БС")
 // ═══════════════════════════════════════════
 export function normalizeUris(uris) {
   if (!uris || !Array.isArray(uris)) return uris;
@@ -72,8 +50,20 @@ export function normalizeUris(uris) {
     // 1. Удаляем "БС" и "BS" в любом регистре, схлопываем пробелы
     let cleanName = originalName.replace(/БС/gi, "").replace(/BS/gi, "").replace(/\s+/g, " ").trim();
 
-    // 2. Определяем страну по умному алгоритму
-    const country = detectCountrySafe(baseUri, cleanName);
+    // 2. Определяем страну (используем ту же безопасную логику, что и в commands.js)
+    const textToCheck = cleanName.toLowerCase() + " " + (baseUri.match(/@([^:/?#]+)/)?.[1].toLowerCase() || "");
+    let country = null;
+    for (const c of COUNTRIES) {
+      for (const k of c.keys) {
+        if (k.length <= 2) {
+          const regex = new RegExp(`(^|[^a-zа-яё0-9])${k}([^a-zа-яё0-9]|$)`);
+          if (regex.test(textToCheck)) { country = c; break; }
+        } else {
+          if (textToCheck.includes(k)) { country = c; break; }
+        }
+      }
+      if (country) break;
+    }
 
     // 3. Формируем новое имя
     let finalName = cleanName;
@@ -81,7 +71,7 @@ export function normalizeUris(uris) {
     if (!finalName || finalName.toLowerCase() === "server" || finalName.toLowerCase() === "node") {
       finalName = country ? `${country.flag} ${country.name}` : "🌍 Server";
     } else if (country) {
-      // Проверяем, не врет ли исходное имя о стране (например, "Румыния" для сервера с немецким хостом)
+      // Проверяем, не врет ли исходное имя о стране
       const isMisleading = COUNTRIES.some(c =>
         c !== country && new RegExp(`(^|[^a-zа-яё0-9])${c.name.toLowerCase()}([^a-zа-яё0-9]|$)`).test(cleanName.toLowerCase())
       );
