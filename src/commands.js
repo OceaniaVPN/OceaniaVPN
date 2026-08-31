@@ -6,8 +6,6 @@ import { buildFile } from "./build.js";
 import { escapeHtml } from "./config.js";
 import { COUNTRIES } from "./contries.js";
 
-// ═══════ ВСПОМОГАТЕЛЬНОЕ: разбор файла подписки на заголовки/серверы ═══════
-
 function splitSubscriptionFile(content) {
   const lines = content.split("\n");
   const headers = [];
@@ -19,26 +17,19 @@ function splitSubscriptionFile(content) {
   return { headers, links };
 }
 
-// Определяет страну сервера по названию (после #) или по хосту в самой ссылке —
-// использует ту же базу COUNTRIES, что и остальной проект.
-// 🔧 ИСПРАВЛЕНО: добавлена строгая проверка границ слов для коротких кодов (ro, de, us),
-// чтобы слова типа "Euro", "Proxy" или "Zero" не определялись как Румыния (ro).
 function detectCountry(uri) {
   const hashIndex = uri.lastIndexOf("#");
   const remark = hashIndex !== -1 ? decodeURIComponent(uri.substring(hashIndex + 1)).toLowerCase() : "";
   const hostMatch = uri.match(/@([^:/?#]+)/);
   const host = hostMatch ? hostMatch[1].toLowerCase() : "";
-  
   const textToCheck = remark + " " + host;
 
   for (const c of COUNTRIES) {
     for (const k of c.keys) {
       if (k.length <= 2) {
-        // Для коротких кодов (ro, de, us) требуем строгих границ слова
         const regex = new RegExp(`(^|[^a-zа-яё0-9])${k}([^a-zа-яё0-9]|$)`);
         if (regex.test(textToCheck)) return c;
       } else {
-        // Для полных названий (германия, romania) допускаем частичное совпадение
         if (textToCheck.includes(k)) return c;
       }
     }
@@ -102,8 +93,6 @@ async function finalizeSubscription(cfg, chatId, state, uris = []) {
   }
 }
 
-// ═══════ КОМАНДЫ ═══════
-
 export async function cmdStart(cfg, chatId) {
   await clearState(cfg, chatId);
 
@@ -145,6 +134,7 @@ export async function cmdStart(cfg, chatId) {
 🗑 <b>/delete N</b> — удалить сервер №N
 🗑 <b>/delete</b> — удалить всю подписку
 📤 <b>/export</b> — получить raw ссылку
+🔄 <b>/update</b> — принудительно обновить подписку
 
 💡 <b>Лайфхак:</b> просто отправь URL подписки — я её сам расшифрую!
 
@@ -171,6 +161,7 @@ export async function cmdHelp(cfg, chatId) {
 /add &lt;url&gt; — добавить сервер
 /delete N — удалить сервер №N
 /delete — удалить всю подписку
+/update — принудительно обновить подписку
 /cancel — отменить создание
 
 ━━━━━━━━━━━━━━━━━━━━━━━
@@ -291,7 +282,6 @@ export async function cmdDecode(cfg, chatId, url) {
       else stats.other++;
     }
 
-    // 🟢🔴 Результат пинга: сколько из найденных серверов реально живые.
     const aliveFlags = result.aliveFlags || [];
     const aliveCount = result.aliveCount ?? aliveFlags.filter(Boolean).length;
     const deadCount = result.deadCount ?? (aliveFlags.length - aliveCount);
@@ -299,8 +289,6 @@ export async function cmdDecode(cfg, chatId, url) {
 
     const kb = { inline_keyboard: [[{ text: "📋 Открыть подписку", url: rawUrl }]] };
     if (aliveFlags.length > 0 && deadCount > 0 && aliveCount > 0) {
-      // Кнопка появляется только если пинг реально что-то отсеял — сохраняем
-      // список живых на 10 минут в KV, чтобы не гонять пинг повторно при клике.
       await cfg.kv.put(`pingcache_${chatId}`, JSON.stringify({ uris: aliveUris, title: meta["profile-title"] || `Decoded • ${hostname}` }), { expirationTtl: 600 });
       kb.inline_keyboard.push([{ text: `✅ Сохранить только рабочие (${aliveCount})`, callback_data: "save_alive" }]);
     }
@@ -364,6 +352,7 @@ export async function cmdMy(cfg, chatId) {
   const kb = {
     inline_keyboard: [
       [{ text: "📡 Список с названиями", callback_data: "list" }],
+      [{ text: "🔄 Обновить подписку", callback_data: "update" }],
       [{ text: "📤 Экспорт", callback_data: "export" }],
       [{ text: "🗑 Удалить подписку", callback_data: "delete" }],
     ]
@@ -372,8 +361,147 @@ export async function cmdMy(cfg, chatId) {
   await sendMessage(cfg.telegramToken, chatId, msg, kb);
 }
 
-// 📡 Пронумерованный список всех серверов подписки с определением страны
-// (по названию сервера после # или по хосту), постранично по 20 штук.
+export async function cmdUpdate(cfg, chatId) {
+  const content = await getFileContent(cfg, `user_${chatId}.txt`);
+  if (!content) {
+    return sendMessage(cfg.telegramToken, chatId,
+      `📭 <b>Подписки нет</b>\n\nСоздай через /create или расшифруй через /decode`);
+  }
+
+  const { headers } = splitSubscriptionFile(content);
+  
+  let sourceUrl = null;
+  for (const header of headers) {
+    const match = header.match(/^#profile-web-page-url:\s*(.+)$/i);
+    if (match) {
+      sourceUrl = match[1].trim();
+      break;
+    }
+  }
+
+  if (!sourceUrl || !sourceUrl.startsWith("http")) {
+    return sendMessage(cfg.telegramToken, chatId,
+      `❌ <b>Не удалось найти исходный URL подписки</b>\n\nЭта подписка была создана вручную или исходный URL не сохранён.\n\n💡 Используй /decode с новым URL подписки.`);
+  }
+
+  let loadingMsgId = null;
+
+  try {
+    const loadingMsg = await sendMessage(
+      cfg.telegramToken, chatId,
+      `🔄 <b>Обновляю подписку...</b>\n\n🔗 URL: <code>${escapeHtml(sourceUrl.substring(0, 60))}...</code>\n🥷 Маскируюсь под Happ\n🔍 Декодирую заново...`
+    );
+
+    if (loadingMsg?.result?.message_id) {
+      loadingMsgId = loadingMsg.result.message_id;
+    }
+
+    const result = await decodeSubscription(sourceUrl, false, true);
+
+    if (!result.ok) {
+      const errorMsg = `❌ <b>Не удалось обновить подписку</b>\n\n${result.error}`;
+      if (loadingMsgId) {
+        await editMessage(cfg.telegramToken, chatId, loadingMsgId, errorMsg);
+      } else {
+        await sendMessage(cfg.telegramToken, chatId, errorMsg);
+      }
+      return;
+    }
+
+    if (loadingMsgId) {
+      await editMessage(cfg.telegramToken, chatId, loadingMsgId,
+        `⏳ <b>Формат определён</b>\n\n📡 Найдено серверов: <code>${(result.uris || []).length}</code>\n🟢 Проверяю, какие реально работают (пинг)...`);
+    }
+
+    const uris = result.uris || [];
+    const meta = result.metadata || {};
+    let hostname = "subscription";
+    try { hostname = new URL(sourceUrl).hostname; } catch {}
+
+    const oldHeaders = {};
+    for (const header of headers) {
+      const titleMatch = header.match(/^#profile-title:\s*(.+)$/i);
+      if (titleMatch) oldHeaders.title = titleMatch[1].trim();
+      
+      const intervalMatch = header.match(/^#profile-update-interval:\s*(\d+)/i);
+      if (intervalMatch) oldHeaders.interval = parseInt(intervalMatch[1], 10);
+    }
+
+    const userContent = buildFile(
+      {
+        title: oldHeaders.title || meta["profile-title"] || `Decoded • ${hostname}`,
+        interval: oldHeaders.interval || meta["profile-update-interval"] || 4,
+        webpage: sourceUrl,
+        announce: meta.announce || null,
+      },
+      uris
+    );
+
+    const userFile = `user_${chatId}.txt`;
+    const res = await createOrUpdateFile(cfg, userFile, userContent, `Update subscription for ${chatId}`);
+
+    if (!(res.content || res.sha)) {
+      const errorMsg = `❌ <b>Ошибка сохранения</b>\n\n${res.message || "неизвестно"}`;
+      if (loadingMsgId) await editMessage(cfg.telegramToken, chatId, loadingMsgId, errorMsg);
+      else await sendMessage(cfg.telegramToken, chatId, errorMsg);
+      return;
+    }
+
+    const stats = { vless: 0, vmess: 0, trojan: 0, ss: 0, hysteria: 0, other: 0 };
+    for (const u of uris) {
+      if (u.startsWith("vless://")) stats.vless++;
+      else if (u.startsWith("vmess://")) stats.vmess++;
+      else if (u.startsWith("trojan://")) stats.trojan++;
+      else if (u.startsWith("ss://")) stats.ss++;
+      else if (u.startsWith("hysteria")) stats.hysteria++;
+      else stats.other++;
+    }
+
+    const aliveFlags = result.aliveFlags || [];
+    const aliveCount = result.aliveCount ?? aliveFlags.filter(Boolean).length;
+    const deadCount = result.deadCount ?? (aliveFlags.length - aliveCount);
+
+    const pingLine = aliveFlags.length > 0
+      ? `\n🟢 <b>Рабочих:</b> <code>${aliveCount}</code> · 🔴 <b>Не отвечают:</b> <code>${deadCount}</code>\n`
+      : "";
+
+    const successMsg = `✅ <b>Подписка обновлена!</b>
+
+━━━━━━━━━━━━━━━━━━━━
+📡 <b>Серверов:</b> <code>${uris.length}</code>
+${pingLine}
+<b>Протоколы:</b>
+${stats.vless ? `• VLESS: <b>${stats.vless}</b>\n` : ""}` +
+      `${stats.vmess ? `• VMess: <b>${stats.vmess}</b>\n` : ""}` +
+      `${stats.trojan ? `• Trojan: <b>${stats.trojan}</b>\n` : ""}` +
+      `${stats.ss ? `• Shadowsocks: <b>${stats.ss}</b>\n` : ""}` +
+      `${stats.hysteria ? `• Hysteria: <b>${stats.hysteria}</b>\n` : ""}` +
+      `${stats.other ? `• Другое: <b>${stats.other}</b>\n` : ""}` +
+      `
+━━━━━━━━━━━━━━━━━━━━
+
+💡 Подписка автоматически обновится в твоём VPN-клиенте через несколько минут.`;
+
+    const kb = {
+      inline_keyboard: [
+        [{ text: "📋 Моя подписка", callback_data: "my" }],
+        [{ text: "📡 Список серверов", callback_data: "list" }],
+      ]
+    };
+
+    if (loadingMsgId) await editMessage(cfg.telegramToken, chatId, loadingMsgId, successMsg, kb);
+    else await sendMessage(cfg.telegramToken, chatId, successMsg, kb);
+  } catch (err) {
+    const errorMsg = `⚠️ <b>Ошибка обновления</b>\n\n<code>${escapeHtml(err.message)}</code>\n\nПопробуй ещё раз.`;
+    if (loadingMsgId) {
+      try { await editMessage(cfg.telegramToken, chatId, loadingMsgId, errorMsg); }
+      catch { await sendMessage(cfg.telegramToken, chatId, errorMsg); }
+    } else {
+      await sendMessage(cfg.telegramToken, chatId, errorMsg);
+    }
+  }
+}
+
 export async function cmdList(cfg, chatId, page = 0) {
   const content = await getFileContent(cfg, `user_${chatId}.txt`);
   if (!content) {
@@ -392,8 +520,6 @@ export async function cmdList(cfg, chatId, page = 0) {
   const start = safePage * PER_PAGE;
   const pageLinks = links.slice(start, start + PER_PAGE);
 
-  // 🟢🔴 Пингуем именно эту страницу (до 20 серверов) в реальном времени —
-  // "если человек заходит в сервер лист, видит что у него не работает".
   const aliveFlags = await checkServersAlive(pageLinks, { concurrency: 8, timeoutMs: 2000 });
 
   let msg = `📡 <b>Серверы подписки</b>\nВсего: <code>${links.length}</code> · Страница <code>${safePage + 1}/${totalPages}</code>\n\n`;
@@ -471,7 +597,6 @@ export async function cmdAdd(cfg, chatId, url) {
   const res = await createOrUpdateFile(cfg, userFile, updated, `Add ${toAdd.length} nodes`);
 
   if (res.content || res.sha) {
-    // 🟢🔴 Пингуем только то, что реально добавили — не всю подписку заново.
     const aliveFlags = await checkServersAlive(toAdd, { concurrency: 8, timeoutMs: 2500 });
     const aliveCount = aliveFlags.filter(Boolean).length;
     const deadCount = toAdd.length - aliveCount;
@@ -485,9 +610,6 @@ export async function cmdAdd(cfg, chatId, url) {
   }
 }
 
-// 🗑 Удаление ОДНОГО сервера по номеру (номер берётся из /list).
-// Команда /delete без номера по-прежнему удаляет всю подписку (см. cmdDelete ниже) —
-// этот роутинг настроен в handleMessage.
 export async function cmdDeleteServer(cfg, chatId, arg) {
   const n = parseInt(arg, 10);
   if (!n || n < 1) {
@@ -517,9 +639,6 @@ export async function cmdDeleteServer(cfg, chatId, arg) {
   }
 }
 
-// 🔁 Замена сервера по номеру: /replace N <новая ссылка или URL подписки>.
-// Если вторым аргументом дан http(s)-URL — сам декодируется, берётся первый
-// найденный сервер (для замены нужен ровно один).
 export async function cmdReplaceServer(cfg, chatId, argString) {
   const trimmed = (argString || "").trim();
   const firstSpace = trimmed.indexOf(" ");
@@ -590,8 +709,6 @@ export async function cmdStats(cfg, chatId, userId) {
     `📊 <b>Статистика OceaniaVPN</b>\n\n👥 <b>Пользователей:</b> <code>${users.length}</code>\n📁 <b>Файлов:</b> <code>${users.length}</code>`);
 }
 
-// ═══════ CALLBACK ОБРАБОТКА ═══════
-
 export async function handleCallback(cfg, cb) {
   const chatId = cb.message.chat.id;
   await answerCallback(cfg.telegramToken, cb.id);
@@ -626,6 +743,8 @@ export async function handleCallback(cfg, cb) {
       `🔁 <b>Замена сервера</b>\n\nСмотри номер в /list, затем:\n<code>/replace N новая_ссылка</code>\n\nНапример: <code>/replace 3 vless://...</code>`);
   } else if (cb.data === "export") {
     await cmdExport(cfg, chatId);
+  } else if (cb.data === "update") {
+    await cmdUpdate(cfg, chatId);
   } else if (cb.data === "delete") {
     await cmdDelete(cfg, chatId);
   } else if (cb.data === "save_alive") {
@@ -650,20 +769,16 @@ export async function handleCallback(cfg, cb) {
   }
 }
 
-// ═══════ ОБРАБОТЧИК СООБЩЕНИЙ ═══════
-
 export async function handleMessage(cfg, msg) {
   const chatId = msg.chat.id;
   const text = msg.text || "";
   const state = await getState(cfg, chatId);
 
-  // FSM ответ
   if (state && state.step && !text.startsWith("/")) {
     await handleStepAnswer(cfg, chatId, text, state);
     return;
   }
 
-  // Автоматическое декодирование URL
   if (!text.startsWith("/") && /^https?:\/\//.test(text.trim())) {
     await cmdDecode(cfg, chatId, text.trim());
     return;
@@ -682,14 +797,14 @@ export async function handleMessage(cfg, msg) {
   if (cmd === "/my") return cmdMy(cfg, chatId);
   if (cmd === "/list") return cmdList(cfg, chatId, parts[1] ? (parseInt(parts[1], 10) - 1) : 0);
   if (cmd === "/export") return cmdExport(cfg, chatId);
+  if (cmd === "/update") return cmdUpdate(cfg, chatId);
   if (cmd === "/add") return cmdAdd(cfg, chatId, parts.slice(1).join(" "));
   if (cmd === "/replace") return cmdReplaceServer(cfg, chatId, parts.slice(1).join(" "));
   if (cmd === "/delete") {
-    // /delete N — удалить конкретный сервер; /delete без аргумента — всю подписку (как раньше)
     if (parts.length > 1) return cmdDeleteServer(cfg, chatId, parts[1]);
     return cmdDelete(cfg, chatId);
   }
   if (cmd === "/cancel") return cmdCancel(cfg, chatId);
   if (cmd === "/users") return cmdUsers(cfg, chatId, userId);
   if (cmd === "/stats") return cmdStats(cfg, chatId, userId);
-                                   }
+}
