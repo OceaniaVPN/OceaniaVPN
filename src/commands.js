@@ -21,16 +21,27 @@ function splitSubscriptionFile(content) {
 
 // Определяет страну сервера по названию (после #) или по хосту в самой ссылке —
 // использует ту же базу COUNTRIES, что и остальной проект.
+// 🔧 ИСПРАВЛЕНО: добавлена строгая проверка границ слов для коротких кодов (ro, de, us),
+// чтобы слова типа "Euro", "Proxy" или "Zero" не определялись как Румыния (ro).
 function detectCountry(uri) {
   const hashIndex = uri.lastIndexOf("#");
   const remark = hashIndex !== -1 ? decodeURIComponent(uri.substring(hashIndex + 1)).toLowerCase() : "";
-  for (const c of COUNTRIES) {
-    if (c.keys.some(k => remark.includes(k))) return c;
-  }
-  const hostMatch = uri.match(/@([^:/]+)/);
+  const hostMatch = uri.match(/@([^:/?#]+)/);
   const host = hostMatch ? hostMatch[1].toLowerCase() : "";
+  
+  const textToCheck = remark + " " + host;
+
   for (const c of COUNTRIES) {
-    if (c.keys.some(k => host.includes(k))) return c;
+    for (const k of c.keys) {
+      if (k.length <= 2) {
+        // Для коротких кодов (ro, de, us) требуем строгих границ слова
+        const regex = new RegExp(`(^|[^a-zа-яё0-9])${k}([^a-zа-яё0-9]|$)`);
+        if (regex.test(textToCheck)) return c;
+      } else {
+        // Для полных названий (германия, romania) допускаем частичное совпадение
+        if (textToCheck.includes(k)) return c;
+      }
+    }
   }
   return null;
 }
@@ -681,4 +692,4 @@ export async function handleMessage(cfg, msg) {
   if (cmd === "/cancel") return cmdCancel(cfg, chatId);
   if (cmd === "/users") return cmdUsers(cfg, chatId, userId);
   if (cmd === "/stats") return cmdStats(cfg, chatId, userId);
-}
+                                   }
