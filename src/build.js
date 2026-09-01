@@ -22,6 +22,9 @@ export function buildFile(state, uris = [], defaults = {}) {
     lines.push(`#x-expire-days-total: ${expireDays}`);
     lines.push(`#x-expire-ts: ${expireTs}`);
   }
+  // Выбранная пользователем тема страницы подписки (beach/forest/gori/ocean/pustinya/site).
+  // Читается в index.js → pageSubscription вместо случайного выбора.
+  if (state.theme) lines.push(`#x-theme: ${state.theme}`);
   lines.push("");
   if (uris.length > 0) lines.push(...uris);
 

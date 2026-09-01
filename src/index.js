@@ -2,7 +2,7 @@ import { getConfig } from "./config.js";
 import { handleCallback, handleMessage } from "./commands.js";
 import { decodeSubscription } from "./decoder.js";
 import { buildFile } from "./build.js";
-import { createOrUpdateFile } from "./github.js";
+import { createOrUpdateFile, getFileContent } from "./github.js";
 import { sendMessage } from "./telegram.js";
 import { COUNTRIES } from "./contries.js";
 
@@ -46,12 +46,10 @@ const SECONDARY_CONFIG = {
 async function fetchAndMergeSources(sourcesUrls) {
   const allUris = [];
   const stats = {};
-  
   for (const url of sourcesUrls) {
     try {
       console.log("[Merge] Decoding source: " + url);
       const result = await decodeSubscription(url);
-      
       if (result.ok && result.uris && result.uris.length > 0) {
         allUris.push(...result.uris);
         stats[url] = result.uris.length;
@@ -65,7 +63,6 @@ async function fetchAndMergeSources(sourcesUrls) {
       stats[url] = 0;
     }
   }
-  
   const uniqueUris = [...new Set(allUris)];
   console.log("[Merge] Total URIs: " + allUris.length + ", After dedup: " + uniqueUris.length);
   return { uris: uniqueUris, stats };
@@ -77,15 +74,6 @@ function getSuperscript(n) {
     return sup[n];
   }
   return "#" + n;
-}
-
-function matchesCountryKey(text, key) {
-  if (key.length <= 2) {
-    // Для коротких ключей (ru, ro, in и т.д.) требуем, чтобы они были отдельным словом
-    const regex = new RegExp(`(^|[^a-zа-яё0-9])${key}([^a-zа-яё0-9]|$)`);
-    return regex.test(text);
-  }
-  return text.includes(key);
 }
 
 function applyRename(uris) {
@@ -100,18 +88,18 @@ function applyRename(uris) {
 
     let country = null;
     for (const c of COUNTRIES) {
-      if (c.keys.some(function(key) { return matchesCountryKey(originalName, key); })) {
+      if (c.keys.some(function(key) { return originalName.includes(key); })) {
         country = c;
         break;
       }
     }
-    
+
     if (!country) {
       const hostMatch = baseUri.match(/@([^:/]+)/);
       if (hostMatch) {
         const host = hostMatch[1].toLowerCase();
         for (const c of COUNTRIES) {
-          if (c.keys.some(function(key) { return matchesCountryKey(host, key); })) {
+          if (c.keys.some(function(key) { return host.includes(key); })) {
             country = c;
             break;
           }
@@ -130,6 +118,99 @@ function applyRename(uris) {
 }
 
 // ==========================================
+// 🎨 ТЕМАТИЧЕСКАЯ СТРАНИЦА ПОДПИСКИ (/page)
+// Открывается по ссылке из #profile-web-page-url в файле подписки — VPN-клиент
+// показывает её как кликабельную ссылку в информации о профиле. Берём случайную
+// (или явно указанную) тему из папки temi/ в этом же репозитории и подставляем
+// в неё РЕАЛЬНЫЙ статус подписки конкретного пользователя (вместо хардкода из
+// шаблона), не трогая остальное оформление темы.
+// ==========================================
+
+const AVAILABLE_THEMES = ["beach", "forest", "gori", "ocean", "pustinya", "site"];
+
+function pickTheme(explicit) {
+  if (explicit && AVAILABLE_THEMES.includes(explicit)) return explicit;
+  return AVAILABLE_THEMES[Math.floor(Math.random() * AVAILABLE_THEMES.length)];
+}
+
+// Парсит #заголовки: значение из файла подписки (тот же формат, что и в build.js/buildFile)
+function parseFileHeaders(content) {
+  const meta = {};
+  for (const line of content.split("\n")) {
+    if (!line.startsWith("#")) continue;
+    const m = line.match(/^#([a-z0-9-]+):\s*(.+)$/i);
+    if (m) meta[m[1].toLowerCase()] = m[2].trim();
+  }
+  return meta;
+}
+
+async function pageSubscription(request, cfg) {
+  const url = new URL(request.url);
+  const chatId = url.searchParams.get("u");
+  if (!chatId) return new Response("Missing ?u= parameter", { status: 400 });
+
+  const filename = `user_${chatId}.txt`;
+  const content = await getFileContent(cfg, filename);
+  if (!content) return new Response("Subscription not found", { status: 404 });
+
+  const meta = parseFileHeaders(content);
+  const title = meta["profile-title"] || "My Subscription";
+  // #x-expire-ts / #x-expire-days-total пишутся в build.js на шаге 5/5 (/create).
+  // Если их нет — подписка либо без ограничения по времени, либо создана до
+  // появления этого шага; в обоих случаях считаем её безлимитной.
+  const expireTs = parseInt(meta["x-expire-ts"], 10) || 0;
+  const totalDaysHeader = parseInt(meta["x-expire-days-total"], 10) || 0;
+
+  let status, daysLeft, totalDaysForBar, expiryDateStr;
+  if (expireTs > 0) {
+    const msLeft = expireTs * 1000 - Date.now();
+    const daysLeftReal = Math.max(0, Math.ceil(msLeft / 86400000));
+    status = daysLeftReal <= 0 ? "expired" : daysLeftReal <= 3 ? "expiring" : "active";
+    daysLeft = daysLeftReal;
+    totalDaysForBar = totalDaysHeader > 0 ? totalDaysHeader : Math.max(daysLeftReal, 1);
+    expiryDateStr = new Date(expireTs * 1000).toLocaleDateString("ru-RU");
+  } else {
+    // Безлимитная подписка — полная зелёная полоса, без числа дней.
+    status = "active";
+    daysLeft = 1;
+    totalDaysForBar = 1;
+    expiryDateStr = "Без ограничений";
+  }
+
+  // Приоритет: 1) сохранённая тема пользователя (#x-theme в файле)
+  //            2) явный ?theme= в URL (для превью)
+  //            3) случайная
+  const themeName = pickTheme(meta["x-theme"] || url.searchParams.get("theme"));
+  const themeUrl = `https://raw.githubusercontent.com/${cfg.configRepoOwner}/${cfg.configRepoName}/${cfg.branch}/temi/${themeName}.html`;
+
+  let html;
+  try {
+    const themeRes = await fetch(themeUrl);
+    if (!themeRes.ok) throw new Error("theme fetch status " + themeRes.status);
+    html = await themeRes.text();
+  } catch (e) {
+    return new Response("Theme page unavailable: " + e.message, { status: 502 });
+  }
+
+  // Подставляем РЕАЛЬНЫЕ данные в var DATA = {...} шаблона, не трогая остальные
+  // декоративные поля темы (emoji/desc/instructions/gradient/botLink — они
+  // авторские для каждой темы, их не меняем).
+  const subJson = JSON.stringify({
+    status,
+    plan: title,
+    expiryDate: expiryDateStr,
+    daysLeft,
+    totalDays: totalDaysForBar
+  });
+  html = html.replace(/subscription:\s*\{[^}]*\}/, `subscription: ${subJson}`);
+  html = html.replace(/title:\s*'[^']*'/, `title: ${JSON.stringify(title)}`);
+
+  return new Response(html, {
+    headers: { "Content-Type": "text/html;charset=utf-8", "Cache-Control": "no-store" }
+  });
+}
+
+// ==========================================
 // ОСНОВНОЙ ЭКСПОРТ WORKER
 // ==========================================
 
@@ -141,6 +222,9 @@ export default {
     if (request.method === "GET") {
       if (url.pathname === "/") {
         return new Response("OceaniaVPN Bot OK", { headers: { "Content-Type": "text/plain; charset=utf-8" } });
+      }
+      if (url.pathname === "/page") {
+        return pageSubscription(request, cfg);
       }
       if (url.pathname === "/set-webhook") {
         const workerUrl = url.protocol + "//" + url.host;
@@ -172,12 +256,12 @@ export default {
       const { uris: uniqueUris, stats } = await fetchAndMergeSources(AUTO_UPDATE_CONFIG.sources);
       if (uniqueUris.length > 0) {
         let finalUris = AUTO_UPDATE_CONFIG.doRename ? applyRename(uniqueUris) : uniqueUris;
-        const profileMetadata = { 
-          title: AUTO_UPDATE_CONFIG.title, 
-          interval: AUTO_UPDATE_CONFIG.interval, 
-          webpage: AUTO_UPDATE_CONFIG.webpage, 
-          announce: AUTO_UPDATE_CONFIG.announce, 
-          userinfo: AUTO_UPDATE_CONFIG.userinfo 
+        const profileMetadata = {
+          title: AUTO_UPDATE_CONFIG.title,
+          interval: AUTO_UPDATE_CONFIG.interval,
+          webpage: AUTO_UPDATE_CONFIG.webpage,
+          announce: AUTO_UPDATE_CONFIG.announce,
+          userinfo: AUTO_UPDATE_CONFIG.userinfo
         };
         const content = buildFile(profileMetadata, finalUris);
         const res = await createOrUpdateFile(cfg, AUTO_UPDATE_CONFIG.targetFilename, content, "Auto update: " + finalUris.length + " nodes");
@@ -198,15 +282,15 @@ export default {
       // с X-Bot-Secret, минуя проверку "только Happ" на его стороне. БЕЗ этого
       // флага крон получал бы такую же заглушку, что и обычные пользователи.
       const result2 = await decodeSubscription(SECONDARY_CONFIG.targetUrl, true);
-      
+
       if (result2.ok && result2.uris && result2.uris.length > 0) {
         let finalUris2 = SECONDARY_CONFIG.doRename ? applyRename(result2.uris) : result2.uris;
-        const profileMetadata2 = { 
-          title: SECONDARY_CONFIG.title, 
-          interval: SECONDARY_CONFIG.interval, 
-          webpage: SECONDARY_CONFIG.webpage, 
-          announce: SECONDARY_CONFIG.announce, 
-          userinfo: SECONDARY_CONFIG.userinfo 
+        const profileMetadata2 = {
+          title: SECONDARY_CONFIG.title,
+          interval: SECONDARY_CONFIG.interval,
+          webpage: SECONDARY_CONFIG.webpage,
+          announce: SECONDARY_CONFIG.announce,
+          userinfo: SECONDARY_CONFIG.userinfo
         };
         const content2 = buildFile(profileMetadata2, finalUris2);
         const res2 = await createOrUpdateFile(cfg, SECONDARY_CONFIG.targetFilename, content2, "Secondary Auto update: " + finalUris2.length + " nodes");

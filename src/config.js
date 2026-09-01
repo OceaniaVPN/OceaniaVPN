@@ -8,6 +8,10 @@ export function getConfig(env) {
     configsFolder: env.CONFIGS_FOLDER || "configs",
     branch: env.BRANCH || "main",
     kv: env.BOT_STATE,
+    // 🎨 Нужен для сборки ссылки на тематическую страницу подписки (/page —
+    // см. index.js). Задай в переменных Worker'а (Settings → Variables):
+    // WORKER_ORIGIN = https://твой-воркер.workers.dev (без слэша в конце).
+    workerOrigin: (env.WORKER_ORIGIN || "").replace(/\/$/, ""),
   };
 }
 

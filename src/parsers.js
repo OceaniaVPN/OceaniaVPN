@@ -1,5 +1,4 @@
 import yaml from "js-yaml";
-import { COUNTRIES } from "./contries.js";
 
 // ═══════════════════════════════════════════
 // УТИЛИТЫ
@@ -23,80 +22,6 @@ export function extractHeaders(content) {
     }
   }
   return meta;
-}
-
-// ═══════════════════════════════════════════
-// НОРМАЛИЗАЦИЯ ИМЕН (Решение проблем "ключи бьются" и "БС")
-// ═══════════════════════════════════════════
-export function normalizeUris(uris) {
-  if (!uris || !Array.isArray(uris)) return uris;
-
-  const seenNames = new Set(); // Гарантирует уникальность имен для Hiddify/Happ
-
-  return uris.map(uri => {
-    // Находим последний '#', который отделяет сам ключ от его имени (remark)
-    const hashIndex = uri.lastIndexOf("#");
-    let baseUri = uri;
-    let originalName = "Server";
-
-    if (hashIndex !== -1) {
-      baseUri = uri.substring(0, hashIndex); // Сам ключ оставляем 100% нетронутым!
-      try {
-        originalName = decodeURIComponent(uri.substring(hashIndex + 1));
-      } catch (e) {
-        originalName = uri.substring(hashIndex + 1);
-      }
-    }
-
-    // 1. Удаляем "БС" и "BS" в любом регистре, схлопываем пробелы
-    let cleanName = originalName.replace(/БС/gi, "").replace(/BS/gi, "").replace(/\s+/g, " ").trim();
-
-    // 2. Определяем страну (используем ту же безопасную логику, что и в commands.js)
-    const textToCheck = cleanName.toLowerCase() + " " + (baseUri.match(/@([^:/?#]+)/)?.[1].toLowerCase() || "");
-
-    let country = null;
-    for (const c of COUNTRIES) {
-      for (const k of c.keys) {
-        if (k.length <= 2) {
-          const regex = new RegExp(`(^|[^a-zа-яё0-9])${k}([^a-zа-яё0-9]|$)`);
-          if (regex.test(textToCheck)) { country = c; break; }
-        } else {
-          if (textToCheck.includes(k)) { country = c; break; }
-        }
-      }
-      if (country) break;
-    }
-
-    // 3. Формируем новое имя
-    let finalName = cleanName;
-
-    if (!finalName || finalName.toLowerCase() === "server" || finalName.toLowerCase() === "node") {
-      finalName = country ? `${country.flag} ${country.name}` : "🌍 Server";
-    } else if (country) {
-      // Проверяем, не врет ли исходное имя о стране
-      const isMisleading = COUNTRIES.some(c =>
-        c !== country && new RegExp(`(^|[^a-zа-яё0-9])${c.name.toLowerCase()}([^a-zа-яё0-9]|$)`).test(cleanName.toLowerCase())
-      );
-
-      if (isMisleading) {
-        finalName = `${country.flag} ${country.name}`;
-      } else if (!cleanName.includes(country.flag)) {
-        finalName = `${country.flag} ${cleanName}`;
-      }
-    }
-
-    // 4. Обеспечиваем строгую уникальность, чтобы ключи не "бились" в приложении
-    let uniqueName = finalName;
-    let counter = 1;
-    while (seenNames.has(uniqueName)) {
-      uniqueName = `${finalName} ${counter}`;
-      counter++;
-    }
-    seenNames.add(uniqueName);
-
-    // 5. Собираем ключ обратно. Сам URI (baseUri) не изменен ни на один символ.
-    return `${baseUri}#${encodeURIComponent(uniqueName)}`;
-  });
 }
 
 // ═══════════════════════════════════════════
@@ -207,14 +132,10 @@ export function xrayToUri(ob) {
     if (ss.realitySettings) {
       params.set("security", "reality");
       if (ss.realitySettings.serverName) params.set("sni", ss.realitySettings.serverName);
-      if (ss.realitySettings.fingerprint) params.set("fp", ss.realitySettings.fingerprint);
       if (ss.realitySettings.publicKey) params.set("pbk", ss.realitySettings.publicKey);
       if (ss.realitySettings.shortId) params.set("sid", ss.realitySettings.shortId);
     }
-    if (ss.tlsSettings) {
-      if (ss.tlsSettings.serverName) params.set("sni", ss.tlsSettings.serverName);
-      if (ss.tlsSettings.fingerprint) params.set("fp", ss.tlsSettings.fingerprint);
-    }
+    if (ss.tlsSettings?.serverName) params.set("sni", ss.tlsSettings.serverName);
     if (usr.flow) params.set("flow", usr.flow);
     const q = params.toString();
     return `vless://${usr.id}@${srv.address}:${srv.port}${q ? "?" + q : ""}#${encodeURIComponent(name)}`;
@@ -229,8 +150,6 @@ export function xrayToUri(ob) {
       aid: usr.alterId || 0, net: ss.network || "tcp", type: "none",
       host: ss.wsSettings?.headers?.Host || "", path: ss.wsSettings?.path || "",
       tls: ss.security === "tls" ? "tls" : "",
-      sni: ss.tlsSettings?.serverName || ss.realitySettings?.serverName || "",
-      fp: ss.tlsSettings?.fingerprint || ss.realitySettings?.fingerprint || "",
     };
     return `vmess://${btoa(JSON.stringify(v))}`;
   }
@@ -294,7 +213,6 @@ export function singboxToUri(ob) {
       aid: ob.alter_id || 0, net: tr.type || "tcp", type: "none",
       host: tr.headers?.Host || "", path: tr.path || "",
       tls: tls.enabled ? "tls" : "", sni: tls.server_name || "",
-      fp: tls.utls?.fingerprint || "",
     };
     return `vmess://${btoa(JSON.stringify(v))}`;
   }
@@ -460,4 +378,4 @@ export function parseCrypt(content) {
       `Это настоящее AES-шифрование, бот не умеет его расшифровывать — это технически невозможно без ключа.\n\n` +
       `💡 <b>Решение:</b> открой ссылку в Happ или Hiddify → экспортируй как обычную vless-подписку → отправь мне уже её.`
   };
-          }
+}
