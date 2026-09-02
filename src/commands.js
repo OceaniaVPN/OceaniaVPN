@@ -5,37 +5,6 @@ import { decodeSubscription, checkServersAlive } from "./decoder.js";
 import { buildFile } from "./build.js";
 import { escapeHtml } from "./config.js";
 import { COUNTRIES } from "./contries.js";
-// ═══════ ТЕМЫ СТРАНИЦЫ ПОДПИСКИ ═══════
-
-const THEMES = [
-  { id: "beach",    emoji: "🏖",  name: "Пляж"    },
-  { id: "forest",   emoji: "🌲",  name: "Лес"     },
-  { id: "gori",     emoji: "🏔",  name: "Горы"    },
-  { id: "ocean",    emoji: "🌊",  name: "Океан"   },
-  { id: "pustinya", emoji: "🏜",  name: "Пустыня" },
-  { id: "site",     emoji: "💻",  name: "Сайт"    },
-];
-
-function themeKeyboard(selectedId, workerOrigin, chatId) {
-  // Две кнопки в строку: сама тема + превью
-  const rows = [];
-  for (let i = 0; i < THEMES.length; i += 2) {
-    const row = [];
-    for (const t of THEMES.slice(i, i + 2)) {
-      const isActive = t.id === selectedId;
-      row.push({ text: `${isActive ? "✅ " : ""}${t.emoji} ${t.name}`, callback_data: `set_theme:${t.id}` });
-    }
-    rows.push(row);
-  }
-  // Кнопка превью (если воркер настроен и тема уже выбрана)
-  if (workerOrigin && selectedId) {
-    rows.push([{ text: "👁 Посмотреть страницу", url: `${workerOrigin}/page?u=${chatId}&theme=${selectedId}` }]);
-  }
-  rows.push([{ text: "🔙 Назад", callback_data: "my" }]);
-  return { inline_keyboard: rows };
-}
-
-
 
 // ═══════ ВСПОМОГАТЕЛЬНОЕ: разбор файла подписки на заголовки/серверы ═══════
 
@@ -92,29 +61,24 @@ async function finalizeSubscription(cfg, chatId, state, uris = []) {
   await clearState(cfg, chatId);
 
   if (res.content || res.sha) {
-    const rawUrl = `https://raw.githubusercontent.com/${cfg.configRepoOwner}/${cfg.configRepoName}/${cfg.branch}/${cfg.configsFolder}/${userFile}`;
+    const { subUrl, pageUrl } = userUrls(cfg, chatId);
     const kb = {
       inline_keyboard: [
         [{ text: "📋 Моя подписка", callback_data: "my" }],
+        [{ text: "🎨 Страница подписки", url: pageUrl }, { text: "🖼 Сменить тему", callback_data: "theme_pick" }],
         [{ text: "📡 Список серверов", callback_data: "list" }],
-        [{ text: "🎨 Выбрать тему страницы", callback_data: "theme_pick" }],
         [{ text: "➕ Добавить сервер", callback_data: "add_prompt" }],
         [{ text: "🗑 Удалить подписку", callback_data: "delete" }],
       ]
     };
-    // 🎨 Кнопка появляется только если в Worker'е настроен WORKER_ORIGIN
-    // (см. config.js) — иначе ссылка вела бы в никуда.
-    if (cfg.workerOrigin) {
-      kb.inline_keyboard.splice(1, 0, [{ text: "🎨 Страница подписки", url: `${cfg.workerOrigin}/page?u=${chatId}` }]);
-    }
     await sendMessage(
       cfg.telegramToken, chatId,
       `✅ <b>Подписка создана!</b>
 
 ━━━━━━━━━━━━━━━━━━━━
 📡 <b>Серверов:</b> <code>${uris.length}</code>
-🔗 <b>Raw ссылка:</b>
-<code>${rawUrl}</code>
+🔗 <b>Ссылка подписки:</b>
+<code>${subUrl}</code>
 ━━━━━━━━━━━━━━━━━━━━
 
 💡 <b>Импортируй в:</b>
@@ -305,7 +269,8 @@ export async function cmdDecode(cfg, chatId, url) {
       return;
     }
 
-    const rawUrl = `https://raw.githubusercontent.com/${cfg.configRepoOwner}/${cfg.configRepoName}/${cfg.branch}/${cfg.configsFolder}/${filename}`;
+    // Декодированный файл тоже отдаём через воркер (/sub?f=filename), не через GitHub напрямую
+    const rawUrl = `${cfg.workerOrigin}/sub?f=${encodeURIComponent(filename)}`;
 
     const stats = { vless: 0, vmess: 0, trojan: 0, ss: 0, hysteria: 0, other: 0 };
     for (const u of uris) {
@@ -387,16 +352,15 @@ export async function cmdMy(cfg, chatId) {
 <pre>${escapeHtml(links.join("\n").substring(0, 3000))}</pre>` +
     (links.join("\n").length > 3000 ? `\n<i>... (слишком длинно, используй /list или /export)</i>` : "");
 
+  const { subUrl: mySubUrl, pageUrl: myPageUrl } = userUrls(cfg, chatId);
   const kb = {
     inline_keyboard: [
-      [{ text: "📡 Список с названиями", callback_data: "list" }],
+      [{ text: "🎨 Страница подписки", url: myPageUrl }, { text: "🖼 Сменить тему", callback_data: "theme_pick" }],
+      [{ text: "📡 Список серверов", callback_data: "list" }],
       [{ text: "📤 Экспорт", callback_data: "export" }],
       [{ text: "🗑 Удалить подписку", callback_data: "delete" }],
     ]
   };
-  if (cfg.workerOrigin) {
-    kb.inline_keyboard.splice(1, 0, [{ text: "🎨 Страница подписки", url: `${cfg.workerOrigin}/page?u=${chatId}` }]);
-  }
 
   await sendMessage(cfg.telegramToken, chatId, msg, kb);
 }
@@ -453,16 +417,19 @@ export async function cmdExport(cfg, chatId) {
   const content = await getFileContent(cfg, `user_${chatId}.txt`);
   if (!content) return sendMessage(cfg.telegramToken, chatId, `📭 Сначала /create или /decode`);
 
-  const rawUrl = `https://raw.githubusercontent.com/${cfg.configRepoOwner}/${cfg.configRepoName}/${cfg.branch}/${cfg.configsFolder}/user_${chatId}.txt`;
-  const kb = { inline_keyboard: [[{ text: "🔗 Открыть", url: rawUrl }]] };
+  const { subUrl: expSubUrl, pageUrl: expPageUrl } = userUrls(cfg, chatId);
+  const kb = { inline_keyboard: [
+    [{ text: "🔗 Ссылка подписки", url: expSubUrl }],
+    [{ text: "🎨 Страница подписки", url: expPageUrl }],
+  ]};
 
   await sendMessage(
     cfg.telegramToken, chatId,
     `📤 <b>Экспорт подписки</b>
 
 ━━━━━━━━━━━━━━━━━━━━
-🔗 <b>Raw ссылка:</b>
-<code>${rawUrl}</code>
+🔗 <b>Ссылка подписки:</b>
+<code>${expSubUrl}</code>
 ━━━━━━━━━━━━━━━━━━━━
 
 <b>Импортируй в:</b>
@@ -592,84 +559,6 @@ export async function cmdReplaceServer(cfg, chatId, argString) {
   }
 }
 
-// ═══════ ВЫБОР ТЕМЫ ═══════
-
-export async function cmdThemePick(cfg, chatId) {
-  if (!cfg.workerOrigin) {
-    return sendMessage(cfg.telegramToken, chatId,
-      `⚠️ <b>Страница подписки недоступна</b>
-
-Переменная <code>WORKER_ORIGIN</code> не задана в настройках Worker'а.`);
-  }
-
-  // Читаем текущую тему из файла подписки
-  const content = await getFileContent(cfg, `user_${chatId}.txt`);
-  if (!content) {
-    return sendMessage(cfg.telegramToken, chatId,
-      `📭 <b>Подписки нет</b>
-
-Сначала создай подписку через /create`);
-  }
-
-  let currentTheme = null;
-  for (const line of content.split("\n")) {
-    const m = line.match(/^#x-theme:\s*(.+)$/);
-    if (m) { currentTheme = m[1].trim(); break; }
-  }
-
-  const themeLabel = currentTheme
-    ? THEMES.find(t => t.id === currentTheme)?.name || currentTheme
-    : "случайная";
-
-  await sendMessage(
-    cfg.telegramToken, chatId,
-    `🎨 <b>Выбор темы страницы подписки</b>
-━━━━━━━━━━━━━━━━━━━━
-Текущая тема: <b>${themeLabel}</b>
-
-Выбери тему — именно она будет открываться когда клиент нажимает на ссылку профиля в приложении.
-Нажми на название чтобы применить, или <b>👁 Посмотреть</b> чтобы сначала глянуть.`,
-    themeKeyboard(currentTheme, cfg.workerOrigin, chatId)
-  );
-}
-
-export async function cmdSetTheme(cfg, chatId, themeId) {
-  const theme = THEMES.find(t => t.id === themeId);
-  if (!theme) return;
-
-  const userFile = `user_${chatId}.txt`;
-  const raw = await getFileContent(cfg, userFile);
-  if (!raw) {
-    return sendMessage(cfg.telegramToken, chatId, `📭 Подписки нет.`);
-  }
-
-  // Заменяем или добавляем #x-theme
-  let lines = raw.split("\n");
-  const idx = lines.findIndex(l => l.startsWith("#x-theme:"));
-  if (idx !== -1) {
-    lines[idx] = `#x-theme: ${themeId}`;
-  } else {
-    // Вставляем перед первой пустой строкой (разделитель заголовков/серверов)
-    const emptyIdx = lines.findIndex(l => l.trim() === "");
-    if (emptyIdx !== -1) lines.splice(emptyIdx, 0, `#x-theme: ${themeId}`);
-    else lines.unshift(`#x-theme: ${themeId}`);
-  }
-
-  const res = await createOrUpdateFile(cfg, userFile, lines.join("\n"), `Set theme: ${themeId}`);
-
-  if (res.content || res.sha) {
-    await sendMessage(
-      cfg.telegramToken, chatId,
-      `✅ <b>Тема применена: ${theme.emoji} ${theme.name}</b>
-
-Страница подписки теперь использует эту тему.`,
-      themeKeyboard(themeId, cfg.workerOrigin, chatId)
-    );
-  } else {
-    await sendMessage(cfg.telegramToken, chatId, `❌ Ошибка сохранения темы`);
-  }
-}
-
 export async function cmdDelete(cfg, chatId) {
   const res = await deleteFile(cfg, `user_${chatId}.txt`, `Delete user ${chatId}`);
   if (res.commit) await sendMessage(cfg.telegramToken, chatId, `🗑 <b>Подписка удалена</b>`);
@@ -744,24 +633,19 @@ export async function handleCallback(cfg, cb) {
       const content = buildFile({ title: cached.title, interval: 4 }, cached.uris);
       const res = await createOrUpdateFile(cfg, userFile, content, `Save ${cached.uris.length} alive servers`);
       if (res.content || res.sha) {
-        const rawUrl = `https://raw.githubusercontent.com/${cfg.configRepoOwner}/${cfg.configRepoName}/${cfg.branch}/${cfg.configsFolder}/${userFile}`;
+        const { subUrl: aliveSubUrl, pageUrl: alivePageUrl } = userUrls(cfg, chatId);
         await sendMessage(cfg.telegramToken, chatId,
-          `✅ <b>Подписка сохранена!</b>\n\n🟢 Только рабочие серверы: <code>${cached.uris.length}</code>\n🔗 <code>${rawUrl}</code>`,
-          { inline_keyboard: [[{ text: "🔗 Открыть", url: rawUrl }]] });
+          `✅ <b>Подписка сохранена!</b>\n\n🟢 Только рабочие серверы: <code>${cached.uris.length}</code>\n🔗 <code>${aliveSubUrl}</code>`,
+          { inline_keyboard: [
+            [{ text: "🔗 Ссылка подписки", url: aliveSubUrl }],
+            [{ text: "🎨 Страница подписки", url: alivePageUrl }],
+          ]});
       } else {
         await sendMessage(cfg.telegramToken, chatId, `❌ Ошибка сохранения`);
       }
     }
   } else if (cb.data === "help") {
     await cmdHelp(cfg, chatId);
-  } else if (cb.data === "theme_pick") {
-    await cmdThemePick(cfg, chatId);
-  } else if (cb.data.startsWith("set_theme:")) {
-    const themeId = cb.data.split(":")[1];
-    await cmdSetTheme(cfg, chatId, themeId);
-  } else if (cb.data.startsWith("list_page_")) {
-    const page = parseInt(cb.data.replace("list_page_", ""), 10) || 0;
-    await cmdList(cfg, chatId, page);
   }
 }
 
@@ -805,7 +689,6 @@ export async function handleMessage(cfg, msg) {
     return cmdDelete(cfg, chatId);
   }
   if (cmd === "/cancel") return cmdCancel(cfg, chatId);
-  if (cmd === "/theme") return cmdThemePick(cfg, chatId);
   if (cmd === "/users") return cmdUsers(cfg, chatId, userId);
   if (cmd === "/stats") return cmdStats(cfg, chatId, userId);
 }

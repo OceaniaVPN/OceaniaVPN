@@ -118,6 +118,56 @@ function applyRename(uris) {
 }
 
 // ==========================================
+// 📦 РАЗДАЧА ПОДПИСКИ ЧЕРЕЗ СВОЙ ДОМЕН (/sub)
+// Клиент делает GET /sub?u=12345 — воркер берёт файл с GitHub
+// и отдаёт его под своим доменом. GitHub URL пользователю не виден.
+// ==========================================
+
+async function serveSubscription(request, cfg) {
+  const url = new URL(request.url);
+  const chatId = url.searchParams.get("u");
+  const filename = url.searchParams.get("f"); // для decoded_ и других файлов
+
+  // Определяем имя файла: ?u=chatId → user_chatId.txt, ?f=name → name напрямую
+  let targetFile;
+  if (filename) {
+    // Защита от path traversal
+    targetFile = filename.replace(/[^a-zA-Z0-9_\-\.]/g, "_");
+  } else if (chatId) {
+    targetFile = `user_${chatId}.txt`;
+  } else {
+    return new Response("Missing ?u= or ?f= parameter", { status: 400 });
+  }
+
+  const content = await getFileContent(cfg, targetFile);
+  if (!content) return new Response("Subscription not found", { status: 404 });
+
+  // Вытаскиваем userinfo из заголовка файла для Subscription-Userinfo header
+  let userinfo = "upload=0; download=0; total=536870912000; expire=0";
+  for (const line of content.split("\n")) {
+    const m = line.match(/^#subscription-userinfo:\s*(.+)$/i);
+    if (m) { userinfo = m[1].trim(); break; }
+  }
+
+  // Вытаскиваем interval
+  let interval = "4";
+  for (const line of content.split("\n")) {
+    const m = line.match(/^#profile-update-interval:\s*(\d+)/i);
+    if (m) { interval = m[1]; break; }
+  }
+
+  return new Response(content, {
+    headers: {
+      "Content-Type": "text/plain; charset=utf-8",
+      "Cache-Control": "no-store, no-cache, must-revalidate",
+      "Subscription-Userinfo": userinfo,
+      "Profile-Update-Interval": interval,
+      "Access-Control-Allow-Origin": "*",
+    }
+  });
+}
+
+// ==========================================
 // 🎨 ТЕМАТИЧЕСКАЯ СТРАНИЦА ПОДПИСКИ (/page)
 // Открывается по ссылке из #profile-web-page-url в файле подписки — VPN-клиент
 // показывает её как кликабельную ссылку в информации о профиле. Берём случайную
@@ -177,9 +227,7 @@ async function pageSubscription(request, cfg) {
     expiryDateStr = "Без ограничений";
   }
 
-  // Приоритет: 1) сохранённая тема пользователя (#x-theme в файле)
-  //            2) явный ?theme= в URL (для превью)
-  //            3) случайная
+  // Приоритет темы: 1) сохранена в файле (#x-theme), 2) ?theme= в URL, 3) случайная
   const themeName = pickTheme(meta["x-theme"] || url.searchParams.get("theme"));
   const themeUrl = `https://raw.githubusercontent.com/${cfg.configRepoOwner}/${cfg.configRepoName}/${cfg.branch}/temi/${themeName}.html`;
 
@@ -192,9 +240,6 @@ async function pageSubscription(request, cfg) {
     return new Response("Theme page unavailable: " + e.message, { status: 502 });
   }
 
-  // Подставляем РЕАЛЬНЫЕ данные в var DATA = {...} шаблона, не трогая остальные
-  // декоративные поля темы (emoji/desc/instructions/gradient/botLink — они
-  // авторские для каждой темы, их не меняем).
   const subJson = JSON.stringify({
     status,
     plan: title,
@@ -202,8 +247,33 @@ async function pageSubscription(request, cfg) {
     daysLeft,
     totalDays: totalDaysForBar
   });
-  html = html.replace(/subscription:\s*\{[^}]*\}/, `subscription: ${subJson}`);
-  html = html.replace(/title:\s*'[^']*'/, `title: ${JSON.stringify(title)}`);
+  const titleJson = JSON.stringify(title);
+
+  // Попытка 1: regex-замена inline (работает для большинства тем)
+  html = html
+    .replace(/subscription\s*:\s*\{[^{}]*\}/g, `subscription: ${subJson}`)
+    .replace(/\btitle\s*:\s*(['"])(?:(?!\1).)*\1/g, `title: ${titleJson}`);
+
+  // Попытка 2 (всегда): script-патч перед </body> — перезаписывает DATA
+  // уже после того как тема определила свои дефолты. Надёжно для любого формата.
+  const patch = `\n<script>
+/* OceaniaVPN patch */
+(function(){
+  function go(){
+    if(typeof DATA!=='undefined'){
+      DATA.subscription=${subJson};
+      DATA.title=${titleJson};
+    } else { setTimeout(go,20); }
+  }
+  document.readyState==='loading'
+    ? document.addEventListener('DOMContentLoaded',go)
+    : go();
+})();
+</script>`;
+
+  html = html.includes('</body>')
+    ? html.replace('</body>', patch + '\n</body>')
+    : html + patch;
 
   return new Response(html, {
     headers: { "Content-Type": "text/html;charset=utf-8", "Cache-Control": "no-store" }
@@ -219,9 +289,19 @@ export default {
     const cfg = getConfig(env);
     const url = new URL(request.url);
 
+    // Auto-detect workerOrigin из входящего запроса — больше не нужна
+    // переменная WORKER_ORIGIN. Работает с любым доменом автоматически.
+    if (!cfg.workerOrigin) {
+      cfg.workerOrigin = url.origin; // например https://oceaniavpn.dimastekolnikov13.workers.dev
+    }
+
     if (request.method === "GET") {
       if (url.pathname === "/") {
         return new Response("OceaniaVPN Bot OK", { headers: { "Content-Type": "text/plain; charset=utf-8" } });
+      }
+      // 📦 Раздача подписки под своим доменом (скрывает GitHub URL от пользователя)
+      if (url.pathname === "/sub") {
+        return serveSubscription(request, cfg);
       }
       if (url.pathname === "/page") {
         return pageSubscription(request, cfg);
