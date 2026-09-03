@@ -5,12 +5,14 @@ export function getConfig(env) {
     adminId: parseInt(env.ADMIN_ID || "0"),
     configRepoOwner: env.CONFIG_REPO_OWNER || "OceaniaVPN",
     configRepoName: env.CONFIG_REPO_NAME || "StekloVPN",
+    // Репо где лежит папка temi/ с HTML-темами. По умолчанию = репо бота (OceaniaVPN/OceaniaVPN).
+    botRepoName: env.BOT_REPO_NAME || env.CONFIG_REPO_OWNER || "OceaniaVPN",
     configsFolder: env.CONFIGS_FOLDER || "configs",
     branch: env.BRANCH || "main",
     kv: env.BOT_STATE,
-    // workerOrigin больше не нужен как переменная окружения —
-    // он автоматически берётся из входящего запроса в index.js (fetch handler).
-    // Оставлен как опциональный override если хочешь кастомный домен:
+    // 🎨 Нужен для сборки ссылки на тематическую страницу подписки (/page —
+    // см. index.js). Задай в переменных Worker'а (Settings → Variables):
+    // WORKER_ORIGIN = https://твой-воркер.workers.dev (без слэша в конце).
     workerOrigin: (env.WORKER_ORIGIN || "").replace(/\/$/, ""),
   };
 }
