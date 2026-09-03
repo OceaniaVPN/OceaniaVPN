@@ -134,8 +134,15 @@ export function xrayToUri(ob) {
       if (ss.realitySettings.serverName) params.set("sni", ss.realitySettings.serverName);
       if (ss.realitySettings.publicKey) params.set("pbk", ss.realitySettings.publicKey);
       if (ss.realitySettings.shortId) params.set("sid", ss.realitySettings.shortId);
+      // 🔧 ФИКС: fingerprint (fp) для reality раньше не читался вообще —
+      // xrayToUri был единственным конвертером без этого поля (у singboxToUri
+      // и proxyToUri оно уже было). Именно поэтому fp пропадал у конфигов,
+      // пришедших в формате Xray JSON.
+      if (ss.realitySettings.fingerprint) params.set("fp", ss.realitySettings.fingerprint);
     }
     if (ss.tlsSettings?.serverName) params.set("sni", ss.tlsSettings.serverName);
+    // 🔧 ФИКС: то же самое для обычного TLS (не только reality).
+    if (ss.tlsSettings?.fingerprint) params.set("fp", ss.tlsSettings.fingerprint);
     if (usr.flow) params.set("flow", usr.flow);
     const q = params.toString();
     return `vless://${usr.id}@${srv.address}:${srv.port}${q ? "?" + q : ""}#${encodeURIComponent(name)}`;
@@ -160,6 +167,7 @@ export function xrayToUri(ob) {
     params.set("security", "tls");
     if (ss.network) params.set("type", ss.network);
     if (ss.tlsSettings?.serverName) params.set("sni", ss.tlsSettings.serverName);
+    if (ss.tlsSettings?.fingerprint) params.set("fp", ss.tlsSettings.fingerprint);
     const q = params.toString();
     return `trojan://${srv.password}@${srv.address}:${srv.port}${q ? "?" + q : ""}#${encodeURIComponent(name)}`;
   }
@@ -225,6 +233,7 @@ export function singboxToUri(ob) {
     if (ob.transport?.path) params.set("path", ob.transport.path);
     if (ob.transport?.headers?.Host) params.set("host", ob.transport.headers.Host);
     if (tls.server_name) params.set("sni", tls.server_name);
+    if (tls.utls?.fingerprint) params.set("fp", tls.utls.fingerprint);
     const q = params.toString();
     return `trojan://${ob.password}@${server}:${port}${q ? "?" + q : ""}#${encodeURIComponent(name)}`;
   }

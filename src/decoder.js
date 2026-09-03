@@ -147,6 +147,16 @@ function buildHappHeaders(ua, isFirstRequest = false, trusted = false) {
 function extractAllUrlsFromHtml(html, originalUrl) {
   const foundUrls = new Set();
 
+  // 🔧 ФИКС ПОТЕРИ ПАРАМЕТРОВ (в т.ч. fp=): HTML обязан экранировать "&" как
+  // "&amp;" внутри атрибутов — это требование спецификации HTML, не опечатка
+  // источника. Раньше &amp;→& нормализовался только в 2 из ~8 способов
+  // извлечения ниже — из-за этого query-параметры вроде &fp=chrome либо
+  // обрубались на полпути (regex видит "&" внутри "&amp;" как разделитель и
+  // останавливается на нём), либо попадали в итоговый URL буквально как текст
+  // "&amp;fp=chrome" вместо рабочего "&fp=chrome". Нормализуем ВЕСЬ HTML один
+  // раз здесь — дальше все regex ниже видят уже чистый "&" одинаково, везде.
+  html = html.replace(/&amp;/g, "&");
+
   const happLinks = html.match(/happ:\/\/[^\s"'<>]+/gi) || [];
   for (const link of happLinks) {
     const cleanLink = link.replace(/["'>]/g, "");

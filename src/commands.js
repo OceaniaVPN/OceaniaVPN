@@ -4,7 +4,7 @@ import { getState, setState, clearState, STEPS, STEP_MSG } from "./state.js";
 import { decodeSubscription, checkServersAlive } from "./decoder.js";
 import { buildFile } from "./build.js";
 import { escapeHtml } from "./config.js";
-import { COUNTRIES } from "./contries.js";
+import { COUNTRIES, matchesCountryKey, detectCountryFromText } from "./contries.js";
 
 // ═══════ ВСПОМОГАТЕЛЬНОЕ: разбор файла подписки на заголовки/серверы ═══════
 
@@ -20,25 +20,46 @@ function splitSubscriptionFile(content) {
 }
 
 // Определяет страну сервера по названию (после #) или по хосту в самой ссылке —
-// использует ту же базу COUNTRIES, что и остальной проект.
+// использует общую логику матчинга из contries.js (учитывает границы слов
+// для коротких ISO-кодов, чтобы "ro" не матчился внутри "provider").
 function detectCountry(uri) {
   const hashIndex = uri.lastIndexOf("#");
-  const remark = hashIndex !== -1 ? decodeURIComponent(uri.substring(hashIndex + 1)).toLowerCase() : "";
-  for (const c of COUNTRIES) {
-    if (c.keys.some(k => remark.includes(k))) return c;
-  }
+  const remark = hashIndex !== -1 ? decodeURIComponent(uri.substring(hashIndex + 1)) : "";
+  const fromRemark = detectCountryFromText(remark);
+  if (fromRemark) return fromRemark;
   const hostMatch = uri.match(/@([^:/]+)/);
-  const host = hostMatch ? hostMatch[1].toLowerCase() : "";
-  for (const c of COUNTRIES) {
-    if (c.keys.some(k => host.includes(k))) return c;
-  }
-  return null;
+  const host = hostMatch ? hostMatch[1] : "";
+  return detectCountryFromText(host);
 }
 
 function protocolOf(uri) {
   const idx = uri.indexOf("://");
   return idx === -1 ? "?" : uri.substring(0, idx).toUpperCase();
 }
+
+// 🔗 Единая точка сборки ссылок пользователя — обе ведут на файл user_<chatId>.txt,
+// просто через разные роуты воркера (/sub отдаёт сам файл подписки для VPN-клиента,
+// /page — тематическую HTML-страницу со статусом для человека). Раньше эта функция
+// вызывалась в 4 местах, но нигде не была определена — из-за этого падало создание
+// подписки, /my, /export и кнопка "Сохранить рабочие".
+function userUrls(cfg, chatId) {
+  return {
+    subUrl: `${cfg.workerOrigin}/sub?u=${chatId}`,
+    pageUrl: `${cfg.workerOrigin}/page?u=${chatId}`,
+  };
+}
+
+// Список тем — дублирует AVAILABLE_THEMES из index.js (там же лежат сами файлы
+// temi/*.html). Импортировать оттуда нельзя — index.js сам импортирует
+// handleCallback из этого файла, получился бы циклический импорт.
+const THEME_LIST = [
+  { id: "beach", label: "🏖 Пляж" },
+  { id: "forest", label: "🌲 Лес" },
+  { id: "gori", label: "⛰ Горы" },
+  { id: "ocean", label: "🌊 Океан" },
+  { id: "pustinya", label: "🏜 Пустыня" },
+  { id: "site", label: "🌐 Сайт" },
+];
 
 async function handleStepAnswer(cfg, chatId, text, state) {
   const step = state.step;
@@ -622,6 +643,10 @@ export async function handleCallback(cfg, cb) {
       `🔁 <b>Замена сервера</b>\n\nСмотри номер в /list, затем:\n<code>/replace N новая_ссылка</code>\n\nНапример: <code>/replace 3 vless://...</code>`);
   } else if (cb.data === "export") {
     await cmdExport(cfg, chatId);
+  } else if (cb.data === "theme_pick") {
+    const { pageUrl } = userUrls(cfg, chatId);
+    const kb = { inline_keyboard: THEME_LIST.map(t => ([{ text: t.label, url: `${pageUrl}&theme=${t.id}` }])) };
+    await sendMessage(cfg.telegramToken, chatId, `🖼 <b>Выбери тему страницы подписки</b>`, kb);
   } else if (cb.data === "delete") {
     await cmdDelete(cfg, chatId);
   } else if (cb.data === "save_alive") {

@@ -4,7 +4,7 @@ import { decodeSubscription } from "./decoder.js";
 import { buildFile } from "./build.js";
 import { createOrUpdateFile, getFileContent } from "./github.js";
 import { sendMessage } from "./telegram.js";
-import { COUNTRIES } from "./contries.js";
+import { COUNTRIES, detectCountryFromText } from "./contries.js";
 
 // ==========================================
 // ОСНОВНАЯ КОНФИГУРАЦИЯ (4 источника)
@@ -84,27 +84,12 @@ function applyRename(uris) {
   return uris.map(function(uri) {
     const hashIndex = uri.lastIndexOf('#');
     const baseUri = hashIndex === -1 ? uri : uri.substring(0, hashIndex);
-    const originalName = hashIndex === -1 ? "" : decodeURIComponent(uri.substring(hashIndex + 1)).toLowerCase();
+    const originalName = hashIndex === -1 ? "" : decodeURIComponent(uri.substring(hashIndex + 1));
 
-    let country = null;
-    for (const c of COUNTRIES) {
-      if (c.keys.some(function(key) { return originalName.includes(key); })) {
-        country = c;
-        break;
-      }
-    }
-
+    let country = detectCountryFromText(originalName);
     if (!country) {
       const hostMatch = baseUri.match(/@([^:/]+)/);
-      if (hostMatch) {
-        const host = hostMatch[1].toLowerCase();
-        for (const c of COUNTRIES) {
-          if (c.keys.some(function(key) { return host.includes(key); })) {
-            country = c;
-            break;
-          }
-        }
-      }
+      if (hostMatch) country = detectCountryFromText(hostMatch[1]);
     }
 
     const displayName = country ? country.name : "Рандом";
@@ -118,52 +103,28 @@ function applyRename(uris) {
 }
 
 // ==========================================
-// 📦 РАЗДАЧА ПОДПИСКИ ЧЕРЕЗ СВОЙ ДОМЕН (/sub)
-// Клиент делает GET /sub?u=12345 — воркер берёт файл с GitHub
-// и отдаёт его под своим доменом. GitHub URL пользователю не виден.
+// 📦 РАЗДАЧА ПОДПИСКИ ПОД СВОИМ ДОМЕНОМ (/sub)
+// Отдаёт содержимое файла подписки как есть (для импорта в VPN-клиент), но
+// через домен воркера — так пользователь не видит прямую ссылку на GitHub
+// (структуру репозитория, имена файлов) в самом клиенте.
+//   ?u=<chatId>   → user_<chatId>.txt (личная подписка пользователя)
+//   ?f=<filename> → произвольный файл в папке конфигов (например decoded_*.txt)
 // ==========================================
-
 async function serveSubscription(request, cfg) {
   const url = new URL(request.url);
-  const chatId = url.searchParams.get("u");
-  const filename = url.searchParams.get("f"); // для decoded_ и других файлов
+  const chatIdParam = url.searchParams.get("u");
+  const filenameParam = url.searchParams.get("f");
+  const filename = chatIdParam ? `user_${chatIdParam}.txt` : filenameParam;
+  if (!filename) return new Response("Missing ?u= or ?f= parameter", { status: 400 });
 
-  // Определяем имя файла: ?u=chatId → user_chatId.txt, ?f=name → name напрямую
-  let targetFile;
-  if (filename) {
-    // Защита от path traversal
-    targetFile = filename.replace(/[^a-zA-Z0-9_\-\.]/g, "_");
-  } else if (chatId) {
-    targetFile = `user_${chatId}.txt`;
-  } else {
-    return new Response("Missing ?u= or ?f= parameter", { status: 400 });
-  }
-
-  const content = await getFileContent(cfg, targetFile);
+  const content = await getFileContent(cfg, filename);
   if (!content) return new Response("Subscription not found", { status: 404 });
-
-  // Вытаскиваем userinfo из заголовка файла для Subscription-Userinfo header
-  let userinfo = "upload=0; download=0; total=536870912000; expire=0";
-  for (const line of content.split("\n")) {
-    const m = line.match(/^#subscription-userinfo:\s*(.+)$/i);
-    if (m) { userinfo = m[1].trim(); break; }
-  }
-
-  // Вытаскиваем interval
-  let interval = "4";
-  for (const line of content.split("\n")) {
-    const m = line.match(/^#profile-update-interval:\s*(\d+)/i);
-    if (m) { interval = m[1]; break; }
-  }
 
   return new Response(content, {
     headers: {
-      "Content-Type": "text/plain; charset=utf-8",
-      "Cache-Control": "no-store, no-cache, must-revalidate",
-      "Subscription-Userinfo": userinfo,
-      "Profile-Update-Interval": interval,
-      "Access-Control-Allow-Origin": "*",
-    }
+      "Content-Type": "text/plain;charset=utf-8",
+      "Cache-Control": "no-store",
+    },
   });
 }
 
@@ -227,8 +188,7 @@ async function pageSubscription(request, cfg) {
     expiryDateStr = "Без ограничений";
   }
 
-  // Приоритет темы: 1) сохранена в файле (#x-theme), 2) ?theme= в URL, 3) случайная
-  const themeName = pickTheme(meta["x-theme"] || url.searchParams.get("theme"));
+  const themeName = pickTheme(url.searchParams.get("theme"));
   const themeUrl = `https://raw.githubusercontent.com/${cfg.configRepoOwner}/${cfg.configRepoName}/${cfg.branch}/temi/${themeName}.html`;
 
   let html;
@@ -240,6 +200,9 @@ async function pageSubscription(request, cfg) {
     return new Response("Theme page unavailable: " + e.message, { status: 502 });
   }
 
+  // Подставляем РЕАЛЬНЫЕ данные в var DATA = {...} шаблона, не трогая остальные
+  // декоративные поля темы (emoji/desc/instructions/gradient/botLink — они
+  // авторские для каждой темы, их не меняем).
   const subJson = JSON.stringify({
     status,
     plan: title,
@@ -247,33 +210,8 @@ async function pageSubscription(request, cfg) {
     daysLeft,
     totalDays: totalDaysForBar
   });
-  const titleJson = JSON.stringify(title);
-
-  // Попытка 1: regex-замена inline (работает для большинства тем)
-  html = html
-    .replace(/subscription\s*:\s*\{[^{}]*\}/g, `subscription: ${subJson}`)
-    .replace(/\btitle\s*:\s*(['"])(?:(?!\1).)*\1/g, `title: ${titleJson}`);
-
-  // Попытка 2 (всегда): script-патч перед </body> — перезаписывает DATA
-  // уже после того как тема определила свои дефолты. Надёжно для любого формата.
-  const patch = `\n<script>
-/* OceaniaVPN patch */
-(function(){
-  function go(){
-    if(typeof DATA!=='undefined'){
-      DATA.subscription=${subJson};
-      DATA.title=${titleJson};
-    } else { setTimeout(go,20); }
-  }
-  document.readyState==='loading'
-    ? document.addEventListener('DOMContentLoaded',go)
-    : go();
-})();
-</script>`;
-
-  html = html.includes('</body>')
-    ? html.replace('</body>', patch + '\n</body>')
-    : html + patch;
+  html = html.replace(/subscription:\s*\{[^}]*\}/, `subscription: ${subJson}`);
+  html = html.replace(/title:\s*'[^']*'/, `title: ${JSON.stringify(title)}`);
 
   return new Response(html, {
     headers: { "Content-Type": "text/html;charset=utf-8", "Cache-Control": "no-store" }
@@ -289,22 +227,23 @@ export default {
     const cfg = getConfig(env);
     const url = new URL(request.url);
 
-    // Auto-detect workerOrigin из входящего запроса — больше не нужна
-    // переменная WORKER_ORIGIN. Работает с любым доменом автоматически.
+    // Auto-detect workerOrigin из входящего запроса — не нужна отдельная env-
+    // переменная, ссылки на /page и /sub всегда указывают на тот домен,
+    // с которого реально пришёл запрос (например
+    // https://oceaniavpn.dimastekolnikov13.workers.dev).
     if (!cfg.workerOrigin) {
-      cfg.workerOrigin = url.origin; // например https://oceaniavpn.dimastekolnikov13.workers.dev
+      cfg.workerOrigin = url.origin;
     }
 
     if (request.method === "GET") {
       if (url.pathname === "/") {
         return new Response("OceaniaVPN Bot OK", { headers: { "Content-Type": "text/plain; charset=utf-8" } });
       }
-      // 📦 Раздача подписки под своим доменом (скрывает GitHub URL от пользователя)
-      if (url.pathname === "/sub") {
-        return serveSubscription(request, cfg);
-      }
       if (url.pathname === "/page") {
         return pageSubscription(request, cfg);
+      }
+      if (url.pathname === "/sub") {
+        return serveSubscription(request, cfg);
       }
       if (url.pathname === "/set-webhook") {
         const workerUrl = url.protocol + "//" + url.host;
