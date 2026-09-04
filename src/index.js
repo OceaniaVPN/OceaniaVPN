@@ -189,12 +189,20 @@ async function pageSubscription(request, cfg) {
   }
 
   const themeName = pickTheme(url.searchParams.get("theme"));
-  const themeUrl = `https://raw.githubusercontent.com/${cfg.configRepoOwner}/${cfg.configRepoName}/${cfg.branch}/temi/${themeName}.html`;
+  // 🔧 ФИКС 404: cfg.configRepoOwner/configRepoName — это настраиваемый репозиторий
+  // ХРАНЕНИЯ файлов подписок (user_*.txt), он может отличаться от репозитория
+  // с кодом бота (env.CONFIG_REPO_NAME по умолчанию вообще "StekloVPN", см.
+  // config.js). Папка temi/ живёт конкретно в OceaniaVPN/OceaniaVPN — зашиваем
+  // это отдельно, не завязываясь на настраиваемый storage-репозиторий.
+  const THEME_REPO_OWNER = "OceaniaVPN";
+  const THEME_REPO_NAME = "OceaniaVPN";
+  const THEME_BRANCH = "main";
+  const themeUrl = `https://raw.githubusercontent.com/${THEME_REPO_OWNER}/${THEME_REPO_NAME}/${THEME_BRANCH}/temi/${themeName}.html`;
 
   let html;
   try {
     const themeRes = await fetch(themeUrl);
-    if (!themeRes.ok) throw new Error("theme fetch status " + themeRes.status);
+    if (!themeRes.ok) throw new Error("theme fetch status " + themeRes.status + " (" + themeUrl + ")");
     html = await themeRes.text();
   } catch (e) {
     return new Response("Theme page unavailable: " + e.message, { status: 502 });
