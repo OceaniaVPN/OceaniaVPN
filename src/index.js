@@ -120,12 +120,27 @@ async function serveSubscription(request, cfg) {
   const content = await getFileContent(cfg, filename);
   if (!content) return new Response("Subscription not found", { status: 404 });
 
-  return new Response(content, {
-    headers: {
-      "Content-Type": "text/plain;charset=utf-8",
-      "Cache-Control": "no-store",
-    },
-  });
+  // 🔧 ФИКС РАССИНХРОНА ДНЕЙ: VPN-клиент (Happ/v2rayNG/Hiddify) читает срок
+  // действия НЕ из текстового комментария #subscription-userinfo внутри тела
+  // файла, а из настоящего HTTP-заголовка Subscription-Userinfo на самом
+  // ответе. Раньше этот заголовок вообще не выставлялся — клиент либо не
+  // показывал срок, либо показывал что-то своё, а /page считал дни отдельно
+  // из тела файла. Теперь оба берут значение из ОДНОЙ и той же строки файла —
+  // расхождения быть не может.
+  const headers = {
+    "Content-Type": "text/plain;charset=utf-8",
+    "Cache-Control": "no-store",
+  };
+  const userinfoMatch = content.match(/^#subscription-userinfo:\s*(.+)$/im);
+  if (userinfoMatch) headers["Subscription-Userinfo"] = userinfoMatch[1].trim();
+  const titleMatch = content.match(/^#profile-title:\s*(.+)$/im);
+  if (titleMatch) headers["Profile-Title"] = titleMatch[1].trim();
+  const intervalMatch = content.match(/^#profile-update-interval:\s*(.+)$/im);
+  if (intervalMatch) headers["Profile-Update-Interval"] = intervalMatch[1].trim();
+  const webpageMatch = content.match(/^#profile-web-page-url:\s*(.+)$/im);
+  if (webpageMatch) headers["Profile-Web-Page-Url"] = webpageMatch[1].trim();
+
+  return new Response(content, { headers });
 }
 
 // ==========================================
