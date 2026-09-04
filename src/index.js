@@ -21,7 +21,9 @@ const AUTO_UPDATE_CONFIG = {
     "https://accargame.cfd/sub/wQu5TeYdOD9YMcp2",
     "https://gitlab.com/igareck/vpn-configs-for-russia/-/raw/main/Vless-Reality-White-Lists-Rus-Mobile.txt?ref_type=heads",
     "https://gitlab.com/igareck/vpn-configs-for-russia/-/raw/main/WHITE-CIDR-RU-all.txt?ref_type=heads",
-    "https://gitlab.com/igareck/vpn-configs-for-russia/-/raw/main/WHITE-SNI-RU-all.txt?ref_type=heads"
+    "https://gitlab.com/igareck/vpn-configs-for-russia/-/raw/main/WHITE-SNI-RU-all.txt?ref_type=heads",
+    "https://raw.githubusercontent.com/LimeHi/LimeVPN/refs/heads/main/whitelist.txt"
+    "http://78.17.106.76:2096/sub/i8lwnzmaz0cobdu6
   ]
 };
 
