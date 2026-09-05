@@ -21,9 +21,7 @@ const AUTO_UPDATE_CONFIG = {
     "https://accargame.cfd/sub/wQu5TeYdOD9YMcp2",
     "https://gitlab.com/igareck/vpn-configs-for-russia/-/raw/main/Vless-Reality-White-Lists-Rus-Mobile.txt?ref_type=heads",
     "https://gitlab.com/igareck/vpn-configs-for-russia/-/raw/main/WHITE-CIDR-RU-all.txt?ref_type=heads",
-    "https://gitlab.com/igareck/vpn-configs-for-russia/-/raw/main/WHITE-SNI-RU-all.txt?ref_type=heads",
-    "https://raw.githubusercontent.com/LimeHi/LimeVPN/refs/heads/main/whitelist.txt"
-    "http://78.17.106.76:2096/sub/i8lwnzmaz0cobdu6
+    "https://gitlab.com/igareck/vpn-configs-for-russia/-/raw/main/WHITE-SNI-RU-all.txt?ref_type=heads"
   ]
 };
 
@@ -112,6 +110,23 @@ function applyRename(uris) {
 //   ?u=<chatId>   → user_<chatId>.txt (личная подписка пользователя)
 //   ?f=<filename> → произвольный файл в папке конфигов (например decoded_*.txt)
 // ==========================================
+// 📱 Список подстрок User-Agent известных VPN-клиентов, которым нужно отдавать
+// НАСТОЯЩИЕ конфиги. Всё остальное (браузер, curl, превью-боты и т.д.) получает
+// красивую тематическую HTML-страницу вместо конфигов — конфиги физически не
+// покидают ответ сервера для не-VPN-клиентов, они просто не запрашивают их.
+const VPN_CLIENT_UA_MARKERS = [
+  "happ", "hiddify", "v2rayng", "v2raytun", "v2rayn", "v2box",
+  "shadowrocket", "quantumult", "surge", "loon", "stash",
+  "clash", "sing-box", "singbox", "karing", "nekoray", "nekobox",
+  "streisand", "foxray", "matsuri", "flclash",
+];
+
+function isVpnClientUA(ua) {
+  if (!ua) return false;
+  const lower = ua.toLowerCase();
+  return VPN_CLIENT_UA_MARKERS.some((m) => lower.includes(m));
+}
+
 async function serveSubscription(request, cfg) {
   const url = new URL(request.url);
   const chatIdParam = url.searchParams.get("u");
@@ -122,13 +137,23 @@ async function serveSubscription(request, cfg) {
   const content = await getFileContent(cfg, filename);
   if (!content) return new Response("Subscription not found", { status: 404 });
 
+  const userAgent = request.headers.get("user-agent") || "";
+
+  // 🔒 ГЛАВНЫЙ ФИКС: одна и та же ссылка /sub?u=... — Happ (и другие VPN-клиенты)
+  // получают реальные конфиги, браузер на ТОЙ ЖЕ ссылке получает тематическую
+  // HTML-страницу со статусом подписки вместо конфигов. Конфиги не палятся
+  // тому, кто просто открыл ссылку в браузере.
+  if (!isVpnClientUA(userAgent)) {
+    return renderThemedPage(request, cfg, content);
+  }
+
   // 🔧 ФИКС РАССИНХРОНА ДНЕЙ: VPN-клиент (Happ/v2rayNG/Hiddify) читает срок
   // действия НЕ из текстового комментария #subscription-userinfo внутри тела
   // файла, а из настоящего HTTP-заголовка Subscription-Userinfo на самом
   // ответе. Раньше этот заголовок вообще не выставлялся — клиент либо не
-  // показывал срок, либо показывал что-то своё, а /page считал дни отдельно
-  // из тела файла. Теперь оба берут значение из ОДНОЙ и той же строки файла —
-  // расхождения быть не может.
+  // показывал срок, либо показывал что-то своё, а страница считала дни
+  // отдельно из тела файла. Теперь оба берут значение из ОДНОЙ и той же строки
+  // файла — расхождения быть не может.
   const headers = {
     "Content-Type": "text/plain;charset=utf-8",
     "Cache-Control": "no-store",
@@ -146,11 +171,11 @@ async function serveSubscription(request, cfg) {
 }
 
 // ==========================================
-// 🎨 ТЕМАТИЧЕСКАЯ СТРАНИЦА ПОДПИСКИ (/page)
-// Открывается по ссылке из #profile-web-page-url в файле подписки — VPN-клиент
-// показывает её как кликабельную ссылку в информации о профиле. Берём случайную
-// (или явно указанную) тему из папки temi/ в этом же репозитории и подставляем
-// в неё РЕАЛЬНЫЙ статус подписки конкретного пользователя (вместо хардкода из
+// 🎨 ТЕМАТИЧЕСКАЯ СТРАНИЦА ПОДПИСКИ
+// Показывается на ТОЙ ЖЕ ссылке /sub, что и конфиги — просто не-VPN клиенту
+// (браузеру), см. serveSubscription выше. Берём случайную (или явно указанную
+// через ?theme=) тему из папки temi/ в этом же репозитории и подставляем в неё
+// РЕАЛЬНЫЙ статус подписки конкретного пользователя (вместо хардкода из
 // шаблона), не трогая остальное оформление темы.
 // ==========================================
 
@@ -172,15 +197,10 @@ function parseFileHeaders(content) {
   return meta;
 }
 
-async function pageSubscription(request, cfg) {
+// Принимает УЖЕ полученный content файла подписки (чтобы не дёргать GitHub
+// второй раз) и рендерит тематическую страницу с реальным статусом.
+async function renderThemedPage(request, cfg, content) {
   const url = new URL(request.url);
-  const chatId = url.searchParams.get("u");
-  if (!chatId) return new Response("Missing ?u= parameter", { status: 400 });
-
-  const filename = `user_${chatId}.txt`;
-  const content = await getFileContent(cfg, filename);
-  if (!content) return new Response("Subscription not found", { status: 404 });
-
   const meta = parseFileHeaders(content);
   const title = meta["profile-title"] || "My Subscription";
   // #x-expire-ts / #x-expire-days-total пишутся в build.js на шаге 5/5 (/create).
@@ -206,7 +226,7 @@ async function pageSubscription(request, cfg) {
   }
 
   const themeName = pickTheme(url.searchParams.get("theme"));
-  // 🔧 ФИКС 404: cfg.configRepoOwner/configRepoName — это настраиваемый репозиторий
+  // cfg.configRepoOwner/configRepoName — это настраиваемый репозиторий
   // ХРАНЕНИЯ файлов подписок (user_*.txt), он может отличаться от репозитория
   // с кодом бота (env.CONFIG_REPO_NAME по умолчанию вообще "StekloVPN", см.
   // config.js). Папка temi/ живёт конкретно в OceaniaVPN/OceaniaVPN — зашиваем
@@ -241,6 +261,20 @@ async function pageSubscription(request, cfg) {
   return new Response(html, {
     headers: { "Content-Type": "text/html;charset=utf-8", "Cache-Control": "no-store" }
   });
+}
+
+// /page — та же страница, но НАПРЯМУЮ (в обход UA-проверки), для явного
+// предпросмотра конкретной темы через кнопку "🖼 Сменить тему" в боте.
+async function pageSubscription(request, cfg) {
+  const url = new URL(request.url);
+  const chatId = url.searchParams.get("u");
+  if (!chatId) return new Response("Missing ?u= parameter", { status: 400 });
+
+  const filename = `user_${chatId}.txt`;
+  const content = await getFileContent(cfg, filename);
+  if (!content) return new Response("Subscription not found", { status: 404 });
+
+  return renderThemedPage(request, cfg, content);
 }
 
 // ==========================================
