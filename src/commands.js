@@ -49,6 +49,29 @@ function userUrls(cfg, chatId) {
   };
 }
 
+function mainMenu() {
+  return {
+    inline_keyboard: [
+      [
+        { text: "✨ Создать подписку", callback_data: "create" },
+        { text: "🔍 Декодер", callback_data: "decode" },
+      ],
+      [
+        { text: "📋 Моя подписка", callback_data: "my" },
+        { text: "📡 Серверы", callback_data: "list" },
+      ],
+      [
+        { text: "📤 Экспорт", callback_data: "export" },
+        { text: "ℹ️ Помощь", callback_data: "help" },
+      ],
+    ],
+  };
+}
+
+function backToMenuKeyboard() {
+  return { inline_keyboard: [[{ text: "🏠 Главное меню", callback_data: "menu" }]] };
+}
+
 // Список тем — дублирует AVAILABLE_THEMES из index.js (там же лежат сами файлы
 // temi/*.html). Импортировать оттуда нельзя — index.js сам импортирует
 // handleCallback из этого файла, получился бы циклический импорт.
@@ -118,48 +141,24 @@ async function finalizeSubscription(cfg, chatId, state, uris = []) {
 export async function cmdStart(cfg, chatId) {
   await clearState(cfg, chatId);
 
-  const kb = {
-    inline_keyboard: [
-      [
-        { text: "✨ Создать подписку", callback_data: "create" },
-        { text: "🔍 Декодер", callback_data: "decode" },
-      ],
-      [
-        { text: "📋 Моя подписка", callback_data: "my" },
-        { text: "📡 Список серверов", callback_data: "list" },
-      ],
-      [
-        { text: "📤 Экспорт", callback_data: "export" },
-        { text: "ℹ️ Помощь", callback_data: "help" },
-      ],
-    ]
-  };
+  const kb = mainMenu();
 
   await sendMessage(
     cfg.telegramToken, chatId,
     `━━━━━━━━━━━━━━━━━━━━━━━
-🌊 <b>OceaniaVPN Bot</b>
+🌊 <b>OceaniaVPN</b>
 ━━━━━━━━━━━━━━━━━━━━━━━
 
-👋 <b>Привет!</b>
-Создай персональную VPN подписку или расшифруй чужую.
+👋 <b>Добро пожаловать!</b>
+Твой личный центр управления VPN-подпиской.
 
-<b>🎯 Что я умею:</b>
-✨ <b>/create</b> — пошаговое создание подписки
-🔍 <b>/decode</b> — расшифровка чужой подписки
-(YAML / JSON / Base64 / crypt5)
-с маскировкой под <b>Happ</b> 🥷
+<b>🚀 Быстрый доступ</b>
+✨ Создать новую подписку
+🔍 Декодировать готовую
+📋 Проверить свою подписку
+📡 Посмотреть серверы и их статус
 
-➕ <b>/add</b> — добавить сервер
-📡 <b>/list</b> — список всех серверов с названиями стран
-🔁 <b>/replace N ссылка</b> — заменить сервер №N
-🗑 <b>/delete N</b> — удалить сервер №N
-🗑 <b>/delete</b> — удалить всю подписку
-📤 <b>/export</b> — получить raw ссылку
-
-💡 <b>Лайфхак:</b> просто отправь URL подписки — я её сам расшифрую!
-
-<i>Выбери действие ниже:</i>`,
+<i>Выбери действие — всё остальное сделаем за тебя.</i>`,
     kb
   );
 }
@@ -204,7 +203,7 @@ export async function cmdHelp(cfg, chatId) {
 • Hysteria / Hysteria2
 • Tuic
 • WireGuard`
-  );
+  , backToMenuKeyboard());
 }
 
 export async function cmdCreate(cfg, chatId) {
@@ -239,7 +238,7 @@ export async function cmdDecode(cfg, chatId, url) {
       `⏳ <b>Декодирую подписку...</b>
 
 🔗 URL: <code>${escapeHtml(url.substring(0, 60))}...</code>
-🥷 Маскируюсь под Happ
+🥷 Маскируюсь под <b>Happ</b>
 🔍 Определяю формат...`
     );
 
@@ -363,15 +362,13 @@ export async function cmdMy(cfg, chatId) {
   const { headers, links } = splitSubscriptionFile(content);
 
   const msg = `📋 <b>Твоя подписка</b>
+━━━━━━━━━━━━━━━━━━━━━━━
 
-<b>Заголовки:</b>
-<pre>${escapeHtml(headers.join("\n"))}</pre>
+🟢 <b>Статус:</b> активна
+📡 <b>Серверов:</b> <code>${links.length}</code>
 
-<b>Серверов:</b> <code>${links.length}</code>
-
-<b>Ссылки:</b>
-<pre>${escapeHtml(links.join("\n").substring(0, 3000))}</pre>` +
-    (links.join("\n").length > 3000 ? `\n<i>... (слишком длинно, используй /list или /export)</i>` : "");
+<b>⚙️ Параметры</b>
+<pre>${escapeHtml(headers.join("\n"))}</pre>`;
 
   const { subUrl: mySubUrl, pageUrl: myPageUrl } = userUrls(cfg, chatId);
   const kb = {
@@ -380,6 +377,7 @@ export async function cmdMy(cfg, chatId) {
       [{ text: "📡 Список серверов", callback_data: "list" }],
       [{ text: "📤 Экспорт", callback_data: "export" }],
       [{ text: "🗑 Удалить подписку", callback_data: "delete" }],
+      [{ text: "🏠 Главное меню", callback_data: "menu" }],
     ]
   };
 
@@ -427,9 +425,10 @@ export async function cmdList(cfg, chatId, page = 0) {
   const kb = { inline_keyboard: [] };
   if (navRow.length) kb.inline_keyboard.push(navRow);
   kb.inline_keyboard.push([
-    { text: "🗑 Как удалить сервер", callback_data: "delsrv_prompt" },
-    { text: "🔁 Как заменить сервер", callback_data: "replacesrv_prompt" },
+    { text: "🗑 Как удалить", callback_data: "delsrv_prompt" },
+    { text: "🔁 Как заменить", callback_data: "replacesrv_prompt" },
   ]);
+  kb.inline_keyboard.push([{ text: "🏠 Главное меню", callback_data: "menu" }]);
 
   await sendMessage(cfg.telegramToken, chatId, msg, kb);
 }
@@ -488,10 +487,10 @@ export async function cmdAdd(cfg, chatId, url) {
   const res = await createOrUpdateFile(cfg, userFile, updated, `Add ${toAdd.length} nodes`);
 
   if (res.content || res.sha) {
-    // 🟢🔴 Пингуем только то, что реально добавили — не всю подписку заново.
-    const aliveFlags = await checkServersAlive(toAdd, { concurrency: 8, timeoutMs: 2500 });
+    // 🟢🔴 Пингуем только то, что добавили, чтобы сразу показать результат.
+    const aliveFlags = await checkServersAlive(toAdd, { concurrency: 8, timeoutMs: 2000 });
     const aliveCount = aliveFlags.filter(Boolean).length;
-    const deadCount = toAdd.length - aliveCount;
+    const deadCount = aliveFlags.length - aliveCount;
     const pingLine = toAdd.length > 1
       ? `\n🟢 Рабочих: <code>${aliveCount}</code> · 🔴 Не отвечают: <code>${deadCount}</code>`
       : `\n${aliveFlags[0] ? "🟢 Сервер отвечает" : "🔴 Сервер не отвечает (добавлен, но может не работать)"}`;
@@ -613,7 +612,9 @@ export async function handleCallback(cfg, cb) {
   const chatId = cb.message.chat.id;
   await answerCallback(cfg.telegramToken, cb.id);
 
-  if (cb.data === "create") {
+  if (cb.data === "menu") {
+    await cmdStart(cfg, chatId);
+  } else if (cb.data === "create") {
     await setState(cfg, chatId, { step: "title" });
     await sendMessage(cfg.telegramToken, chatId, STEP_MSG.title);
   } else if (cb.data === "decode") {
@@ -645,9 +646,20 @@ export async function handleCallback(cfg, cb) {
     await cmdExport(cfg, chatId);
   } else if (cb.data === "theme_pick") {
     const { pageUrl } = userUrls(cfg, chatId);
-    const kb = { inline_keyboard: THEME_LIST.map(t => ([{ text: t.label, url: `${pageUrl}&theme=${t.id}` }])) };
-    await sendMessage(cfg.telegramToken, chatId, `🖼 <b>Выбери тему страницы подписки</b>`, kb);
+    const kb = { inline_keyboard: [] };
+    for (let i = 0; i < THEME_LIST.length; i += 2) {
+      kb.inline_keyboard.push(THEME_LIST.slice(i, i + 2).map(t => ({ text: t.label, url: `${pageUrl}&theme=${t.id}` })));
+    }
+    kb.inline_keyboard.push([{ text: "🏠 Главное меню", callback_data: "menu" }]);
+    await sendMessage(cfg.telegramToken, chatId, `🖼 <b>Оформление страницы</b>\n\nВыбери стиль — откроется предпросмотр твоей подписки.`, kb);
   } else if (cb.data === "delete") {
+    await sendMessage(cfg.telegramToken, chatId,
+      `⚠️ <b>Удалить всю подписку?</b>\n\nЭто действие удалит твою текущую подписку целиком. Серверы можно будет добавить заново.`,
+      { inline_keyboard: [
+        [{ text: "🗑 Да, удалить", callback_data: "delete_confirm" }],
+        [{ text: "↩️ Отмена", callback_data: "my" }],
+      ]});
+  } else if (cb.data === "delete_confirm") {
     await cmdDelete(cfg, chatId);
   } else if (cb.data === "save_alive") {
     const cached = await cfg.kv.get(`pingcache_${chatId}`, "json");
