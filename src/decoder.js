@@ -6,6 +6,7 @@ import { TARGET_USER_AGENTS } from "./useragents.js";
 import { connect } from "cloudflare:sockets";
 
 const BLOCKED_DOMAINS = [
+  "okeaniavpn.dimastekolnikov1.workers.dev",
   "okeaniavpn.dimastekolnikov13.workers.dev",
   "sub.chkav-vpn.workers.dev"
 ];
@@ -53,14 +54,8 @@ async function fetchWithRedirects(url, headers, max = 5) {
     if ([301, 302, 303, 307, 308].includes(res.status)) {
       const loc = res.headers.get("location");
       if (!loc) return res;
-      // Некоторые Happ/Hiddify шлюзы редиректят прямо в happ://... .
-      // Не пытаемся передать такой URI в fetch(): возвращаем его как тело,
-      // чтобы следующий этап декодера смог разобрать envelope.
       if (/^(?:happ|incy|v2raytun):\/\//i.test(loc.trim())) {
-        return new Response(loc.trim(), {
-          status: 200,
-          headers: { "content-type": "text/plain;charset=utf-8" }
-        });
+        return new Response(loc.trim(), { status: 200, headers: { "content-type": "text/plain;charset=utf-8" } });
       }
       currentUrl = new URL(loc, currentUrl).toString();
       const redirectTarget = extractRedirectTarget(currentUrl);
@@ -112,7 +107,6 @@ function extractAllUrlsFromHtml(html, originalUrl) {
   html = normalizeText(html);
   const direct = html.match(/https?:\/\/[^\s"'<>\\]+/gi) || [];
   direct.forEach(u => addCandidate(foundUrls, u, originalUrl));
-
   const happLinks = html.match(/(?:happ|incy|v2raytun):\/\/[^\s"'<>]+/gi) || [];
   for (const link of happLinks) {
     const cleanLink = link.replace(/["'>]/g, "");
@@ -129,7 +123,6 @@ function extractAllUrlsFromHtml(html, originalUrl) {
       (d?.match(/https?:\/\/[^\s"'<>]+/gi) || []).forEach(u => addCandidate(foundUrls, u, originalUrl));
     }
   }
-
   const encoded = html.match(/(?:url|link|sub|target|redirect|subscription|config|payload)=([^&\s"'>]+)/gi) || [];
   for (const match of encoded) {
     const value = match.replace(/^[^=]+=\s*/, "");
@@ -137,28 +130,23 @@ function extractAllUrlsFromHtml(html, originalUrl) {
     const b64 = safeBase64(value);
     if (b64) (b64.match(/https?:\/\/[^\s"'<>]+/gi) || []).forEach(u => addCandidate(foundUrls, u, originalUrl));
   }
-
   const attrs = html.match(/(?:data-(?:url|link|sub|subscription|config|clipboard-text)|(?:href|src))=["']([^"']+)["']/gi) || [];
   for (const attr of attrs) {
     const m = attr.match(/=["']([^"']+)["']/);
     if (m) addCandidate(foundUrls, m[1], originalUrl);
   }
-
   const jsValues = html.match(/(?:var|let|const)\s+(?:url|link|sub|subscription|config|target)\s*=\s*["']([^"']+)["']/gi) || [];
   for (const v of jsValues) {
     const m = v.match(/=\s*["']([^"']+)["']/);
     if (m) addCandidate(foundUrls, m[1], originalUrl);
   }
-
   const escapedUrls = html.match(/https?:\\?\/\\?\/[^\s"'<>\\]+/gi) || [];
   escapedUrls.forEach(u => addCandidate(foundUrls, u, originalUrl));
-
   const b64Blocks = html.match(/[A-Za-z0-9+/_-]{32,}={0,2}/g) || [];
   for (const b64 of b64Blocks.slice(0, 30)) {
     const decoded = safeBase64(b64);
     if (decoded) (decoded.match(/https?:\/\/[^\s"'<>]+/gi) || []).forEach(u => addCandidate(foundUrls, u, originalUrl));
   }
-
   return Array.from(foundUrls).filter(url => url.startsWith("http") && url !== originalUrl);
 }
 
@@ -181,9 +169,7 @@ function hasParsableContent(text) {
   if (!c) return false;
   if (/(?:vless|vmess|trojan|ss|hysteria2?|tuic|wireguard|wg):\/\//i.test(c)) return true;
   if (/^(?:happ|incy|v2raytun):\/\//i.test(c)) return true;
-  if (/^\s*[\[{]/.test(c)) {
-    try { JSON.parse(c); return true; } catch {}
-  }
+  if (/^\s*[\[{]/.test(c)) { try { JSON.parse(c); return true; } catch {} }
   if (/^(?:proxies|proxy-groups|mixed-port|port|mode)\s*:/im.test(c)) return true;
   if (/^[A-Za-z0-9+/_-]{40,}={0,2}$/.test(c.replace(/\s/g, ""))) {
     const d = safeBase64(c);
@@ -195,7 +181,8 @@ function hasParsableContent(text) {
 async function fetchSubscription(url, trusted = false) {
   try {
     const lowerUrl = url.toLowerCase();
-    if (BLOCKED_DOMAINS.some(domain => lowerUrl.includes(domain.toLowerCase()))) return { ok: false, error: "🚫 Домен заблокирован", attempts: 0 };
+    const isBlocked = BLOCKED_DOMAINS.some(domain => lowerUrl.includes(domain.toLowerCase()));
+    if (isBlocked && !trusted) return { ok: false, error: "🚫 Домен заблокирован", attempts: 0 };
     const redirectTarget = extractRedirectTarget(url);
     const actualUrl = redirectTarget ? new URL(redirectTarget, url).toString() : url;
     let lastError = "Неизвестная ошибка", attempts = 0, bestContent = null, bestContentType = null;
@@ -213,7 +200,6 @@ async function fetchSubscription(url, trusted = false) {
         if (!text) { lastError = "Пустой ответ"; continue; }
         if (isTemporaryMessage(text)) { lastError = "Сервер вернул временное сообщение"; continue; }
         if (isStubResponse(text)) { lastError = "Сервер вернул заглушку"; continue; }
-
         const envelopeUrl = unwrapEnvelope(text);
         if (envelopeUrl && envelopeUrl !== actualUrl) {
           try {
@@ -224,7 +210,6 @@ async function fetchSubscription(url, trusted = false) {
             }
           } catch {}
         }
-
         const isHtml = ct.includes("text/html") || /<html|<!doctype|<body|<script/i.test(text);
         if (isHtml) {
           const allUrls = extractAllUrlsFromHtml(text, url).slice(0, 8);
@@ -253,119 +238,77 @@ async function fetchSubscription(url, trusted = false) {
             }
             if (allContents.length > 0) return { ok: true, content: allContents.join("\n"), contentType: "text/plain", attempts };
           }
-          if (hasParsableContent(text)) return { ok: true, content: text, contentType: ct, attempts };
-          lastError = "HTML не содержит рабочей подписки";
-          continue;
         }
-
-        bestContent = text;
-        bestContentType = ct;
-        if (hasParsableContent(text) || text.includes("://")) return { ok: true, content: text, contentType: ct, attempts };
-      } catch (e) { lastError = e.name === "AbortError" ? "Таймаут запроса" : e.message; }
+        if (hasParsableContent(text)) return { ok: true, content: text, contentType: ct || "text/plain", attempts };
+        const candidateUrls = extractAllUrlsFromHtml(text, url).slice(0, 8);
+        if (candidateUrls.length > 0) return { ok: true, content: candidateUrls.join("\n"), contentType: "text/plain", attempts };
+        bestContent = text; bestContentType = ct || "text/plain"; lastError = "Не найдено поддерживаемых конфигураций";
+      } catch (e) { lastError = e?.name === "AbortError" ? "Таймаут" : (e?.message || "Ошибка запроса"); }
     }
-    if (bestContent) return { ok: true, content: bestContent, contentType: bestContentType, attempts };
-    return { ok: false, error: `❌ <b>Не удалось получить подписку</b>\n\nПроверил <b>${attempts}</b> вариантов запроса.\n\nПоследняя ошибка: <code>${escapeHtml(lastError)}</code>\n\n💡 Попробуй прямую ссылку на подписку или экспорт из приложения, если исходная ссылка ведёт на страницу.`, attempts };
-  } catch (e) {
-    if (e.name === "AbortError") return { ok: false, error: "Таймаут запроса", attempts: 0 };
-    return { ok: false, error: `Ошибка сети: ${e.message}`, attempts: 0 };
-  }
+    return { ok: false, error: lastError, attempts, content: bestContent, contentType: bestContentType };
+  } catch (e) { return { ok: false, error: e?.message || "Ошибка декодирования", attempts: 0 }; }
 }
 
 function detectFormat(content) {
   const c = normalizeText(content);
-  if (!c) return "empty";
-  if (c.startsWith("crypt5://") || c.startsWith("crypt4://")) return "crypt";
-  if (/<(?:!doctype|html|body|script)/i.test(c)) return "html";
   if (/^(?:happ|incy|v2raytun):\/\//i.test(c)) return "envelope";
-  if (/^[A-Za-z0-9+/=\-_]+$/.test(c.replace(/\s/g, "")) && c.length > 20) {
-    const decoded = safeBase64(c);
-    if (decoded && /(?:vless|vmess|trojan|ss|hysteria2?|tuic|wireguard):\/\//i.test(decoded)) return "base64";
-  }
-  if (c.startsWith("{") || c.startsWith("[")) { try { JSON.parse(c); return "json"; } catch {} }
-  if (/\bproxies\s*:|\bproxy-groups\s*:|\bmixed-port\s*:/i.test(c)) return "yaml";
-  const lines = c.split("\n").map(l => l.trim()).filter(l => l && !l.startsWith("#"));
-  if (lines.length > 0 && lines.some(l => /^(vless|vmess|trojan|ss|hysteria|tuic|wireguard|wg):\/\//i.test(l))) return "vless-list";
-  return "unknown";
-}
-
-function extractHostPort(uri) {
-  try {
-    if (uri.startsWith("vmess://")) { const decoded = safeBase64(uri.substring(8)); if (!decoded) return null; const json = JSON.parse(decoded); const port = parseInt(json.port, 10); if (json.add && port) return { host: json.add, port }; return null; }
-    const m = uri.match(/@([^:/?#]+):(\d+)/);
-    return m ? { host: m[1], port: parseInt(m[2], 10) } : null;
-  } catch { return null; }
-}
-
-export async function checkServerAlive(uri, timeoutMs = 2500) {
-  const hp = extractHostPort(uri);
-  if (!hp || !hp.host || !hp.port) return false;
-  let socket;
-  try {
-    socket = connect({ hostname: hp.host, port: hp.port });
-    const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), timeoutMs));
-    await Promise.race([socket.opened, timeout]);
-    return true;
-  } catch { return false; }
-  finally { try { if (socket) socket.close(); } catch {} }
-}
-
-export async function checkServersAlive(uris, { concurrency = 8, timeoutMs = 2500 } = {}) {
-  const results = new Array(uris.length).fill(false);
-  let idx = 0;
-  async function worker() { while (idx < uris.length) { const i = idx++; results[i] = await checkServerAlive(uris[i], timeoutMs); } }
-  const workerCount = Math.max(1, Math.min(concurrency, uris.length));
-  await Promise.all(Array.from({ length: workerCount }, () => worker()));
-  return results;
+  if (/(?:vless|vmess|trojan|ss|hysteria2?|tuic|wireguard|wg):\/\//i.test(c)) return "uri";
+  if (/^\s*[\[{]/.test(c)) return "json";
+  if (/^(?:proxies|proxy-groups|mixed-port|port|mode)\s*:/im.test(c)) return "yaml";
+  return "base64";
 }
 
 export async function decodeSubscription(url, trusted = false, pingCheck = false) {
-  const result = await fetchSubscription(url, trusted);
-  if (!result.ok) return { ok: false, error: result.error, attempts: result.attempts || 0 };
-  if (isStubResponse(result.content)) return { ok: false, error: `❌ <b>Обнаружена заглушка!</b>\n\nСервер вернул фейковые ключи (0.0.0.0).`, attempts: result.attempts || 0 };
-  const format = detectFormat(result.content);
-  let parseResult;
-  switch (format) {
-    case "vless-list": parseResult = parseVlessList(result.content); break;
-    case "base64": parseResult = parseBase64(result.content); break;
-    case "yaml": parseResult = parseYaml(result.content); break;
-    case "json": parseResult = parseJson(result.content); break;
-    case "crypt": parseResult = parseCrypt(result.content); break;
-    case "envelope": {
-      const target = unwrapEnvelope(result.content);
-      if (target) {
-        const nested = await fetchSubscription(target, trusted);
-        if (nested.ok) {
-          return decodeSubscription(target, trusted, pingCheck);
-        }
+  if (!url || typeof url !== "string") return { ok: false, error: "Не указана ссылка", configs: [], uris: [], attempts: 0 };
+  const cleanUrl = url.trim().replace(/^<|>$/g, "");
+  if (!/^https?:\/\//i.test(cleanUrl)) return { ok: false, error: "Нужна HTTP(S)-ссылка", configs: [], uris: [], attempts: 0 };
+  const result = await fetchSubscription(cleanUrl, trusted);
+  if (!result.ok) return { ...result, configs: [], uris: [] };
+  let content = result.content || "";
+  const format = detectFormat(content);
+  let parsed = [];
+  try {
+    if (format === "envelope") {
+      const nestedUrl = unwrapEnvelope(content);
+      if (nestedUrl) {
+        const nested = await fetchSubscription(nestedUrl, trusted);
+        if (!nested.ok) return { ...nested, configs: [], uris: [] };
+        content = nested.content || "";
       }
-      parseResult = { ok: false, error: "❌ Happ envelope не содержит доступной подписки." };
-      break;
     }
-    case "empty": parseResult = { ok: false, error: "Пустая подписка" }; break;
-    case "html": parseResult = { ok: false, error: `❌ <b>HTML-страница или заглушка!</b>` }; break;
-    default: parseResult = { ok: false, error: `❓ Неизвестный формат` };
-  }
-  if (!parseResult.ok || !parseResult.uris?.length) {
-    for (const parser of [parseVlessList, parseBase64, parseYaml, parseJson]) {
-      try { const candidate = parser(result.content); if (candidate?.ok && candidate.uris?.length) { parseResult = candidate; break; } } catch {}
+    const finalFormat = detectFormat(content);
+    if (finalFormat === "uri") parsed = parseVlessList(content) || [];
+    else if (finalFormat === "json") parsed = parseJson(content) || [];
+    else if (finalFormat === "yaml") parsed = parseYaml(content) || [];
+    else parsed = parseBase64(content) || [];
+    if (!parsed.length) {
+      try { const crypt = parseCrypt(content); if (crypt?.length) parsed = crypt; } catch {}
     }
+  } catch (e) {
+    return { ok: false, error: `Ошибка разбора: ${e?.message || "неизвестная ошибка"}`, configs: [], uris: [], attempts: result.attempts };
   }
-  if (parseResult.ok && Array.isArray(parseResult.uris)) {
-    const seen = new Set();
-    parseResult.uris = parseResult.uris.filter(uri => {
-      if (!uri || typeof uri !== "string") return false;
-      const clean = uri.trim();
-      if (!clean || seen.has(clean) || /0\.0\.0\.0|00000000-0000/i.test(clean)) return false;
-      seen.add(clean); return true;
-    });
-    if (!parseResult.uris.length) { parseResult.ok = false; parseResult.error = "❌ Подписка получена, но рабочих конфигураций не найдено."; }
-  }
-  parseResult.attempts = result.attempts;
-  if (pingCheck && parseResult.ok && parseResult.uris?.length > 0) {
-    const alive = await checkServersAlive(parseResult.uris, { concurrency: 8, timeoutMs: 2500 });
-    parseResult.aliveFlags = alive;
-    parseResult.aliveCount = alive.filter(Boolean).length;
-    parseResult.deadCount = alive.length - parseResult.aliveCount;
-  }
-  return parseResult;
+  const uris = parsed.map(x => typeof x === "string" ? x : x?.uri).filter(Boolean);
+  if (!uris.length) return { ok: false, error: "Конфигурации не найдены", configs: [], uris: [], attempts: result.attempts, format: finalFormat || format };
+  let aliveFlags;
+  if (pingCheck) aliveFlags = await checkServersAlive(uris);
+  return { ok: true, configs: parsed, uris, aliveFlags, attempts: result.attempts, format: finalFormat || format };
 }
+
+async function checkServerAlive(uri, timeoutMs = 2500) {
+  try {
+    const u = new URL(uri);
+    const host = u.hostname;
+    const port = parseInt(u.port || (u.protocol === "https:" ? "443" : "80"), 10);
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try { const socket = connect({ hostname: host, port }); socket.closed.catch(() => {}); clearTimeout(timer); return true; }
+    catch { clearTimeout(timer); return false; }
+  } catch { return false; }
+}
+
+async function checkServersAlive(uris) {
+  const results = await Promise.all(uris.map(uri => checkServerAlive(uri)));
+  return results;
+}
+
+export { fetchSubscription, checkServerAlive, checkServersAlive };
