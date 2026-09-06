@@ -53,6 +53,15 @@ async function fetchWithRedirects(url, headers, max = 5) {
     if ([301, 302, 303, 307, 308].includes(res.status)) {
       const loc = res.headers.get("location");
       if (!loc) return res;
+      // Некоторые Happ/Hiddify шлюзы редиректят прямо в happ://... .
+      // Не пытаемся передать такой URI в fetch(): возвращаем его как тело,
+      // чтобы следующий этап декодера смог разобрать envelope.
+      if (/^(?:happ|incy|v2raytun):\/\//i.test(loc.trim())) {
+        return new Response(loc.trim(), {
+          status: 200,
+          headers: { "content-type": "text/plain;charset=utf-8" }
+        });
+      }
       currentUrl = new URL(loc, currentUrl).toString();
       const redirectTarget = extractRedirectTarget(currentUrl);
       if (redirectTarget) currentUrl = new URL(redirectTarget, currentUrl).toString();
@@ -104,24 +113,24 @@ function extractAllUrlsFromHtml(html, originalUrl) {
   const direct = html.match(/https?:\/\/[^\s"'<>\\]+/gi) || [];
   direct.forEach(u => addCandidate(foundUrls, u, originalUrl));
 
-  const happLinks = html.match(/happ:\/\/[^\s"'<>]+/gi) || [];
+  const happLinks = html.match(/(?:happ|incy|v2raytun):\/\/[^\s"'<>]+/gi) || [];
   for (const link of happLinks) {
     const cleanLink = link.replace(/["'>]/g, "");
     let decoded = cleanLink;
     try { decoded = decodeURIComponent(cleanLink); } catch {}
-    const addMatch = cleanLink.match(/happ:\/\/add\/(.+)$/i);
+    const addMatch = cleanLink.match(/(?:happ|incy|v2raytun):\/\/add\/(.+)$/i);
     if (addMatch) addCandidate(foundUrls, addMatch[1], originalUrl);
     const cryptMatch = cleanLink.match(/happ:\/\/crypt\d*\/(.+)$/i);
     if (cryptMatch) addCandidate(foundUrls, safeBase64(cryptMatch[1]), originalUrl);
     (decoded.match(/https?:\/\/[^\s"'<>]+/gi) || []).forEach(u => addCandidate(foundUrls, u, originalUrl));
-    const b64 = decoded.match(/happ:\/\/[a-z]*\/?([A-Za-z0-9+/=_-]{16,})/i);
+    const b64 = decoded.match(/(?:happ|incy|v2raytun):\/\/[a-z]*\/?([A-Za-z0-9+/=_-]{16,})/i);
     if (b64) {
       const d = safeBase64(b64[1]);
       (d?.match(/https?:\/\/[^\s"'<>]+/gi) || []).forEach(u => addCandidate(foundUrls, u, originalUrl));
     }
   }
 
-  const encoded = html.match(/(?:url|link|sub|target|redirect|subscription|config)=([^&\s"'>]+)/gi) || [];
+  const encoded = html.match(/(?:url|link|sub|target|redirect|subscription|config|payload)=([^&\s"'>]+)/gi) || [];
   for (const match of encoded) {
     const value = match.replace(/^[^=]+=\s*/, "");
     addCandidate(foundUrls, value, originalUrl);
@@ -153,10 +162,25 @@ function extractAllUrlsFromHtml(html, originalUrl) {
   return Array.from(foundUrls).filter(url => url.startsWith("http") && url !== originalUrl);
 }
 
+function unwrapEnvelope(content) {
+  const c = normalizeText(content);
+  if (!c) return null;
+  const add = c.match(/^(?:happ|incy|v2raytun):\/\/add\/(.+)$/i);
+  if (add) {
+    let value = add[1].trim();
+    try { value = decodeURIComponent(value); } catch {}
+    if (/^https?:\/\//i.test(value)) return value;
+    const decoded = safeBase64(value);
+    if (decoded && /^https?:\/\//i.test(decoded.trim())) return decoded.trim();
+  }
+  return null;
+}
+
 function hasParsableContent(text) {
   const c = normalizeText(text);
   if (!c) return false;
   if (/(?:vless|vmess|trojan|ss|hysteria2?|tuic|wireguard|wg):\/\//i.test(c)) return true;
+  if (/^(?:happ|incy|v2raytun):\/\//i.test(c)) return true;
   if (/^\s*[\[{]/.test(c)) {
     try { JSON.parse(c); return true; } catch {}
   }
@@ -190,9 +214,20 @@ async function fetchSubscription(url, trusted = false) {
         if (isTemporaryMessage(text)) { lastError = "Сервер вернул временное сообщение"; continue; }
         if (isStubResponse(text)) { lastError = "Сервер вернул заглушку"; continue; }
 
+        const envelopeUrl = unwrapEnvelope(text);
+        if (envelopeUrl && envelopeUrl !== actualUrl) {
+          try {
+            const nested = await fetchWithRedirects(envelopeUrl, buildHappHeaders(ua, false, trusted));
+            if (nested.ok) {
+              const nestedText = normalizeText(await nested.text());
+              if (nestedText) return { ok: true, content: nestedText, contentType: nested.headers.get("content-type") || "text/plain", attempts };
+            }
+          } catch {}
+        }
+
         const isHtml = ct.includes("text/html") || /<html|<!doctype|<body|<script/i.test(text);
         if (isHtml) {
-          const allUrls = extractAllUrlsFromHtml(text, url).slice(0, 6);
+          const allUrls = extractAllUrlsFromHtml(text, url).slice(0, 8);
           if (allUrls.length > 0) {
             const allContents = [];
             for (const subUrl of allUrls) {
@@ -203,7 +238,7 @@ async function fetchSubscription(url, trusted = false) {
                 if (!subText || isStubResponse(subText) || isTemporaryMessage(subText)) continue;
                 const subCt = subRes.headers.get("content-type") || "";
                 if (/<html|<!doctype|<script/i.test(subText) || subCt.includes("text/html")) {
-                  const nestedUrls = extractAllUrlsFromHtml(subText, subUrl).slice(0, 4);
+                  const nestedUrls = extractAllUrlsFromHtml(subText, subUrl).slice(0, 6);
                   for (const nestedUrl of nestedUrls) {
                     try {
                       const nestedRes = await fetchWithRedirects(nestedUrl, buildHappHeaders(ua, false, trusted));
@@ -241,6 +276,7 @@ function detectFormat(content) {
   if (!c) return "empty";
   if (c.startsWith("crypt5://") || c.startsWith("crypt4://")) return "crypt";
   if (/<(?:!doctype|html|body|script)/i.test(c)) return "html";
+  if (/^(?:happ|incy|v2raytun):\/\//i.test(c)) return "envelope";
   if (/^[A-Za-z0-9+/=\-_]+$/.test(c.replace(/\s/g, "")) && c.length > 20) {
     const decoded = safeBase64(c);
     if (decoded && /(?:vless|vmess|trojan|ss|hysteria2?|tuic|wireguard):\/\//i.test(decoded)) return "base64";
@@ -294,6 +330,17 @@ export async function decodeSubscription(url, trusted = false, pingCheck = false
     case "yaml": parseResult = parseYaml(result.content); break;
     case "json": parseResult = parseJson(result.content); break;
     case "crypt": parseResult = parseCrypt(result.content); break;
+    case "envelope": {
+      const target = unwrapEnvelope(result.content);
+      if (target) {
+        const nested = await fetchSubscription(target, trusted);
+        if (nested.ok) {
+          return decodeSubscription(target, trusted, pingCheck);
+        }
+      }
+      parseResult = { ok: false, error: "❌ Happ envelope не содержит доступной подписки." };
+      break;
+    }
     case "empty": parseResult = { ok: false, error: "Пустая подписка" }; break;
     case "html": parseResult = { ok: false, error: `❌ <b>HTML-страница или заглушка!</b>` }; break;
     default: parseResult = { ok: false, error: `❓ Неизвестный формат` };
