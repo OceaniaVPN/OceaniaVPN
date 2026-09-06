@@ -11,8 +11,9 @@ function navigationPanel() {
   return {
     inline_keyboard: [
       [{ text: "🏠 Главная", callback_data: "menu" }, { text: "📋 Подписка", callback_data: "my" }],
-      [{ text: "📡 Серверы", callback_data: "list" }, { text: "🔍 Декодер", callback_data: "decode" }],
-      [{ text: "📤 Экспорт", callback_data: "export" }, { text: "ℹ️ Помощь", callback_data: "help" }],
+      [{ text: "📡 Серверы", callback_data: "list" }, { text: "➕ Добавить", callback_data: "add_prompt" }],
+      [{ text: "🔍 Декодер", callback_data: "decode" }, { text: "📤 Экспорт", callback_data: "export" }],
+      [{ text: "ℹ️ Помощь", callback_data: "help" }],
     ],
   };
 }
