@@ -7,6 +7,14 @@ async function tgRequest(token, method, body) {
   }).then((r) => r.json());
 }
 
+function withNavigation(markup) {
+  if (!markup?.inline_keyboard) return markup;
+  const rows = markup.inline_keyboard.map((row) => Array.isArray(row) ? [...row] : row);
+  const hasHome = rows.some((row) => row.some((b) => b?.callback_data === "menu" || b?.text?.includes("Главное меню")));
+  if (!hasHome) rows.push([{ text: "🏠 Главное меню", callback_data: "menu" }]);
+  return { ...markup, inline_keyboard: rows };
+}
+
 export async function sendMessage(token, chatId, text, replyMarkup = null, parseMode = "HTML") {
   const body = {
     chat_id: chatId,
@@ -14,18 +22,19 @@ export async function sendMessage(token, chatId, text, replyMarkup = null, parse
     parse_mode: parseMode,
     disable_web_page_preview: true,
   };
-  if (replyMarkup) body.reply_markup = replyMarkup;
+  if (replyMarkup) body.reply_markup = withNavigation(replyMarkup);
   return tgRequest(token, "sendMessage", body);
 }
 
 export async function editMessage(token, chatId, messageId, text, replyMarkup = null) {
-  return tgRequest(token, "editMessageText", {
+  const body = {
     chat_id: chatId,
     message_id: messageId,
     text,
     parse_mode: "HTML",
-    reply_markup: replyMarkup,
-  });
+  };
+  if (replyMarkup) body.reply_markup = withNavigation(replyMarkup);
+  return tgRequest(token, "editMessageText", body);
 }
 
 export async function sendDocument(token, chatId, content, filename, caption = "") {
