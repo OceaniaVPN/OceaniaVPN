@@ -7,12 +7,21 @@ async function tgRequest(token, method, body) {
   }).then((r) => r.json());
 }
 
+function navigationPanel() {
+  return {
+    inline_keyboard: [
+      [{ text: "🏠 Главная", callback_data: "menu" }, { text: "📋 Подписка", callback_data: "my" }],
+      [{ text: "📡 Серверы", callback_data: "list" }, { text: "🔍 Декодер", callback_data: "decode" }],
+      [{ text: "📤 Экспорт", callback_data: "export" }, { text: "ℹ️ Помощь", callback_data: "help" }],
+    ],
+  };
+}
+
 function withNavigation(markup) {
-  if (!markup?.inline_keyboard) return markup;
-  const rows = markup.inline_keyboard.map((row) => Array.isArray(row) ? [...row] : row);
-  const hasHome = rows.some((row) => row.some((b) => b?.callback_data === "menu" || b?.text?.includes("Главное меню")));
-  if (!hasHome) rows.push([{ text: "🏠 Главное меню", callback_data: "menu" }]);
-  return { ...markup, inline_keyboard: rows };
+  const base = markup?.inline_keyboard ? markup.inline_keyboard.map((row) => Array.isArray(row) ? [...row] : row) : [];
+  const hasHome = base.some((row) => row.some((b) => b?.callback_data === "menu" || b?.text?.includes("Главная") || b?.text?.includes("Главное меню")));
+  if (!hasHome) base.push([{ text: "🏠 Главное меню", callback_data: "menu" }]);
+  return { ...(markup || {}), inline_keyboard: base };
 }
 
 export async function sendMessage(token, chatId, text, replyMarkup = null, parseMode = "HTML") {
@@ -21,20 +30,19 @@ export async function sendMessage(token, chatId, text, replyMarkup = null, parse
     text,
     parse_mode: parseMode,
     disable_web_page_preview: true,
+    reply_markup: replyMarkup ? withNavigation(replyMarkup) : navigationPanel(),
   };
-  if (replyMarkup) body.reply_markup = withNavigation(replyMarkup);
   return tgRequest(token, "sendMessage", body);
 }
 
 export async function editMessage(token, chatId, messageId, text, replyMarkup = null) {
-  const body = {
+  return tgRequest(token, "editMessageText", {
     chat_id: chatId,
     message_id: messageId,
     text,
     parse_mode: "HTML",
-  };
-  if (replyMarkup) body.reply_markup = withNavigation(replyMarkup);
-  return tgRequest(token, "editMessageText", body);
+    reply_markup: replyMarkup ? withNavigation(replyMarkup) : navigationPanel(),
+  });
 }
 
 export async function sendDocument(token, chatId, content, filename, caption = "") {
