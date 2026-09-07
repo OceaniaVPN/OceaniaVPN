@@ -267,7 +267,6 @@ export async function decodeSubscription(url, trusted = false, pingCheck = false
   let content = result.content || "";
   const format = detectFormat(content);
   let parsed = [];
-  let finalFormat = format;
   try {
     if (format === "envelope") {
       const nestedUrl = unwrapEnvelope(content);
@@ -277,27 +276,13 @@ export async function decodeSubscription(url, trusted = false, pingCheck = false
         content = nested.content || "";
       }
     }
-    finalFormat = detectFormat(content);
-    let parseResult;
-    if (finalFormat === "uri") parseResult = parseVlessList(content);
-    else if (finalFormat === "json") parseResult = parseJson(content);
-    else if (finalFormat === "yaml") parseResult = parseYaml(content);
-    else if (finalFormat === "crypt") parseResult = parseCrypt(content);
-    else if (finalFormat === "empty") parseResult = { ok: false, error: "Пустая подписка" };
-    else parseResult = parseBase64(content);
-
-    if (parseResult && parseResult.ok === false) {
-      return { ok: false, error: parseResult.error || "Конфигурации не найдены", configs: [], uris: [], attempts: result.attempts, format: finalFormat };
-    }
-
-    parsed = Array.isArray(parseResult) ? parseResult : (Array.isArray(parseResult?.uris) ? parseResult.uris : []);
-    if (!parsed.length && finalFormat !== "crypt") {
-      try {
-        const crypt = parseCrypt(content);
-        if (crypt?.ok === false) return { ok: false, error: crypt.error || "Конфигурации не найдены", configs: [], uris: [], attempts: result.attempts, format: finalFormat };
-        if (Array.isArray(crypt)) parsed = crypt;
-        else if (Array.isArray(crypt?.uris)) parsed = crypt.uris;
-      } catch {}
+    const finalFormat = detectFormat(content);
+    if (finalFormat === "uri") parsed = parseVlessList(content) || [];
+    else if (finalFormat === "json") parsed = parseJson(content) || [];
+    else if (finalFormat === "yaml") parsed = parseYaml(content) || [];
+    else parsed = parseBase64(content) || [];
+    if (!parsed.length) {
+      try { const crypt = parseCrypt(content); if (crypt?.length) parsed = crypt; } catch {}
     }
   } catch (e) {
     return { ok: false, error: `Ошибка разбора: ${e?.message || "неизвестная ошибка"}`, configs: [], uris: [], attempts: result.attempts };
@@ -310,41 +295,19 @@ export async function decodeSubscription(url, trusted = false, pingCheck = false
 }
 
 async function checkServerAlive(uri, timeoutMs = 2500) {
-  const hp = (() => {
-    try {
-      if (uri.startsWith("vmess://")) {
-        const decoded = safeBase64(uri.substring(8));
-        if (!decoded) return null;
-        const json = JSON.parse(decoded);
-        const port = parseInt(json.port, 10);
-        return json.add && port ? { host: json.add, port } : null;
-      }
-      const m = uri.match(/@([^:/?#]+):(\d+)/);
-      return m ? { host: m[1], port: parseInt(m[2], 10) } : null;
-    } catch { return null; }
-  })();
-  if (!hp || !hp.host || !hp.port) return false;
-  let socket;
   try {
-    socket = connect({ hostname: hp.host, port: hp.port });
-    const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), timeoutMs));
-    await Promise.race([socket.opened, timeout]);
-    return true;
+    const u = new URL(uri);
+    const host = u.hostname;
+    const port = parseInt(u.port || (u.protocol === "https:" ? "443" : "80"), 10);
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try { const socket = connect({ hostname: host, port }); socket.closed.catch(() => {}); clearTimeout(timer); return true; }
+    catch { clearTimeout(timer); return false; }
   } catch { return false; }
-  finally { try { if (socket) socket.close(); } catch {} }
 }
 
 async function checkServersAlive(uris) {
-  const results = new Array(uris.length).fill(false);
-  let idx = 0;
-  async function worker() {
-    while (idx < uris.length) {
-      const i = idx++;
-      results[i] = await checkServerAlive(uris[i]);
-    }
-  }
-  const workerCount = Math.max(1, Math.min(8, uris.length));
-  await Promise.all(Array.from({ length: workerCount }, () => worker()));
+  const results = await Promise.all(uris.map(uri => checkServerAlive(uri)));
   return results;
 }
 
