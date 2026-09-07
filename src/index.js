@@ -30,7 +30,7 @@ const AUTO_UPDATE_CONFIG = {
 // ==========================================
 const SECONDARY_CONFIG = {
   targetUrl: "https://okeaniavpn.dimastekolnikov1.workers.dev/sub?token=0fe191f6-7ec7-44ec-aed7-cc6423745ca8",
-  targetFilename: "okeania_auto.txt",
+  targetFilename: "okeania_auto.txt", // Имя файла для этой подписки
   title: "OkeaniaVPN Auto",
   interval: 4,
   webpage: "https://t.me/free_vpn123456",
@@ -70,7 +70,9 @@ async function fetchAndMergeSources(sourcesUrls) {
 
 function getSuperscript(n) {
   const sup = ['', '¹', '²', '³', '⁴', '⁵', '⁶', '⁷', '⁸', '⁹', '¹⁰', '¹¹', '¹²', '¹³', '¹⁴', '¹⁵', '¹⁶', '¹⁷', '¹⁸', '¹⁹', '²⁰'];
-  if (n <= 20) return sup[n];
+  if (n <= 20) {
+    return sup[n];
+  }
   return "#" + n;
 }
 
@@ -78,18 +80,22 @@ function applyRename(uris) {
   const counters = {};
   COUNTRIES.forEach(function(c) { counters[c.name] = 0; });
   counters["Рандом"] = 0;
+
   return uris.map(function(uri) {
     const hashIndex = uri.lastIndexOf('#');
     const baseUri = hashIndex === -1 ? uri : uri.substring(0, hashIndex);
     const originalName = hashIndex === -1 ? "" : decodeURIComponent(uri.substring(hashIndex + 1));
+
     let country = detectCountryFromText(originalName);
     if (!country) {
       const hostMatch = baseUri.match(/@([^:/]+)/);
       if (hostMatch) country = detectCountryFromText(hostMatch[1]);
     }
+
     const displayName = country ? country.name : "Рандом";
     const flag = country ? country.flag : "🌍";
     const counterKey = country ? country.name : "Рандом";
+
     counters[counterKey]++;
     const superscript = getSuperscript(counters[counterKey]);
     return baseUri + "#" + encodeURIComponent(flag + " " + displayName + " | БС" + superscript);
@@ -98,7 +104,16 @@ function applyRename(uris) {
 
 // ==========================================
 // 📦 РАЗДАЧА ПОДПИСКИ ПОД СВОИМ ДОМЕНОМ (/sub)
+// Отдаёт содержимое файла подписки как есть (для импорта в VPN-клиент), но
+// через домен воркера — так пользователь не видит прямую ссылку на GitHub
+// (структуру репозитория, имена файлов) в самом клиенте.
+//   ?u=<chatId>   → user_<chatId>.txt (личная подписка пользователя)
+//   ?f=<filename> → произвольный файл в папке конфигов (например decoded_*.txt)
 // ==========================================
+// 📱 Список подстрок User-Agent известных VPN-клиентов, которым нужно отдавать
+// НАСТОЯЩИЕ конфиги. Всё остальное (браузер, curl, превью-боты и т.д.) получает
+// красивую тематическую HTML-страницу вместо конфигов — конфиги физически не
+// покидают ответ сервера для не-VPN-клиентов, они просто не запрашивают их.
 const VPN_CLIENT_UA_MARKERS = [
   "happ", "hiddify", "v2rayng", "v2raytun", "v2rayn", "v2box",
   "shadowrocket", "quantumult", "surge", "loon", "stash",
@@ -118,11 +133,31 @@ async function serveSubscription(request, cfg) {
   const filenameParam = url.searchParams.get("f");
   const filename = chatIdParam ? `user_${chatIdParam}.txt` : filenameParam;
   if (!filename) return new Response("Missing ?u= or ?f= parameter", { status: 400 });
+
   const content = await getFileContent(cfg, filename);
   if (!content) return new Response("Subscription not found", { status: 404 });
+
   const userAgent = request.headers.get("user-agent") || "";
-  if (!isVpnClientUA(userAgent)) return renderThemedPage(request, cfg, content);
-  const headers = { "Content-Type": "text/plain;charset=utf-8", "Cache-Control": "no-store" };
+
+  // 🔒 ГЛАВНЫЙ ФИКС: одна и та же ссылка /sub?u=... — Happ (и другие VPN-клиенты)
+  // получают реальные конфиги, браузер на ТОЙ ЖЕ ссылке получает тематическую
+  // HTML-страницу со статусом подписки вместо конфигов. Конфиги не палятся
+  // тому, кто просто открыл ссылку в браузере.
+  if (!isVpnClientUA(userAgent)) {
+    return renderThemedPage(request, cfg, content);
+  }
+
+  // 🔧 ФИКС РАССИНХРОНА ДНЕЙ: VPN-клиент (Happ/v2rayNG/Hiddify) читает срок
+  // действия НЕ из текстового комментария #subscription-userinfo внутри тела
+  // файла, а из настоящего HTTP-заголовка Subscription-Userinfo на самом
+  // ответе. Раньше этот заголовок вообще не выставлялся — клиент либо не
+  // показывал срок, либо показывал что-то своё, а страница считала дни
+  // отдельно из тела файла. Теперь оба берут значение из ОДНОЙ и той же строки
+  // файла — расхождения быть не может.
+  const headers = {
+    "Content-Type": "text/plain;charset=utf-8",
+    "Cache-Control": "no-store",
+  };
   const userinfoMatch = content.match(/^#subscription-userinfo:\s*(.+)$/im);
   if (userinfoMatch) headers["Subscription-Userinfo"] = userinfoMatch[1].trim();
   const titleMatch = content.match(/^#profile-title:\s*(.+)$/im);
@@ -131,14 +166,27 @@ async function serveSubscription(request, cfg) {
   if (intervalMatch) headers["Profile-Update-Interval"] = intervalMatch[1].trim();
   const webpageMatch = content.match(/^#profile-web-page-url:\s*(.+)$/im);
   if (webpageMatch) headers["Profile-Web-Page-Url"] = webpageMatch[1].trim();
+
   return new Response(content, { headers });
 }
 
+// ==========================================
+// 🎨 ТЕМАТИЧЕСКАЯ СТРАНИЦА ПОДПИСКИ
+// Показывается на ТОЙ ЖЕ ссылке /sub, что и конфиги — просто не-VPN клиенту
+// (браузеру), см. serveSubscription выше. Берём случайную (или явно указанную
+// через ?theme=) тему из папки temi/ в этом же репозитории и подставляем в неё
+// РЕАЛЬНЫЙ статус подписки конкретного пользователя (вместо хардкода из
+// шаблона), не трогая остальное оформление темы.
+// ==========================================
+
 const AVAILABLE_THEMES = ["beach", "forest", "gori", "ocean", "pustinya", "site"];
+
 function pickTheme(explicit) {
   if (explicit && AVAILABLE_THEMES.includes(explicit)) return explicit;
   return AVAILABLE_THEMES[Math.floor(Math.random() * AVAILABLE_THEMES.length)];
 }
+
+// Парсит #заголовки: значение из файла подписки (тот же формат, что и в build.js/buildFile)
 function parseFileHeaders(content) {
   const meta = {};
   for (const line of content.split("\n")) {
@@ -148,12 +196,19 @@ function parseFileHeaders(content) {
   }
   return meta;
 }
+
+// Принимает УЖЕ полученный content файла подписки (чтобы не дёргать GitHub
+// второй раз) и рендерит тематическую страницу с реальным статусом.
 async function renderThemedPage(request, cfg, content) {
   const url = new URL(request.url);
   const meta = parseFileHeaders(content);
   const title = meta["profile-title"] || "My Subscription";
+  // #x-expire-ts / #x-expire-days-total пишутся в build.js на шаге 5/5 (/create).
+  // Если их нет — подписка либо без ограничения по времени, либо создана до
+  // появления этого шага; в обоих случаях считаем её безлимитной.
   const expireTs = parseInt(meta["x-expire-ts"], 10) || 0;
   const totalDaysHeader = parseInt(meta["x-expire-days-total"], 10) || 0;
+
   let status, daysLeft, totalDaysForBar, expiryDateStr;
   if (expireTs > 0) {
     const msLeft = expireTs * 1000 - Date.now();
@@ -163,10 +218,24 @@ async function renderThemedPage(request, cfg, content) {
     totalDaysForBar = totalDaysHeader > 0 ? totalDaysHeader : Math.max(daysLeftReal, 1);
     expiryDateStr = new Date(expireTs * 1000).toLocaleDateString("ru-RU");
   } else {
-    status = "active"; daysLeft = 1; totalDaysForBar = 1; expiryDateStr = "Без ограничений";
+    // Безлимитная подписка — полная зелёная полоса, без числа дней.
+    status = "active";
+    daysLeft = 1;
+    totalDaysForBar = 1;
+    expiryDateStr = "Без ограничений";
   }
+
   const themeName = pickTheme(url.searchParams.get("theme"));
-  const themeUrl = `https://raw.githubusercontent.com/OceaniaVPN/OceaniaVPN/main/temi/${themeName}.html`;
+  // cfg.configRepoOwner/configRepoName — это настраиваемый репозиторий
+  // ХРАНЕНИЯ файлов подписок (user_*.txt), он может отличаться от репозитория
+  // с кодом бота (env.CONFIG_REPO_NAME по умолчанию вообще "StekloVPN", см.
+  // config.js). Папка temi/ живёт конкретно в OceaniaVPN/OceaniaVPN — зашиваем
+  // это отдельно, не завязываясь на настраиваемый storage-репозиторий.
+  const THEME_REPO_OWNER = "OceaniaVPN";
+  const THEME_REPO_NAME = "OceaniaVPN";
+  const THEME_BRANCH = "main";
+  const themeUrl = `https://raw.githubusercontent.com/${THEME_REPO_OWNER}/${THEME_REPO_NAME}/${THEME_BRANCH}/temi/${themeName}.html`;
+
   let html;
   try {
     const themeRes = await fetch(themeUrl);
@@ -175,9 +244,20 @@ async function renderThemedPage(request, cfg, content) {
   } catch (e) {
     return new Response("Theme page unavailable: " + e.message, { status: 502 });
   }
-  const subJson = JSON.stringify({ status, plan: title, expiryDate: expiryDateStr, daysLeft, totalDays: totalDaysForBar });
+
+  // Подставляем РЕАЛЬНЫЕ данные в var DATA = {...} шаблона, не трогая остальные
+  // декоративные поля темы (emoji/desc/instructions/gradient/botLink — они
+  // авторские для каждой темы, их не меняем).
+  const subJson = JSON.stringify({
+    status,
+    plan: title,
+    expiryDate: expiryDateStr,
+    daysLeft,
+    totalDays: totalDaysForBar
+  });
   html = html.replace(/subscription:\s*\{[^}]*\}/, `subscription: ${subJson}`);
   html = html.replace(/title:\s*'[^']*'/, `title: ${JSON.stringify(title)}`);
+
   return new Response(html, { headers: { "Content-Type": "text/html;charset=utf-8", "Cache-Control": "no-store" } });
 }
 
@@ -191,46 +271,67 @@ async function pageSubscription(request, cfg) {
   return renderThemedPage(request, cfg, content);
 }
 
-// Один общий обработчик автообновления для Cron и ручной команды /update.
-async function runAutoUpdate(env) {
-  console.log("[Cron] Auto-update triggered at:", new Date().toISOString());
+// Ручной запуск автообновления по команде /update.
+// Работает в фоне через ctx.waitUntil(), чтобы Telegram webhook не ждал долгий декодер.
+async function runManualUpdate(env, reportChatId) {
   const cfg = getConfig(env);
+  const sendReport = async (text) => {
+    if (reportChatId) await sendMessage(cfg.telegramToken, reportChatId, text);
+  };
 
   try {
     const { uris: uniqueUris } = await fetchAndMergeSources(AUTO_UPDATE_CONFIG.sources);
     if (uniqueUris.length > 0) {
       const finalUris = AUTO_UPDATE_CONFIG.doRename ? applyRename(uniqueUris) : uniqueUris;
-      const profileMetadata = { title: AUTO_UPDATE_CONFIG.title, interval: AUTO_UPDATE_CONFIG.interval, webpage: AUTO_UPDATE_CONFIG.webpage, announce: AUTO_UPDATE_CONFIG.announce, userinfo: AUTO_UPDATE_CONFIG.userinfo };
+      const profileMetadata = {
+        title: AUTO_UPDATE_CONFIG.title,
+        interval: AUTO_UPDATE_CONFIG.interval,
+        webpage: AUTO_UPDATE_CONFIG.webpage,
+        announce: AUTO_UPDATE_CONFIG.announce,
+        userinfo: AUTO_UPDATE_CONFIG.userinfo
+      };
       const content = buildFile(profileMetadata, finalUris);
-      const res = await createOrUpdateFile(cfg, AUTO_UPDATE_CONFIG.targetFilename, content, "Auto update: " + finalUris.length + " nodes");
-      if ((res.content || res.sha) && cfg.adminId && cfg.adminId > 0) {
-        const rawUrl = `https://raw.githubusercontent.com/${cfg.configRepoOwner}/${cfg.configRepoName}/${cfg.branch}/${cfg.configsFolder}/${AUTO_UPDATE_CONFIG.targetFilename}`;
-        await sendMessage(cfg.telegramToken, cfg.adminId, `✅ <b>Основной конфиг обновлен!</b>\n\n📡 Серверов: <code>${finalUris.length}</code>\n🔗 <a href="${rawUrl}">Открыть</a>`);
+      const res = await createOrUpdateFile(cfg, AUTO_UPDATE_CONFIG.targetFilename, content, "Manual update: " + finalUris.length + " nodes");
+      if (res.content || res.sha) {
+        await sendReport(`✅ <b>Основной конфиг обновлен!</b>\n\n📡 Серверов: <code>${finalUris.length}</code>`);
+      } else {
+        await sendReport("⚠️ <b>Основной конфиг:</b> источники получены, но файл не подтверждён как обновлённый.");
       }
+    } else {
+      await sendReport("⚠️ <b>Основной конфиг:</b> не найдено ни одного сервера.");
     }
   } catch (e) {
-    console.error("[Cron] Main Update Error:", e);
+    console.error("[Manual Update] Main error:", e);
+    await sendReport("❌ <b>Основной конфиг — ошибка:</b> <code>" + String(e.message || e).replace(/[&<>]/g, "") + "</code>");
   }
 
   try {
-    console.log("[Cron] Decoding secondary source: " + SECONDARY_CONFIG.targetUrl);
     const result2 = await decodeSubscription(SECONDARY_CONFIG.targetUrl, true);
     if (result2.ok && result2.uris && result2.uris.length > 0) {
       const finalUris2 = SECONDARY_CONFIG.doRename ? applyRename(result2.uris) : result2.uris;
-      const profileMetadata2 = { title: SECONDARY_CONFIG.title, interval: SECONDARY_CONFIG.interval, webpage: SECONDARY_CONFIG.webpage, announce: SECONDARY_CONFIG.announce, userinfo: SECONDARY_CONFIG.userinfo };
+      const profileMetadata2 = {
+        title: SECONDARY_CONFIG.title,
+        interval: SECONDARY_CONFIG.interval,
+        webpage: SECONDARY_CONFIG.webpage,
+        announce: SECONDARY_CONFIG.announce,
+        userinfo: SECONDARY_CONFIG.userinfo
+      };
       const content2 = buildFile(profileMetadata2, finalUris2);
-      const res2 = await createOrUpdateFile(cfg, SECONDARY_CONFIG.targetFilename, content2, "Secondary Auto update: " + finalUris2.length + " nodes");
-      if ((res2.content || res2.sha) && cfg.adminId && cfg.adminId > 0) {
-        const rawUrl2 = `https://raw.githubusercontent.com/${cfg.configRepoOwner}/${cfg.configRepoName}/${cfg.branch}/${cfg.configsFolder}/${SECONDARY_CONFIG.targetFilename}`;
-        await sendMessage(cfg.telegramToken, cfg.adminId, `✅ <b>Второй конфиг (Okeania) обновлен!</b>\n\n📡 Серверов: <code>${finalUris2.length}</code>\n🔗 <a href="${rawUrl2}">Открыть</a>`);
+      const res2 = await createOrUpdateFile(cfg, SECONDARY_CONFIG.targetFilename, content2, "Manual secondary update: " + finalUris2.length + " nodes");
+      if (res2.content || res2.sha) {
+        await sendReport(`✅ <b>Okeania конфиг обновлен!</b>\n\n📡 Серверов: <code>${finalUris2.length}</code>`);
+      } else {
+        await sendReport("⚠️ <b>Okeania:</b> файл не подтверждён как обновлённый.");
       }
-      console.log("[Cron] Secondary Success: " + finalUris2.length + " servers saved");
     } else {
-      console.error("[Cron] Secondary Failed:", result2.error);
+      await sendReport("❌ <b>Okeania:</b> не удалось получить серверы." + (result2.error ? "\n<code>" + String(result2.error).replace(/[&<>]/g, "") + "</code>" : ""));
     }
   } catch (e) {
-    console.error("[Cron] Secondary Update Error:", e);
+    console.error("[Manual Update] Okeania error:", e);
+    await sendReport("❌ <b>Okeania — ошибка:</b> <code>" + String(e.message || e).replace(/[&<>]/g, "") + "</code>");
   }
+
+  await sendReport("🏁 <b>Ручное обновление завершено.</b>");
 }
 
 export default {
@@ -256,12 +357,12 @@ export default {
         const update = await request.json();
         const messageText = update.message?.text?.trim();
         if (update.message && messageText === "/update") {
+          const chatId = update.message.chat.id;
           if (!cfg.adminId || update.message.from?.id !== cfg.adminId) {
-            await sendMessage(cfg.telegramToken, update.message.chat.id, "⛔️ Нет прав для этой команды.");
+            await sendMessage(cfg.telegramToken, chatId, "⛔️ Нет прав для этой команды.");
           } else {
-            await sendMessage(cfg.telegramToken, update.message.chat.id, "⏳ <b>Запустил ручное обновление...</b>\n\nОбновляю основной и Okeania конфиги. Это может занять некоторое время.");
-            await runAutoUpdate(env);
-            await sendMessage(cfg.telegramToken, update.message.chat.id, "✅ <b>Ручное обновление завершено.</b>\n\nПодробный результат отправлен в админский чат.");
+            await sendMessage(cfg.telegramToken, chatId, "⏳ <b>/update запущен.</b>\n\nОбновление выполняется в фоне. Результат придёт сюда после каждого конфига.");
+            ctx.waitUntil(runManualUpdate(env, chatId));
           }
           return new Response("OK", { status: 200 });
         }
@@ -276,6 +377,63 @@ export default {
   },
 
   async scheduled(event, env, ctx) {
-    await runAutoUpdate(env);
+    console.log("[Cron] Auto-update triggered at:", new Date().toISOString());
+    const cfg = getConfig(env);
+
+    // 1. Обновление основного whitelist.txt (4 источника)
+    try {
+      const { uris: uniqueUris, stats } = await fetchAndMergeSources(AUTO_UPDATE_CONFIG.sources);
+      if (uniqueUris.length > 0) {
+        let finalUris = AUTO_UPDATE_CONFIG.doRename ? applyRename(uniqueUris) : uniqueUris;
+        const profileMetadata = {
+          title: AUTO_UPDATE_CONFIG.title,
+          interval: AUTO_UPDATE_CONFIG.interval,
+          webpage: AUTO_UPDATE_CONFIG.webpage,
+          announce: AUTO_UPDATE_CONFIG.announce,
+          userinfo: AUTO_UPDATE_CONFIG.userinfo
+        };
+        const content = buildFile(profileMetadata, finalUris);
+        const res = await createOrUpdateFile(cfg, AUTO_UPDATE_CONFIG.targetFilename, content, "Auto update: " + finalUris.length + " nodes");
+
+        if ((res.content || res.sha) && cfg.adminId && cfg.adminId > 0) {
+          const rawUrl = `https://raw.githubusercontent.com/${cfg.configRepoOwner}/${cfg.configRepoName}/${cfg.branch}/${cfg.configsFolder}/${AUTO_UPDATE_CONFIG.targetFilename}`;
+          await sendMessage(cfg.telegramToken, cfg.adminId, `✅ <b>Основной конфиг обновлен!</b>\n\n📡 Серверов: <code>${finalUris.length}</code>\n🔗 <a href="${rawUrl}">Открыть</a>`);
+        }
+      }
+    } catch (e) {
+      console.error("[Cron] Main Update Error:", e);
+    }
+
+    // 2. Обновление второго конфига (okeania_auto.txt)
+    try {
+      console.log("[Cron] Decoding secondary source: " + SECONDARY_CONFIG.targetUrl);
+      // trusted=true — это наш собственный VPN-воркер (OceaniaVPN), запрос идёт
+      // с X-Bot-Secret, минуя проверку "только Happ" на его стороне. БЕЗ этого
+      // флага крон получал бы такую же заглушку, что и обычные пользователи.
+      const result2 = await decodeSubscription(SECONDARY_CONFIG.targetUrl, true);
+
+      if (result2.ok && result2.uris && result2.uris.length > 0) {
+        let finalUris2 = SECONDARY_CONFIG.doRename ? applyRename(result2.uris) : result2.uris;
+        const profileMetadata2 = {
+          title: SECONDARY_CONFIG.title,
+          interval: SECONDARY_CONFIG.interval,
+          webpage: SECONDARY_CONFIG.webpage,
+          announce: SECONDARY_CONFIG.announce,
+          userinfo: SECONDARY_CONFIG.userinfo
+        };
+        const content2 = buildFile(profileMetadata2, finalUris2);
+        const res2 = await createOrUpdateFile(cfg, SECONDARY_CONFIG.targetFilename, content2, "Secondary Auto update: " + finalUris2.length + " nodes");
+
+        if ((res2.content || res2.sha) && cfg.adminId && cfg.adminId > 0) {
+          const rawUrl2 = `https://raw.githubusercontent.com/${cfg.configRepoOwner}/${cfg.configRepoName}/${cfg.branch}/${cfg.configsFolder}/${SECONDARY_CONFIG.targetFilename}`;
+          await sendMessage(cfg.telegramToken, cfg.adminId, `✅ <b>Второй конфиг (Okeania) обновлен!</b>\n\n📡 Серверов: <code>${finalUris2.length}</code>\n🔗 <a href="${rawUrl2}">Открыть</a>`);
+        }
+        console.log("[Cron] Secondary Success: " + finalUris2.length + " servers saved");
+      } else {
+        console.error("[Cron] Secondary Failed:", result2.error);
+      }
+    } catch (e) {
+      console.error("[Cron] Secondary Update Error:", e);
+    }
   }
 };
