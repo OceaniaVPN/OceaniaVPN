@@ -34,7 +34,8 @@ export default {
       try {
         const update = await request.clone().json();
         if (update.message?.document) {
-          return new Response("OK", { status: 200, headers: { "Content-Type": "text/plain" } });
+          await handleProxyDocument(cfg, update.message);
+          return new Response("OK", { status: 200 });
         }
         if (update.callback_query?.data === "proxy") {
           await cmdProxy(cfg, update.callback_query.message.chat.id);
@@ -46,18 +47,6 @@ export default {
         }
       } catch {
         // Fall through to the normal worker webhook handler.
-      }
-    }
-
-    if (request.method === "POST") {
-      try {
-        const update = await request.clone().json();
-        if (update.message?.document) {
-          await handleProxyDocument(cfg, update.message);
-          return new Response("OK", { status: 200 });
-        }
-      } catch {
-        // Let the original handler deal with malformed/unrelated requests.
       }
     }
 
