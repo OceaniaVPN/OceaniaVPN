@@ -6,6 +6,7 @@ import { pingServers, cmdDev, cmdDevPing, cmdDevDiag, cmdDevMetrics } from "./de
 import { buildFile } from "./build.js";
 import { escapeHtml } from "./config.js";
 import { COUNTRIES, matchesCountryKey, detectCountryFromText } from "./contries.js";
+import { cmdProxy, handleProxyDocument } from "./proxy.js";
 
 function splitSubscriptionFile(content) {
   const lines = content.split("\n");
@@ -19,7 +20,7 @@ function splitSubscriptionFile(content) {
 }
 
 function detectCountry(uri) {
-  const hashIndex = uri.lastIndexOf("#");
+  const hashIndex = uri.lastIndexOf('#');
   const remark = hashIndex !== -1 ? decodeURIComponent(uri.substring(hashIndex + 1)) : "";
   const fromRemark = detectCountryFromText(remark);
   if (fromRemark) return fromRemark;
@@ -44,6 +45,7 @@ function mainMenu(isAdmin = false) {
   const rows = [
     [{ text: "🚀  Создать подписку", callback_data: "create" }],
     [{ text: "📋  Моя подписка", callback_data: "my" }, { text: "📡  Серверы", callback_data: "list" }],
+    [{ text: "🌐  Прокси-подписка", callback_data: "proxy" }],
     [{ text: "🔍  Декодер", callback_data: "decode" }, { text: "📤  Экспорт", callback_data: "export" }],
     [{ text: "🧰  Инструменты", callback_data: "tools" }, { text: "ℹ️  Помощь", callback_data: "help" }],
   ];
@@ -120,7 +122,7 @@ export async function cmdStart(cfg, chatId) {
 export async function cmdHelp(cfg, chatId) {
   await sendMessage(cfg.telegramToken, chatId,
     `ℹ️ <b>OCEANIA VPN · Справка</b>\n\n` +
-    `<b>Основное</b>\n/start · главное меню\n/create · создать подписку\n/my · мой профиль\n/list · серверы + проверка\n/add · добавить сервер/подписку\n/replace N · заменить сервер\n/delete N · удалить сервер\n/export · ссылки\n/decode URL · декодировать\n/cancel · отменить операцию\n\n` +
+    `<b>Основное</b>\n/start · главное меню\n/create · создать подписку\n/my · мой профиль\n/list · серверы + проверка\n/add · добавить сервер/подписку\n/replace N · заменить сервер\n/delete N · удалить сервер\n/export · ссылки\n/decode URL · декодировать\n/proxy · прокси-подписки\n/cancel · отменить операцию\n\n` +
     `<b>Для разработчика</b>\n/users · пользователи\n/stats · статистика\n/dev · DEV Control Center\n\n` +
     `<b>Декодер</b>\nYAML · JSON · Base64 · URI · Happ/INCY/V2RayTun redirect · вложенные ссылки\n\n` +
     `<b>Мониторинг</b>\nВ списке серверов теперь показывается числовой TCP latency в миллисекундах.`,
@@ -310,7 +312,8 @@ export async function handleCallback(cfg, cb) {
   const userId = cb.from?.id || chatId;
   await answerCallback(cfg.telegramToken, cb.id);
   if (cb.data === "menu") await cmdStart(cfg, chatId);
-  else if (cb.data === "tools") await sendMessage(cfg.telegramToken, chatId, `🧰 <b>Инструменты</b>\n\n📡 Серверы — ping и latency\n🔍 Декодер — импорт подписки\n📤 Экспорт — ссылки\n🎨 Оформление — темы`, { inline_keyboard: [[{ text: "📡 Серверы", callback_data: "list" }, { text: "🔍 Декодер", callback_data: "decode" }], [{ text: "📤 Экспорт", callback_data: "export" }, { text: "🎨 Темы", callback_data: "theme_pick" }], [{ text: "🏠 Меню", callback_data: "menu" }]] });
+  else if (cb.data === "tools") await sendMessage(cfg.telegramToken, chatId, `🧰 <b>Инструменты</b>\n\n📡 Серверы — ping и latency\n🔍 Декодер — импорт подписки\n📤 Экспорт — ссылки\n🌐 Прокси-подписка — общий каталог\n🎨 Оформление — темы`, { inline_keyboard: [[{ text: "📡 Серверы", callback_data: "list" }, { text: "🔍 Декодер", callback_data: "decode" }], [{ text: "🌐 Прокси", callback_data: "proxy" }, { text: "📤 Экспорт", callback_data: "export" }], [{ text: "🎨 Темы", callback_data: "theme_pick" }], [{ text: "🏠 Меню", callback_data: "menu" }]] });
+  else if (cb.data === "proxy") await cmdProxy(cfg, chatId);
   else if (cb.data === "dev") await cmdDev(cfg, chatId, userId);
   else if (cb.data === "dev_ping") await cmdDevPing(cfg, chatId, userId);
   else if (cb.data === "dev_diag") await cmdDevDiag(cfg, chatId, userId);
@@ -339,6 +342,7 @@ export async function handleCallback(cfg, cb) {
 }
 
 export async function handleMessage(cfg, msg) {
+  if (msg.document) return handleProxyDocument(cfg, msg);
   const chatId = msg.chat.id;
   const text = msg.text || "";
   const state = await getState(cfg, chatId);
@@ -355,6 +359,7 @@ export async function handleMessage(cfg, msg) {
   if (cmd === "/my") return cmdMy(cfg, chatId);
   if (cmd === "/list") return cmdList(cfg, chatId, parts[1] ? (parseInt(parts[1], 10) - 1) : 0);
   if (cmd === "/export") return cmdExport(cfg, chatId);
+  if (cmd === "/proxy") return cmdProxy(cfg, chatId);
   if (cmd === "/add") return cmdAdd(cfg, chatId, parts.slice(1).join(" "));
   if (cmd === "/replace") return cmdReplaceServer(cfg, chatId, parts.slice(1).join(" "));
   if (cmd === "/delete") { if (parts.length > 1) return cmdDeleteServer(cfg, chatId, parts[1]); return cmdDelete(cfg, chatId); }
