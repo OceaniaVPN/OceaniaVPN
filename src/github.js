@@ -51,3 +51,11 @@ export async function listAllUsers(cfg) {
   if (!Array.isArray(data)) return [];
   return data.filter((f) => f.type === "file" && f.name.startsWith("user_")).map((f) => f.name);
 }
+
+export async function listProxyFiles(cfg) {
+  const data = await ghRequest(cfg, "GET", `/contents/${cfg.configsFolder}?ref=${cfg.branch}`);
+  if (!Array.isArray(data)) return [];
+  return data
+    .filter((f) => f.type === "file" && f.name.startsWith("proxy_") && f.name.endsWith(".txt"))
+    .map((f) => ({ name: f.name, size: f.size || 0 }));
+}
