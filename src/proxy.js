@@ -1,61 +1,82 @@
-import { sendMessage, getTelegramFile } from "./telegram.js";
-import { createOrUpdateFile, listProxyFiles } from "./github.js";
+import { sendMessage } from "./telegram.js";
+import { createOrUpdateFile, getFileContent } from "./github.js";
 
-function safeProxyName(name) {
-  const base = String(name || "subscription.txt").replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 80) || "subscription.txt";
-  return `proxy_${Date.now()}_${base.endsWith(".txt") ? base : base + ".txt"}`;
+const PROXY_LINKS_FILE = "proxy_links.txt";
+
+function normalizeProxyLink(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return null;
+  try {
+    const u = new URL(raw);
+    const host = u.hostname.toLowerCase();
+    const isTelegramHost = host === "t.me" || host === "telegram.me" || host === "www.t.me" || host === "www.telegram.me";
+    if (u.protocol === "https:" && isTelegramHost && u.pathname === "/proxy") return u.toString();
+  } catch {
+    if (/^tg:\/\/proxy\?/i.test(raw)) return raw;
+  }
+  return null;
 }
 
-function proxyUrl(cfg, filename) {
-  // Используем уже работающий /sub-маршрут: не меняем entrypoint воркера и не
-  // рискуем рабочими / и /page. Для VPN-клиентов /sub?f= отдаёт сам файл.
-  return `${cfg.workerOrigin}/sub?f=${encodeURIComponent(filename)}`;
+async function readProxyLinks(cfg) {
+  const content = await getFileContent(cfg, PROXY_LINKS_FILE);
+  if (!content) return [];
+  return content.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+}
+
+export async function addProxyLink(cfg, chatId, input) {
+  if (chatId !== cfg.adminId) {
+    return sendMessage(cfg.telegramToken, chatId, `⛔️ <b>Добавлять Telegram-прокси может только администратор.</b>`);
+  }
+
+  const link = normalizeProxyLink(input);
+  if (!link) {
+    return sendMessage(cfg.telegramToken, chatId,
+      `❌ <b>Это не ссылка Telegram-прокси.</b>\n\n` +
+      `Отправь ссылку вида:\n<code>https://t.me/proxy?server=...&port=...&secret=...</code>`);
+  }
+
+  const links = await readProxyLinks(cfg);
+  if (links.includes(link)) {
+    return sendMessage(cfg.telegramToken, chatId, `ℹ️ <b>Эта прокси-ссылка уже есть в списке.</b>`, {
+      inline_keyboard: [[{ text: "🌐 Открыть прокси", url: link }], [{ text: "📚 Список прокси", callback_data: "proxy" }]],
+    });
+  }
+
+  links.push(link);
+  const content = links.join("\n") + "\n";
+  const res = await createOrUpdateFile(cfg, PROXY_LINKS_FILE, content, "Add Telegram proxy link");
+  if (!(res.content || res.commit || res.sha)) {
+    return sendMessage(cfg.telegramToken, chatId, `❌ <b>Не удалось сохранить прокси.</b>\n\n${res.message || "GitHub error"}`);
+  }
+
+  return sendMessage(cfg.telegramToken, chatId, `✅ <b>Telegram-прокси добавлен</b>\n\n🔗 <code>${link}</code>\n\n👥 Теперь он отображается в общем списке для всех пользователей.`, {
+    inline_keyboard: [[{ text: "🌐 Открыть прокси", url: link }], [{ text: "📚 Список прокси", callback_data: "proxy" }]],
+  });
 }
 
 export async function cmdProxy(cfg, chatId) {
-  const files = await listProxyFiles(cfg);
-  let text = `🌐 <b>ПРОКСИ-ПОДПИСКИ</b>\n\n`;
-  if (!files.length) {
-    text += `Пока нет загруженных подписок.\n\n`;
+  const links = await readProxyLinks(cfg);
+  let text = `🌐 <b>TELEGRAM-ПРОКСИ</b>\n\n`;
+
+  if (!links.length) {
+    text += `Пока нет добавленных прокси.\n\n`;
   } else {
-    text += `Доступно: <b>${files.length}</b>\n\n`;
-    for (let i = 0; i < files.length; i++) {
-      const f = files[i];
-      const url = proxyUrl(cfg, f.name);
-      text += `<b>${i + 1}.</b> ${f.name.replace(/^proxy_\d+_/, "")}\n🔗 <code>${url}</code>\n\n`;
+    text += `Доступно: <b>${links.length}</b>\n\n`;
+    for (let i = 0; i < links.length; i++) {
+      text += `<b>${i + 1}.</b> Telegram Proxy\n🔗 <code>${links[i]}</code>\n\n`;
     }
   }
+
   if (chatId === cfg.adminId) {
-    text += `👑 <b>Админ:</b> отправь сюда файл подписки документом — он появится в общем каталоге.`;
+    text += `👑 <b>Админ:</b> просто отправь сюда ссылку на Telegram-прокси — она добавится в этот список.`;
   } else {
-    text += `📥 Ссылки выше доступны всем пользователям.`;
+    text += `📥 Все ссылки из списка доступны пользователям.`;
   }
+
   return sendMessage(cfg.telegramToken, chatId, text, {
     inline_keyboard: [
       [{ text: "🔄 Обновить список", callback_data: "proxy" }],
       [{ text: "🏠 Главное меню", callback_data: "menu" }],
     ],
   });
-}
-
-export async function handleProxyDocument(cfg, msg) {
-  const chatId = msg.chat.id;
-  if (chatId !== cfg.adminId || msg.from?.id !== cfg.adminId) {
-    return sendMessage(cfg.telegramToken, chatId, `⛔️ <b>Загрузка прокси доступна только администратору.</b>`);
-  }
-  const document = msg.document;
-  if (!document?.file_id) return sendMessage(cfg.telegramToken, chatId, `❌ Файл не найден.`);
-  if ((document.file_size || 0) > 1024 * 1024) {
-    return sendMessage(cfg.telegramToken, chatId, `❌ Файл слишком большой. Максимум: <b>1 МБ</b>.`);
-  }
-  const content = await getTelegramFile(cfg.telegramToken, document.file_id);
-  if (content == null) return sendMessage(cfg.telegramToken, chatId, `❌ Не удалось скачать файл из Telegram.`);
-  if (!content.trim()) return sendMessage(cfg.telegramToken, chatId, `❌ Файл пустой.`);
-  const filename = safeProxyName(document.file_name);
-  const res = await createOrUpdateFile(cfg, filename, content, `Upload proxy subscription ${document.file_name || filename}`);
-  if (!(res.content || res.sha)) return sendMessage(cfg.telegramToken, chatId, `❌ Не удалось сохранить прокси: ${res.message || "GitHub error"}`);
-  const url = proxyUrl(cfg, filename);
-  return sendMessage(cfg.telegramToken, chatId,
-    `✅ <b>Прокси-подписка опубликована</b>\n\n📄 ${document.file_name || "subscription.txt"}\n🔗 <code>${url}</code>\n\n👥 Теперь ссылку может использовать любой пользователь.`,
-    { inline_keyboard: [[{ text: "🌐 Открыть прокси", url }], [{ text: "📚 Каталог прокси", callback_data: "proxy" }]] });
 }
