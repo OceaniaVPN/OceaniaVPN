@@ -1,5 +1,5 @@
 name = "oceaniavpn"
-main = "src/index.js"
+main = "src/worker.js"
 compatibility_date = "2026-08-16"
 
 [build]
