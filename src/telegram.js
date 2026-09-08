@@ -55,6 +55,15 @@ export async function sendDocument(token, chatId, content, filename, caption = "
   return fetch(url, { method: "POST", body: form }).then((r) => r.json());
 }
 
+export async function getTelegramFile(token, fileId) {
+  const info = await tgRequest(token, "getFile", { file_id: fileId });
+  const path = info?.result?.file_path;
+  if (!path) return null;
+  const res = await fetch(`https://api.telegram.org/file/bot${token}/${path}`);
+  if (!res.ok) return null;
+  return await res.text();
+}
+
 export async function answerCallback(token, callbackId) {
   return tgRequest(token, "answerCallbackQuery", { callback_query_id: callbackId });
 }
