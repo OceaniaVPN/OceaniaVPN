@@ -6,7 +6,7 @@ import { pingServers, cmdDev, cmdDevPing, cmdDevDiag, cmdDevMetrics } from "./de
 import { buildFile } from "./build.js";
 import { escapeHtml } from "./config.js";
 import { COUNTRIES, matchesCountryKey, detectCountryFromText } from "./contries.js";
-import { cmdProxy, handleProxyDocument } from "./proxy.js";
+import { cmdProxy, addProxyLink } from "./proxy.js";
 
 function splitSubscriptionFile(content) {
   const lines = content.split("\n");
@@ -39,6 +39,20 @@ function userUrls(cfg, chatId) {
     subUrl: `${cfg.workerOrigin}/sub?u=${chatId}`,
     pageUrl: `${cfg.workerOrigin}/page?u=${chatId}`,
   };
+}
+
+function isTelegramProxyLink(value) {
+  const raw = String(value || "").trim();
+  if (/^tg:\/\/proxy\?/i.test(raw)) return true;
+  try {
+    const u = new URL(raw);
+    const host = u.hostname.toLowerCase();
+    return u.protocol === "https:" &&
+      (host === "t.me" || host === "telegram.me" || host === "www.t.me" || host === "www.telegram.me") &&
+      u.pathname === "/proxy";
+  } catch {
+    return false;
+  }
 }
 
 function mainMenu(isAdmin = false) {
@@ -112,7 +126,7 @@ export async function cmdStart(cfg, chatId) {
     `╭────────────────────╮\n` +
     `│ ${status}\n` +
     `│ 📡 Серверов: <b>${servers}</b>\n` +
-    `│ 🔐 Профиль: <b>${hasSubscription ? "готов" : "пуст"}</b>\n` +
+    `│ 🔐 Профиль: <b>${hasSubscription ? "готов" : "пуст"}\n` +
     `╰────────────────────╯\n\n` +
     `<b>Что делаем?</b>\n` +
     `Создаём профиль, проверяем серверы, декодируем подписки или открываем инструменты разработчика.`,
@@ -142,6 +156,7 @@ export async function cmdCancel(cfg, chatId) {
 
 export async function cmdDecode(cfg, chatId, url) {
   const inputUrl = String(url || "").trim();
+  if (isTelegramProxyLink(inputUrl)) return addProxyLink(cfg, chatId, inputUrl);
   let parsedUrl;
   try { parsedUrl = new URL(inputUrl); } catch { parsedUrl = null; }
   if (!parsedUrl || !["http:", "https:"].includes(parsedUrl.protocol)) {
@@ -196,103 +211,80 @@ export async function cmdMy(cfg, chatId) {
 
 export async function cmdList(cfg, chatId, page = 0) {
   const content = await getFileContent(cfg, `user_${chatId}.txt`);
-  if (!content) return sendMessage(cfg.telegramToken, chatId, `📭 <b>Подписка ещё не создана</b>`, { inline_keyboard: [[{ text: "🚀 Создать", callback_data: "create" }], [{ text: "🏠 Меню", callback_data: "menu" }]] });
+  if (!content) return sendMessage(cfg.telegramToken, chatId, `📭 <b>Нет серверов</b>`);
   const { links } = splitSubscriptionFile(content);
-  if (!links.length) return sendMessage(cfg.telegramToken, chatId, `📭 <b>Серверов пока нет</b>`, { inline_keyboard: [[{ text: "➕ Добавить", callback_data: "add_prompt" }], [{ text: "🏠 Меню", callback_data: "menu" }]] });
-  const PER_PAGE = 12;
-  const totalPages = Math.max(1, Math.ceil(links.length / PER_PAGE));
-  const safePage = Math.min(Math.max(0, page), totalPages - 1);
-  const start = safePage * PER_PAGE;
-  const pageLinks = links.slice(start, start + PER_PAGE);
-  const results = await pingServers(pageLinks, { concurrency: 6, timeoutMs: 2500 });
-  let msg = `📡 <b>СЕРВЕРЫ</b>\n<i>TCP latency · реальное время</i>\n\n<b>${start + 1}–${Math.min(start + pageLinks.length, links.length)}</b> из <b>${links.length}</b> · ${safePage + 1}/${totalPages}\n\n`;
-  pageLinks.forEach((uri, i) => {
-    const num = start + i + 1;
-    const country = detectCountry(uri);
-    const label = country ? `${country.flag} ${country.name}` : "🌍 Неизвестно";
-    const r = results[i];
-    const ping = r?.ok ? `<code>${r.ms} ms</code>` : `<code>timeout</code>`;
-    const status = r?.ok ? "🟢" : "🔴";
-    msg += `<b>${num}.</b> ${status} ${label} · ${protocolOf(uri)} · ${ping}\n`;
-  });
-  msg += `\n<i>🟢 = TCP connect успешен · число = latency до сервера</i>`;
-  const navRow = [];
-  if (safePage > 0) navRow.push({ text: "⬅️ Назад", callback_data: `list_page_${safePage - 1}` });
-  if (safePage < totalPages - 1) navRow.push({ text: "Далее ➡️", callback_data: `list_page_${safePage + 1}` });
-  const kb = { inline_keyboard: [] };
-  if (navRow.length) kb.inline_keyboard.push(navRow);
-  kb.inline_keyboard.push([{ text: "🔄 Обновить ping", callback_data: `list_page_${safePage}` }]);
-  kb.inline_keyboard.push([{ text: "➕ Добавить", callback_data: "add_prompt" }, { text: "🧰 DEV", callback_data: "dev" }]);
-  kb.inline_keyboard.push([{ text: "🏠 Главное меню", callback_data: "menu" }]);
-  await sendMessage(cfg.telegramToken, chatId, msg, kb);
+  const pageSize = 10;
+  const totalPages = Math.max(1, Math.ceil(links.length / pageSize));
+  page = Math.max(0, Math.min(page, totalPages - 1));
+  const start = page * pageSize;
+  const slice = links.slice(start, start + pageSize);
+  let text = `📡 <b>СЕРВЕРЫ</b>\n\n`;
+  if (!slice.length) text += `Список пуст.`;
+  else slice.forEach((u, i) => { text += `${start + i + 1}. <code>${escapeHtml(u)}</code>\n`; });
+  const kb = [];
+  if (page > 0) kb.push([{ text: "⬅️", callback_data: `list_page_${page - 1}` }]);
+  if (page < totalPages - 1) { if (kb.length) kb[0].push({ text: "➡️", callback_data: `list_page_${page + 1}` }); else kb.push([{ text: "➡️", callback_data: `list_page_${page + 1}` }]); }
+  kb.push([{ text: "🏠 Меню", callback_data: "menu" }]);
+  await sendMessage(cfg.telegramToken, chatId, text, { inline_keyboard: kb });
 }
 
 export async function cmdExport(cfg, chatId) {
   const content = await getFileContent(cfg, `user_${chatId}.txt`);
-  if (!content) return sendMessage(cfg.telegramToken, chatId, `📭 Сначала /create или /decode`);
-  const { subUrl: expSubUrl, pageUrl: expPageUrl } = userUrls(cfg, chatId);
-  await sendMessage(cfg.telegramToken, chatId, `📤 <b>ЭКСПОРТ</b>\n\n🔗 <b>Ссылка подписки</b>\n<code>${expSubUrl}</code>\n\n📱 Совместимо с v2rayNG · Hiddify · Shadowrocket · Clash Meta`, { inline_keyboard: [[{ text: "🔗 Открыть подписку", url: expSubUrl }], [{ text: "🎨 Страница", url: expPageUrl }], [{ text: "🏠 Меню", callback_data: "menu" }]] });
+  if (!content) return sendMessage(cfg.telegramToken, chatId, `📭 <b>Нет подписки</b>`);
+  const { subUrl, pageUrl } = userUrls(cfg, chatId);
+  await sendMessage(cfg.telegramToken, chatId, `📤 <b>ЭКСПОРТ</b>\n\n🔗 Подписка:\n<code>${subUrl}</code>\n\n🎨 Страница:\n<code>${pageUrl}</code>`, { inline_keyboard: [[{ text: "📋 Подписка", url: subUrl }, { text: "🎨 Страница", url: pageUrl }], [{ text: "🏠 Меню", callback_data: "menu" }]] });
 }
 
-export async function cmdAdd(cfg, chatId, url) {
-  if (!url) return sendMessage(cfg.telegramToken, chatId, `❌ <b>Используй:</b> <code>/add vless://...</code>`);
-  const userFile = `user_${chatId}.txt`;
-  const existing = await getFileContent(cfg, userFile);
-  if (!existing) return sendMessage(cfg.telegramToken, chatId, `📭 Сначала /create`);
-  const { headers, links } = splitSubscriptionFile(existing);
-  let toAdd = [url];
-  if (/^https?:\/\//.test(url)) { const result = await decodeSubscription(url); if (result.ok && result.uris?.length) toAdd = result.uris; else return sendMessage(cfg.telegramToken, chatId, `❌ Не удалось декодировать: ${result.error}`); }
-  else if (!url.includes("://")) return sendMessage(cfg.telegramToken, chatId, `❌ Не похоже на VPN-ссылку.`);
-  links.push(...toAdd);
-  const updated = headers.join("\n") + "\n" + links.join("\n");
-  const res = await createOrUpdateFile(cfg, userFile, updated, `Add ${toAdd.length} nodes`);
-  if (res.content || res.sha) {
-    const aliveFlags = await checkServersAlive(toAdd, { concurrency: 8, timeoutMs: 2000 });
-    const aliveCount = aliveFlags.filter(Boolean).length;
-    await sendMessage(cfg.telegramToken, chatId, `✅ <b>Сервер добавлен</b>\n\n📡 Добавлено: <code>${toAdd.length}</code>\n📊 Всего: <code>${links.length}</code>\n🟢 Рабочих: <code>${aliveCount}</code> · 🔴 Offline: <code>${toAdd.length - aliveCount}</code>`, { inline_keyboard: [[{ text: "📡 Серверы", callback_data: "list" }], [{ text: "➕ Добавить ещё", callback_data: "add_prompt" }, { text: "📋 Профиль", callback_data: "my" }], [{ text: "🏠 Меню", callback_data: "menu" }]] });
-  } else await sendMessage(cfg.telegramToken, chatId, `❌ Ошибка`);
+export async function cmdAdd(cfg, chatId, value) {
+  const text = String(value || "").trim();
+  if (!text) return sendMessage(cfg.telegramToken, chatId, `➕ <b>Добавление</b>\n\nОтправь VLESS/VMess/Trojan/SS или URL подписки.`);
+  if (isTelegramProxyLink(text)) return addProxyLink(cfg, chatId, text);
+  const content = await getFileContent(cfg, `user_${chatId}.txt`);
+  const lines = content ? splitSubscriptionFile(content).links : [];
+  if (/^(vless|vmess|trojan|ss|hysteria2|hy2):\/\//i.test(text)) {
+    lines.push(text);
+    const oldHeaders = content ? splitSubscriptionFile(content).headers : [];
+    const newContent = [...oldHeaders, ...lines].join("\n");
+    const res = await createOrUpdateFile(cfg, `user_${chatId}.txt`, newContent, `Add server for ${chatId}`);
+    if (res.content || res.sha) return sendMessage(cfg.telegramToken, chatId, `✅ <b>Сервер добавлен.</b>\n\n📡 Всего: <code>${lines.length}</code>`, { inline_keyboard: [[{ text: "📡 Список", callback_data: "list" }], [{ text: "🏠 Меню", callback_data: "menu" }]] });
+    return sendMessage(cfg.telegramToken, chatId, `❌ Не удалось сохранить сервер.`);
+  }
+  return cmdDecode(cfg, chatId, text);
 }
 
-export async function cmdDeleteServer(cfg, chatId, nRaw) {
-  const n = parseInt(nRaw, 10);
-  if (!Number.isInteger(n) || n < 1) return sendMessage(cfg.telegramToken, chatId, `❌ Укажи номер сервера: <code>/delete 3</code>`);
-  const userFile = `user_${chatId}.txt`;
-  const content = await getFileContent(cfg, userFile);
-  if (!content) return sendMessage(cfg.telegramToken, chatId, `📭 Подписки нет`);
-  const { headers, links } = splitSubscriptionFile(content);
-  if (n > links.length) return sendMessage(cfg.telegramToken, chatId, `❌ Сервер №${n} не найден. Всего: ${links.length}`);
-  const removed = links.splice(n - 1, 1)[0];
-  const newContent = [...headers, ...links].join("\n");
-  const res = await createOrUpdateFile(cfg, userFile, newContent, `Delete server ${n} for user ${chatId}`);
-  if (res.content || res.sha) await sendMessage(cfg.telegramToken, chatId, `🗑 <b>Сервер №${n} удалён</b>\n\n${escapeHtml(removed.slice(0, 120))}`, { inline_keyboard: [[{ text: "📡 Список", callback_data: "list" }, { text: "🏠 Меню", callback_data: "menu" }]] });
-  else await sendMessage(cfg.telegramToken, chatId, `❌ Ошибка: ${res.message || "неизвестно"}`);
+export async function cmdReplaceServer(cfg, chatId, value) {
+  const parts = String(value || "").trim().split(/\s+/);
+  const idx = parseInt(parts[0], 10);
+  const uri = parts.slice(1).join(" ");
+  if (!Number.isInteger(idx) || idx < 1 || !uri) return sendMessage(cfg.telegramToken, chatId, `❌ Формат: <code>/replace N vless://...</code>`);
+  const content = await getFileContent(cfg, `user_${chatId}.txt`);
+  if (!content) return sendMessage(cfg.telegramToken, chatId, `📭 Нет подписки.`);
+  const parsed = splitSubscriptionFile(content);
+  if (idx > parsed.links.length) return sendMessage(cfg.telegramToken, chatId, `❌ Сервер №${idx} не найден.`);
+  parsed.links[idx - 1] = uri;
+  const newContent = [...parsed.headers, ...parsed.links].join("\n");
+  const res = await createOrUpdateFile(cfg, `user_${chatId}.txt`, newContent, `Replace server ${idx} for ${chatId}`);
+  if (res.content || res.sha) return sendMessage(cfg.telegramToken, chatId, `✅ <b>Сервер №${idx} заменён.</b>`);
+  return sendMessage(cfg.telegramToken, chatId, `❌ Не удалось сохранить изменения.`);
 }
 
-export async function cmdReplaceServer(cfg, chatId, args) {
-  const parts = args.trim().split(/\s+/);
-  const n = parseInt(parts.shift(), 10);
-  const newUrl = parts.join(" ");
-  if (!Number.isInteger(n) || n < 1 || !newUrl) return sendMessage(cfg.telegramToken, chatId, `❌ <b>Используй:</b>\n<code>/replace N vless://...</code>`);
-  const userFile = `user_${chatId}.txt`;
-  const content = await getFileContent(cfg, userFile);
-  if (!content) return sendMessage(cfg.telegramToken, chatId, `📭 Подписки нет`);
-  const { headers, links } = splitSubscriptionFile(content);
-  if (n > links.length) return sendMessage(cfg.telegramToken, chatId, `❌ Сервер №${n} не найден. Всего: ${links.length}`);
-  if (!newUrl.includes("://")) return sendMessage(cfg.telegramToken, chatId, `❌ Новая ссылка не похожа на VPN-конфигурацию.`);
-  links[n - 1] = newUrl;
-  const newContent = [...headers, ...links].join("\n");
-  const res = await createOrUpdateFile(cfg, userFile, newContent, `Replace server ${n} for user ${chatId}`);
-  if (res.content || res.sha) await sendMessage(cfg.telegramToken, chatId, `🔁 <b>Сервер №${n} заменён</b>\n\nТеперь: <code>${links.length}</code> серверов.`, { inline_keyboard: [[{ text: "📡 Проверить", callback_data: "list" }, { text: "🏠 Меню", callback_data: "menu" }]] });
-  else await sendMessage(cfg.telegramToken, chatId, `❌ Ошибка: ${res.message || "неизвестно"}`);
+export async function cmdDeleteServer(cfg, chatId, n) {
+  const idx = parseInt(n, 10);
+  const content = await getFileContent(cfg, `user_${chatId}.txt`);
+  if (!content) return sendMessage(cfg.telegramToken, chatId, `📭 Нет подписки.`);
+  const parsed = splitSubscriptionFile(content);
+  if (!Number.isInteger(idx) || idx < 1 || idx > parsed.links.length) return sendMessage(cfg.telegramToken, chatId, `❌ Сервер не найден.`);
+  parsed.links.splice(idx - 1, 1);
+  const newContent = [...parsed.headers, ...parsed.links].join("\n");
+  const res = await createOrUpdateFile(cfg, `user_${chatId}.txt`, newContent, `Delete server ${idx} for ${chatId}`);
+  if (res.content || res.sha) return sendMessage(cfg.telegramToken, chatId, `✅ <b>Сервер №${idx} удалён.</b>`);
+  return sendMessage(cfg.telegramToken, chatId, `❌ Не удалось сохранить изменения.`);
 }
 
 export async function cmdDelete(cfg, chatId) {
-  const userFile = `user_${chatId}.txt`;
-  const content = await getFileContent(cfg, userFile);
-  if (!content) return sendMessage(cfg.telegramToken, chatId, `📭 Подписки нет`);
-  const res = await deleteFile(cfg, userFile, `Delete subscription for user ${chatId}`);
-  if (res) await sendMessage(cfg.telegramToken, chatId, `🗑 <b>Подписка удалена</b>\n\nМожно создать новую.`, { inline_keyboard: [[{ text: "🚀 Создать", callback_data: "create" }, { text: "🏠 Меню", callback_data: "menu" }]] });
-  else await sendMessage(cfg.telegramToken, chatId, `❌ Не удалось удалить подписку`);
+  const res = await deleteFile(cfg, `user_${chatId}.txt`, `Delete subscription ${chatId}`);
+  if (res.content || res.sha) return sendMessage(cfg.telegramToken, chatId, `🗑 <b>Подписка удалена.</b>`, { inline_keyboard: [[{ text: "🚀 Создать заново", callback_data: "create" }], [{ text: "🏠 Меню", callback_data: "menu" }]] });
+  return sendMessage(cfg.telegramToken, chatId, `❌ Не удалось удалить подписку.`);
 }
 
 export async function cmdUsers(cfg, chatId, userId) {
@@ -342,9 +334,10 @@ export async function handleCallback(cfg, cb) {
 }
 
 export async function handleMessage(cfg, msg) {
-  if (msg.document) return handleProxyDocument(cfg, msg);
   const chatId = msg.chat.id;
   const text = msg.text || "";
+  if (text.trim() && isTelegramProxyLink(text.trim())) return addProxyLink(cfg, chatId, text.trim());
+  if (msg.document) return sendMessage(cfg.telegramToken, chatId, `⛔️ <b>Для прокси теперь отправляется именно ссылка Telegram-прокси.</b>\n\nОткрой раздел «🌐 Прокси-подписка» и просто пришли ссылку.`);
   const state = await getState(cfg, chatId);
   if (state && state.step && !text.startsWith("/")) { await handleStepAnswer(cfg, chatId, text, state); return; }
   if (!text.startsWith("/") && /^https?:\/\//.test(text.trim())) { await cmdDecode(cfg, chatId, text.trim()); return; }
