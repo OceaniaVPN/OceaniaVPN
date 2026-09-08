@@ -6,21 +6,27 @@ function safeProxyName(name) {
   return `proxy_${Date.now()}_${base.endsWith(".txt") ? base : base + ".txt"}`;
 }
 
+function proxyUrl(cfg, filename) {
+  // Используем уже работающий /sub-маршрут: не меняем entrypoint воркера и не
+  // рискуем рабочими / и /page. Для VPN-клиентов /sub?f= отдаёт сам файл.
+  return `${cfg.workerOrigin}/sub?f=${encodeURIComponent(filename)}`;
+}
+
 export async function cmdProxy(cfg, chatId) {
   const files = await listProxyFiles(cfg);
-  let text = `🌐 <b>ПРОКСИ ПОДПИСОК</b>\n\n`;
+  let text = `🌐 <b>ПРОКСИ-ПОДПИСКИ</b>\n\n`;
   if (!files.length) {
     text += `Пока нет загруженных подписок.\n\n`;
   } else {
     text += `Доступно: <b>${files.length}</b>\n\n`;
     for (let i = 0; i < files.length; i++) {
       const f = files[i];
-      const url = `${cfg.workerOrigin}/proxy?f=${encodeURIComponent(f.name)}`;
+      const url = proxyUrl(cfg, f.name);
       text += `<b>${i + 1}.</b> ${f.name.replace(/^proxy_\d+_/, "")}\n🔗 <code>${url}</code>\n\n`;
     }
   }
   if (chatId === cfg.adminId) {
-    text += `👑 <b>Админ:</b> просто отправь сюда файл подписки документом — он появится в общем каталоге.`;
+    text += `👑 <b>Админ:</b> отправь сюда файл подписки документом — он появится в общем каталоге.`;
   } else {
     text += `📥 Ссылки выше доступны всем пользователям.`;
   }
@@ -48,8 +54,8 @@ export async function handleProxyDocument(cfg, msg) {
   const filename = safeProxyName(document.file_name);
   const res = await createOrUpdateFile(cfg, filename, content, `Upload proxy subscription ${document.file_name || filename}`);
   if (!(res.content || res.sha)) return sendMessage(cfg.telegramToken, chatId, `❌ Не удалось сохранить прокси: ${res.message || "GitHub error"}`);
-  const url = `${cfg.workerOrigin}/proxy?f=${encodeURIComponent(filename)}`;
+  const url = proxyUrl(cfg, filename);
   return sendMessage(cfg.telegramToken, chatId,
-    `✅ <b>Прокси подписка опубликована</b>\n\n📄 ${document.file_name || "subscription.txt"}\n🔗 <code>${url}</code>\n\n👥 Теперь ссылку может использовать любой пользователь.`,
+    `✅ <b>Прокси-подписка опубликована</b>\n\n📄 ${document.file_name || "subscription.txt"}\n🔗 <code>${url}</code>\n\n👥 Теперь ссылку может использовать любой пользователь.`,
     { inline_keyboard: [[{ text: "🌐 Открыть прокси", url }], [{ text: "📚 Каталог прокси", callback_data: "proxy" }]] });
 }
