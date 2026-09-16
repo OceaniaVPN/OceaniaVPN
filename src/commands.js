@@ -255,28 +255,44 @@ export async function cmdAdd(cfg, chatId, value) {
   return cmdDecode(cfg, chatId, text);
 }
 
+function parseServerIndex(value) {
+  const raw = String(value || "").trim();
+  if (!/^\d+$/.test(raw)) return null;
+  const idx = Number(raw);
+  return Number.isSafeInteger(idx) && idx >= 1 ? idx : null;
+}
+
+function isSupportedServerUri(value) {
+  return /^(vless|vmess|trojan|ss|hysteria2|hy2):\/\/\S+$/i.test(String(value || "").trim());
+}
+
 export async function cmdReplaceServer(cfg, chatId, value) {
-  const parts = String(value || "").trim().split(/\s+/);
-  const idx = parseInt(parts[0], 10);
-  const uri = parts.slice(1).join(" ");
-  if (!Number.isInteger(idx) || idx < 1 || !uri) return sendMessage(cfg.telegramToken, chatId, `❌ Формат: <code>/replace N vless://...</code>`);
+  const raw = String(value || "").trim();
+  const match = raw.match(/^(\d+)\s+(.+)$/s);
+  const idx = parseServerIndex(match?.[1]);
+  const uri = match?.[2]?.trim() || "";
+  if (!idx || !uri || !isSupportedServerUri(uri)) {
+    return sendMessage(cfg.telegramToken, chatId, `❌ <b>Неверный формат</b>\n\nИспользуй:\n<code>/replace 2 vless://...</code>\n\nПоддерживаются VLESS, VMess, Trojan, SS и Hysteria.`);
+  }
   const content = await getFileContent(cfg, `user_${chatId}.txt`);
-  if (!content) return sendMessage(cfg.telegramToken, chatId, `📭 Нет подписки.`);
+  if (!content) return sendMessage(cfg.telegramToken, chatId, `📭 <b>Нет подписки.</b>`);
   const parsed = splitSubscriptionFile(content);
-  if (idx > parsed.links.length) return sendMessage(cfg.telegramToken, chatId, `❌ Сервер №${idx} не найден.`);
+  if (idx > parsed.links.length) return sendMessage(cfg.telegramToken, chatId, `❌ Сервер №${idx} не найден.\n\nВ подписке серверов: <code>${parsed.links.length}</code>`);
   parsed.links[idx - 1] = uri;
   const newContent = [...parsed.headers, ...parsed.links].join("\n");
   const res = await createOrUpdateFile(cfg, `user_${chatId}.txt`, newContent, `Replace server ${idx} for ${chatId}`);
-  if (res.content || res.sha) return sendMessage(cfg.telegramToken, chatId, `✅ <b>Сервер №${idx} заменён.</b>`);
-  return sendMessage(cfg.telegramToken, chatId, `❌ Не удалось сохранить изменения.`);
+  if (res.content || res.sha) {
+    return sendMessage(cfg.telegramToken, chatId, `✅ <b>Сервер №${idx} заменён.</b>\n\nНовый сервер сохранён в подписке.`, { inline_keyboard: [[{ text: "📡 Список серверов", callback_data: "list" }], [{ text: "📋 Моя подписка", callback_data: "my" }], [{ text: "🏠 Меню", callback_data: "menu" }]] });
+  }
+  return sendMessage(cfg.telegramToken, chatId, `❌ <b>Не удалось сохранить изменения.</b>`);
 }
 
 export async function cmdDeleteServer(cfg, chatId, n) {
-  const idx = parseInt(n, 10);
+  const idx = parseServerIndex(n);
   const content = await getFileContent(cfg, `user_${chatId}.txt`);
-  if (!content) return sendMessage(cfg.telegramToken, chatId, `📭 Нет подписки.`);
+  if (!content) return sendMessage(cfg.telegramToken, chatId, `📭 <b>Нет подписки.</b>`);
   const parsed = splitSubscriptionFile(content);
-  if (!Number.isInteger(idx) || idx < 1 || idx > parsed.links.length) return sendMessage(cfg.telegramToken, chatId, `❌ Сервер не найден.`);
+  if (!idx || idx > parsed.links.length) return sendMessage(cfg.telegramToken, chatId, `❌ Сервер не найден.`);
   parsed.links.splice(idx - 1, 1);
   const newContent = [...parsed.headers, ...parsed.links].join("\n");
   const res = await createOrUpdateFile(cfg, `user_${chatId}.txt`, newContent, `Delete server ${idx} for ${chatId}`);
