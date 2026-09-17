@@ -142,8 +142,15 @@ export async function decodeSubscription(url, trusted = false, pingCheck = false
     else parseResult = parseBase64(content);
     if (parseResult && parseResult.ok === false) return { ok: false, error: parseResult.error || "Конфигурации не найдены", configs: [], uris: [], attempts: result.attempts, format: finalFormat };
     parsed = Array.isArray(parseResult) ? parseResult : (Array.isArray(parseResult?.uris) ? parseResult.uris : []);
-    if (!parsed.length && finalFormat !== "crypt") {
-      try { const crypt = await parseCrypt(content); if (crypt?.ok === false) return { ok: false, error: crypt.error || "Конфигурации не найдены", configs: [], uris: [], attempts: result.attempts, format: finalFormat }; if (Array.isArray(crypt)) parsed = crypt; else if (Array.isArray(crypt?.uris)) parsed = crypt.uris; } catch {}
+    // Crypt является запасным вариантом только для явно crypt-похожих данных.
+    // Обычные HTTPS подписки (в том числе авто-Oceania по токену)
+    // не должны падать с "Некорректный crypt формат".
+    if (!parsed.length && finalFormat !== "crypt" && /^(?:happ:\/\/crypt|crypt\d|[A-Za-z0-9+/=_-]{80,})/i.test(normalizeText(content))) {
+      try {
+        const crypt = await parseCrypt(content);
+        if (Array.isArray(crypt)) parsed = crypt;
+        else if (Array.isArray(crypt?.uris)) parsed = crypt.uris;
+      } catch {}
     }
   } catch (e) { return { ok: false, error: `Ошибка разбора: ${e?.message || "неизвестная ошибка"}`, configs: [], uris: [], attempts: result.attempts }; }
   const uris = parsed.map(x => typeof x === "string" ? x : x?.uri).filter(Boolean); if (!uris.length) return { ok: false, error: "Конфигурации не найдены", configs: [], uris: [], attempts: result.attempts, format: finalFormat || format };
