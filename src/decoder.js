@@ -85,13 +85,49 @@ async function fetchSubscription(url, trusted = false) {
 
 function detectFormat(content) { const c = normalizeText(content); if (/^(?:happ|incy|v2raytun):\/\//i.test(c)) return "envelope"; if (/(?:vless|vmess|trojan|ss|hysteria2?|tuic|wireguard|wg):\/\//i.test(c)) return "uri"; if (/^\s*[\[{]/.test(c)) return "json"; if (/^(?:proxies|proxy-groups|mixed-port|port|mode)\s*:/im.test(c)) return "yaml"; return "base64"; }
 
+async function resolveCryptWrapper(value, trusted = false, pingCheck = false, depth = 0) {
+  if (depth > 8) return { ok: false, error: "Слишком глубокая цепочка crypt-обёрток", configs: [], uris: [] };
+  const input = String(value || "").trim();
+  if (/^https?:\/\//i.test(input)) return decodeSubscription(input, trusted, pingCheck);
+  if (/^happ:\/\/crypt(?:[2-5])?\//i.test(input)) {
+    const result = await parseCrypt(input);
+    if (!result?.ok) return result;
+    const uris = result.uris || [];
+    if (uris.length === 1) {
+      const nested = String(uris[0] || "").trim();
+      if (/^https?:\/\//i.test(nested) || /^happ:\/\/crypt(?:[2-5])?\//i.test(nested)) {
+        return resolveCryptWrapper(nested, trusted, pingCheck, depth + 1);
+      }
+    }
+    return result;
+  }
+  return { ok: true, uris: [input], metadata: {} };
+}
+
 export async function decodeSubscription(url, trusted = false, pingCheck = false) {
   if (!url || typeof url !== "string") return { ok: false, error: "Не указана ссылка", configs: [], uris: [], attempts: 0 };
   const cleanUrl = url.trim().replace(/^<|>$/g, ""); if (!/^https?:\/\//i.test(cleanUrl)) return { ok: false, error: "Нужна HTTP(S)-ссылка", configs: [], uris: [], attempts: 0 };
   const result = await fetchSubscription(cleanUrl, trusted); if (!result.ok) return { ...result, configs: [], uris: [] };
   let content = result.content || "", format = detectFormat(content), parsed = [], finalFormat = format;
   try {
-    if (format === "envelope") { const nestedUrl = unwrapEnvelope(content); if (nestedUrl) { const nested = await fetchSubscription(nestedUrl, trusted); if (!nested.ok) return { ...nested, configs: [], uris: [] }; content = nested.content || ""; } }
+    if (format === "envelope") {
+      const nestedUrl = unwrapEnvelope(content);
+      if (nestedUrl) {
+        const nested = await fetchSubscription(nestedUrl, trusted);
+        if (!nested.ok) return { ...nested, configs: [], uris: [] };
+        content = nested.content || "";
+      }
+    }
+    // The fetched subscription itself may be a crypt wrapper.
+    if (/^happ:\/\/crypt(?:[2-5])?\//i.test(normalizeText(content))) {
+      const wrapped = await resolveCryptWrapper(normalizeText(content), trusted, pingCheck);
+      if (!wrapped?.ok) return { ok: false, error: wrapped?.error || "Не удалось расшифровать crypt", configs: [], uris: [], attempts: result.attempts, format: "crypt" };
+      const wrappedUris = Array.isArray(wrapped.uris) ? wrapped.uris : [];
+      if (wrappedUris.length === 1 && /^https?:\/\//i.test(String(wrappedUris[0]).trim())) {
+        return { ...wrapped, attempts: result.attempts + (wrapped.attempts || 0), format: "crypt" };
+      }
+      content = wrappedUris.join("\n");
+    }
     finalFormat = detectFormat(content);
     let parseResult;
     if (finalFormat === "uri") parseResult = parseVlessList(content);

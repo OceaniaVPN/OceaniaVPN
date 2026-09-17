@@ -118,13 +118,33 @@ async function loadCrypt5Keys() {
 }
 
 function loadPrivateKey(encoded) {
-  const der = b64DecodeBytes(encoded);
+  const value = String(encoded || "").trim();
+  if (!value) throw new Error("Empty RSA private key");
+
+  // Key tables may contain either PEM or base64 DER (PKCS#8 / PKCS#1).
+  if (/-----BEGIN [A-Z0-9 ]+PRIVATE KEY-----/i.test(value)) {
+    try {
+      return forge.pki.privateKeyFromPem(value);
+    } catch (e) {
+      throw new Error(`Invalid RSA private key PEM: ${e?.message || "parse failed"}`);
+    }
+  }
+
+  const der = b64DecodeBytes(value);
   const derBinary = bytesToBinary(der);
-  const pem = forge.pki.pem.encode({
-    type: "PRIVATE KEY",
-    body: derBinary,
-  });
-  return forge.pki.privateKeyFromPem(pem);
+  let asn1;
+  try {
+    asn1 = forge.asn1.fromDer(derBinary);
+  } catch (e) {
+    throw new Error(`Invalid RSA private key DER: ${e?.message || "parse failed"}`);
+  }
+
+  // Try PKCS#8 first, then the traditional PKCS#1 RSAPrivateKey form.
+  try {
+    return forge.pki.privateKeyFromAsn1(asn1);
+  } catch {
+    throw new Error("Unsupported RSA private key encoding");
+  }
 }
 
 function rsaDecrypt(privateKey, ciphertext) {

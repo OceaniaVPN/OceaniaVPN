@@ -149,14 +149,20 @@ export async function parseCrypt(content) {
     const value = decrypted.trim();
     if (!value) return { ok: false, error: "Crypt расшифрован, но результат пуст" };
 
-    // После decrypt снова прогоняем plaintext через существующие парсеры.
-    if (/^happ:\/\/crypt\d*\//i.test(value)) return parseCrypt(value);
-    if (/^(?:happ|incy|v2raytun):\/\/add\//i.test(value)) return { ok: true, uris: [value], metadata: {} };
+    // Crypt is an envelope: its plaintext can itself be another envelope,
+    // a remote subscription URL, or the final config payload.
+    if (/^happ:\/\/crypt(?:[2-5])?\//i.test(value)) return parseCrypt(value);
+    if (/^https?:\/\//i.test(value)) return { ok: true, uris: [value], metadata: {}, wrapper: true };
+    if (/^(?:happ|incy|v2raytun):\/\/add\//i.test(value)) return { ok: true, uris: [value], metadata: {}, wrapper: true };
     if (/(?:vless|vmess|trojan|ss|hysteria2?|tuic|wireguard|wg):\/\//i.test(value)) return parseVlessList(value);
     if (/^\s*[\[{]/.test(value)) { const json = parseJson(value); if (json.ok) return json; }
     if (/^(?:proxies|proxy-groups|mixed-port|port|mode)\s*:/im.test(value)) { const yamlResult = parseYaml(value); if (yamlResult.ok) return yamlResult; }
     const decoded = safeBase64(value.replace(/\s/g, ""));
-    if (decoded && decoded !== value && /(?:vless|vmess|trojan|ss|hysteria2?|tuic|wireguard|wg):\/\//i.test(decoded)) return parseVlessList(decoded);
+    if (decoded && decoded !== value) {
+      if (/^https?:\/\//i.test(decoded.trim())) return { ok: true, uris: [decoded.trim()], metadata: {}, wrapper: true };
+      if (/^happ:\/\/crypt(?:[2-5])?\//i.test(decoded.trim())) return parseCrypt(decoded.trim());
+      if (/(?:vless|vmess|trojan|ss|hysteria2?|tuic|wireguard|wg):\/\//i.test(decoded)) return parseVlessList(decoded);
+    }
     return { ok: true, uris: [value], metadata: {} };
   } catch (e) {
     return { ok: false, error: `crypt${parsed.mode === 0 ? "" : parsed.mode + 1}: ${e?.message || "расшифровка не удалась"}` };
