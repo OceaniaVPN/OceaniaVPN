@@ -5,6 +5,7 @@ import { buildFile } from "./build.js";
 import { createOrUpdateFile, getFileContent } from "./github.js";
 import { sendMessage } from "./telegram.js";
 import { COUNTRIES, detectCountryFromText } from "./contries.js";
+import { collectClientSignals, scoreClientSignals, buildClientFingerprint, inspectClientHistory, classifyClient } from "./fingerprint.js";
 
 // ==========================================
 // ОСНОВНАЯ КОНФИГУРАЦИЯ (4 источника)
@@ -139,11 +140,25 @@ async function serveSubscription(request, cfg) {
 
   const userAgent = request.headers.get("user-agent") || "";
 
-  // 🔒 ГЛАВНЫЙ ФИКС: одна и та же ссылка /sub?u=... — Happ (и другие VPN-клиенты)
-  // получают реальные конфиги, браузер на ТОЙ ЖЕ ссылке получает тематическую
-  // HTML-страницу со статусом подписки вместо конфигов. Конфиги не палятся
-  // тому, кто просто открыл ссылку в браузере.
-  if (!isVpnClientUA(userAgent)) {
+  // Client fingerprinting is an additional signal layer. Individual headers are
+  // forgeable, so we combine them and keep only hashes of stable identifiers in KV.
+  const signals = collectClientSignals(request);
+  const base = scoreClientSignals(signals);
+  const identity = chatIdParam ? `u:${chatIdParam}` : `f:${filename}`;
+  const fingerprint = await buildClientFingerprint(signals);
+  const history = await inspectClientHistory(cfg.kv, identity, fingerprint, signals, base.score);
+  const clientClass = classifyClient(history.risk, signals, history.history);
+
+  console.log("[SUB] client profile", {
+    class: clientClass, risk: history.risk, repeated: history.repeated,
+    changed: history.changed, ua: userAgent.slice(0, 120),
+    deviceModel: signals.deviceModel, deviceOs: signals.deviceOs
+  });
+
+  // Browsers/unknown clients keep receiving the existing themed page.
+  // A known VPN client with an anomalous fingerprint receives the same safe
+  // decoy surface rather than the real subscription.
+  if (clientClass === "unknown" || clientClass === "suspicious" || !isVpnClientUA(userAgent)) {
     return renderThemedPage(request, cfg, content);
   }
 
