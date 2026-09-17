@@ -3,7 +3,7 @@ import { escapeHtml } from "./config.js";
 import { TARGET_USER_AGENTS } from "./useragents.js";
 import { connect } from "cloudflare:sockets";
 
-const BLOCKED_DOMAINS = ["okeaniavpn.dimastekolnikov1.workers.dev", "okeaniavpn.dimastekolnikov13.workers.dev", "sub.chkav-vpn.workers.dev"];
+const BLOCKED_DOMAINS = [];
 const TRUSTED_BOT_SECRET = "d2a27a0c959353ad5a695917e4c022b35f2376b6b84a66c8";
 
 function normalizeText(text) { return String(text || "").replace(/^\uFEFF/, "").replace(/\u0000/g, "").replace(/\\\//g, "/").replace(/&amp;/gi, "&").trim(); }

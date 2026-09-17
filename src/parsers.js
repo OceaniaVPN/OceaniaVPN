@@ -174,13 +174,37 @@ export function parseYaml(content) {
 
 export function parseJson(content) {
   try {
-    const data = JSON.parse(content), uris = [];
-    const tryConvert = ob => singboxToUri(ob) || xrayToUri(ob) || proxyToUri(ob);
-    if (Array.isArray(data?.outbounds)) { const skip = ["direct", "block", "dns", "selector", "urltest", "loadbalance"]; for (const ob of data.outbounds) { if (!skip.includes(String(ob?.type || "").toLowerCase())) { const uri = tryConvert(ob); if (uri) uris.push(uri); } } }
-    if (Array.isArray(data?.proxies)) for (const p of data.proxies) { const uri = tryConvert(p); if (uri) uris.push(uri); }
-    if (Array.isArray(data)) for (const p of data) { const uri = tryConvert(p); if (uri) uris.push(uri); }
-    return { ok: true, uris, metadata: data?.metadata || extractHeaders(content), title: data?.name || data?.title };
-  } catch (e) { return { ok: false, error: `JSON: ${e.message}` }; }
+    const data = JSON.parse(content);
+    const uris = [];
+
+    const walk = (value) => {
+      if (!value) return;
+      if (Array.isArray(value)) {
+        for (const item of value) walk(item);
+        return;
+      }
+      if (typeof value !== "object") return;
+
+      const tryConvert = ob => singboxToUri(ob) || xrayToUri(ob) || proxyToUri(ob);
+      const uri = tryConvert(value);
+      if (uri) uris.push(uri);
+
+      for (const key of ["proxies", "outbounds", "configs", "servers", "nodes", "proxies_list", "subscriptions"]) {
+        if (value[key]) walk(value[key]);
+      }
+    };
+
+    walk(data);
+
+    return {
+      ok: true,
+      uris: [...new Set(uris)],
+      metadata: data?.metadata || extractHeaders(content),
+      title: data?.name || data?.title || data?.profile || null
+    };
+  } catch (e) {
+    return { ok: false, error: `JSON: ${e.message}` };
+  }
 }
 
 export async function parseCrypt(content) {
