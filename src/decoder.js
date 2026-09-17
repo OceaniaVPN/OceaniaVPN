@@ -2,7 +2,6 @@ import { parseVlessList, parseBase64, parseYaml, parseJson, parseCrypt, safeBase
 import { escapeHtml } from "./config.js";
 import { TARGET_USER_AGENTS } from "./useragents.js";
 import { connect } from "cloudflare:sockets";
-import { getClientProfile, buildStableDeviceId } from "./clients.js";
 
 const BLOCKED_DOMAINS = ["okeaniavpn.dimastekolnikov1.workers.dev", "okeaniavpn.dimastekolnikov13.workers.dev", "sub.chkav-vpn.workers.dev"];
 const TRUSTED_BOT_SECRET = "d2a27a0c959353ad5a695917e4c022b35f2376b6b84a66c8";
@@ -29,7 +28,7 @@ function extractRedirectTarget(url) { try { const u = new URL(url); if (u.pathna
 function buildHappHeaders(ua, isFirstRequest = false, trusted = false) {
   const hwidMatch = ua.match(/Android\/(\d+)/), hwid = hwidMatch ? hwidMatch[1] : Math.floor(Math.random() * 1e19).toString();
   const requestId = crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).substring(7)}`;
-  const headers = { "User-Agent": ua, "Accept": "*/*", "Accept-Language": "en-US,en;q=0.9,ru;q=0.8", "Accept-Encoding": "gzip, deflate, br", "Connection": "keep-alive", "DNT": "1", "Sec-Fetch-Dest": "empty", "Sec-Fetch-Mode": "cors", "Sec-Fetch-Site": "cross-site", "X-Client-Version": "3.26.3", "X-Client-Platform": "Android", "X-Request-ID": requestId, "X-App-Name": "Happ", "X-Client-App": "Happ", "X-Client-Version": "3.26.3", "X-Device-ID": buildStableDeviceId(ua), ...(isFirstRequest && { "X-First-Launch": "true", "X-Install-Time": Date.now() - 86400000 * (Math.floor(Math.random() * 30) + 1).toString() }) };
+  const headers = { "User-Agent": ua, "Accept": "*/*", "Accept-Language": "en-US,en;q=0.9,ru;q=0.8", "Accept-Encoding": "gzip, deflate, br", "Connection": "keep-alive", "DNT": "1", "Sec-Fetch-Dest": "empty", "Sec-Fetch-Mode": "cors", "Sec-Fetch-Site": "cross-site", "X-Client-Version": "3.26.3", "X-Client-Platform": "Android", "X-Request-ID": requestId, "X-App-Name": "Happ", ...(isFirstRequest && { "X-First-Launch": "true", "X-Install-Time": Date.now() - 86400000 * (Math.floor(Math.random() * 30) + 1).toString() }) };
   if (ua.includes("Happ")) { headers["X-Happ-HWID"] = hwid; headers["X-Device-ID"] = hwid; headers["X-Happ-App"] = "Happ"; headers["X-Happ-Platform"] = ua.includes("iOS") ? "ios" : "android"; }
   if (ua.includes("V2raytun")) { headers["X-V2Ray-Version"] = "5.25.81"; headers["X-App-Type"] = "v2ray"; }
   if (ua.includes("INCY")) headers["X-INCY-Version"] = "3.4.2";
@@ -84,7 +83,7 @@ async function fetchSubscription(url, trusted = false) {
   } catch (e) { return { ok: false, error: e?.message || "Ошибка декодирования", attempts: 0 }; }
 }
 
-function detectFormat(content) { const c = normalizeText(content); if (/^(?:happ|incy|v2raytun):\/\//i.test(c)) return "envelope"; if (/(?:vless|vmess|trojan|ss|hysteria2?|tuic|wireguard|wg):\/\//i.test(c)) return "uri"; if (/^\s*[\[{]/.test(c)) return "json"; if (/^(?:proxies|proxy-groups|mixed-port|port|mode)\s*:/im.test(c)) return "yaml"; return "base64"; }
+function detectFormat(content) { const c = normalizeText(content); if (/^https?:\/\//i.test(c)) return "url"; if (/^(?:happ|incy|v2raytun):\/\//i.test(c)) return "envelope"; if (/(?:vless|vmess|trojan|ss|hysteria2?|tuic|wireguard|wg):\/\//i.test(c)) return "uri"; if (/^\s*[\[{]/.test(c)) return "json"; if (/^(?:proxies|proxy-groups|mixed-port|port|mode)\s*:/im.test(c)) return "yaml"; return "base64"; }
 
 async function resolveCryptWrapper(value, trusted = false, pingCheck = false, depth = 0) {
   if (depth > 8) return { ok: false, error: "Слишком глубокая цепочка crypt-обёрток", configs: [], uris: [] };
@@ -131,7 +130,11 @@ export async function decodeSubscription(url, trusted = false, pingCheck = false
     }
     finalFormat = detectFormat(content);
     let parseResult;
-    if (finalFormat === "uri") parseResult = parseVlessList(content);
+    if (finalFormat === "url") {
+      const nested = await decodeSubscription(content.trim(), trusted, pingCheck);
+      if (nested?.ok) return { ...nested, attempts: result.attempts + (nested.attempts || 0) };
+      parseResult = nested;
+    } else if (finalFormat === "uri") parseResult = parseVlessList(content);
     else if (finalFormat === "json") parseResult = parseJson(content);
     else if (finalFormat === "yaml") parseResult = parseYaml(content);
     else if (finalFormat === "crypt") parseResult = await parseCrypt(content);

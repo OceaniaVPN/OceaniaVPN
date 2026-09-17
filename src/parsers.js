@@ -117,7 +117,54 @@ export function parseVlessList(content) {
 }
 
 export function parseBase64(content) {
-  const decoded = safeBase64(content.replace(/\s/g, "")); if (!decoded) return { ok: false, error: "Invalid base64" }; return parseVlessList(decoded);
+  const raw = String(content ?? "").replace(/^\\uFEFF/, "").trim();
+  if (!raw) return { ok: false, error: "Пустая подписка" };
+
+  // Subscription servers sometimes return URL-encoded/base64url data,
+  // wrapped in whitespace or with a data: prefix. Try the common variants
+  // before reporting an invalid Base64 payload.
+  const candidates = [];
+  const add = value => {
+    const v = String(value ?? "").trim();
+    if (v && !candidates.includes(v)) candidates.push(v);
+  };
+
+  add(raw);
+  try { add(decodeURIComponent(raw)); } catch {}
+
+  for (const value of [...candidates]) {
+    if (/^data:[^,]+,/i.test(value)) add(value.replace(/^data:[^,]+,/i, ""));
+    add(value.replace(/[\\s\\r\\n]+/g, ""));
+    add(value.replace(/[\\s\\r\\n]+/g, "").replace(/-/g, "+").replace(/_/g, "/"));
+  }
+
+  for (const value of candidates) {
+    const decoded = safeBase64(value);
+    if (!decoded) continue;
+
+    const text = decoded.replace(/^\\uFEFF/, "").trim();
+    if (!text) continue;
+
+    if (/^(?:https?|happ|incy|v2raytun):\\/\\//i.test(text)) {
+      return parseVlessList(text);
+    }
+    if (/^(?:vless|vmess|trojan|ss|hysteria2?|tuic|wireguard|wg):\\/\\//i.test(text)) {
+      return parseVlessList(text);
+    }
+    if (/^\\s*[\\[{]/.test(text)) {
+      const json = parseJson(text);
+      if (json.ok) return json;
+    }
+    if (/^(?:proxies|proxy-groups|mixed-port|port|mode)\\s*:/im.test(text)) {
+      const yamlResult = parseYaml(text);
+      if (yamlResult.ok) return yamlResult;
+    }
+
+    const parsed = parseVlessList(text);
+    if (parsed.uris.length) return parsed;
+  }
+
+  return { ok: false, error: "Invalid base64" };
 }
 
 export function parseYaml(content) {
