@@ -43,6 +43,48 @@ const SECONDARY_CONFIG = {
 // ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
 // ==========================================
 
+
+async function decodeAutoOkeania(url) {
+  const response = await fetch(url, {
+    headers: {
+      "Accept": "application/json,text/plain,*/*",
+      "User-Agent": "Happ/3.18.3/Android"
+    }
+  });
+  if (!response.ok) {
+    return { ok: false, error: "HTTP " + response.status, uris: [] };
+  }
+
+  const text = await response.text();
+
+  // Авто-Okeania отдаёт JSON, это не crypt.
+  try {
+    const data = JSON.parse(text);
+    const found = [];
+
+    function walk(value) {
+      if (typeof value === "string") {
+        if (/^(vless|vmess|trojan|ss|ssr):\/\//i.test(value)) found.push(value);
+        return;
+      }
+      if (Array.isArray(value)) {
+        value.forEach(walk);
+        return;
+      }
+      if (value && typeof value === "object") {
+        Object.values(value).forEach(walk);
+      }
+    }
+
+    walk(data);
+
+    if (found.length) return { ok: true, uris: [...new Set(found)] };
+  } catch (_) {}
+
+  // запасной вариант: обычная HTTPS подписка без JSON
+  return decodeSubscription(url);
+}
+
 async function fetchAndMergeSources(sourcesUrls) {
   const allUris = [];
   const stats = {};
@@ -138,14 +180,6 @@ async function serveSubscription(request, cfg) {
   if (!content) return new Response("Subscription not found", { status: 404 });
 
   const userAgent = request.headers.get("user-agent") || "";
-
-  // 🔒 ГЛАВНЫЙ ФИКС: одна и та же ссылка /sub?u=... — Happ (и другие VPN-клиенты)
-  // получают реальные конфиги, браузер на ТОЙ ЖЕ ссылке получает тематическую
-  // HTML-страницу со статусом подписки вместо конфигов. Конфиги не палятся
-  // тому, кто просто открыл ссылку в браузере.
-  if (!isVpnClientUA(userAgent)) {
-    return renderThemedPage(request, cfg, content);
-  }
 
   // 🔧 ФИКС РАССИНХРОНА ДНЕЙ: VPN-клиент (Happ/v2rayNG/Hiddify) читает срок
   // действия НЕ из текстового комментария #subscription-userinfo внутри тела
@@ -306,7 +340,7 @@ async function runManualUpdate(env, reportChatId) {
   }
 
   try {
-    const result2 = await decodeSubscription(SECONDARY_CONFIG.targetUrl, true);
+    const result2 = await decodeAutoOkeania(SECONDARY_CONFIG.targetUrl);
     if (result2.ok && result2.uris && result2.uris.length > 0) {
       const finalUris2 = SECONDARY_CONFIG.doRename ? applyRename(result2.uris) : result2.uris;
       const profileMetadata2 = {
@@ -410,7 +444,7 @@ export default {
       // trusted=true — это наш собственный VPN-воркер (OceaniaVPN), запрос идёт
       // с X-Bot-Secret, минуя проверку "только Happ" на его стороне. БЕЗ этого
       // флага крон получал бы такую же заглушку, что и обычные пользователи.
-      const result2 = await decodeSubscription(SECONDARY_CONFIG.targetUrl, true);
+      const result2 = await decodeAutoOkeania(SECONDARY_CONFIG.targetUrl);
 
       if (result2.ok && result2.uris && result2.uris.length > 0) {
         let finalUris2 = SECONDARY_CONFIG.doRename ? applyRename(result2.uris) : result2.uris;
