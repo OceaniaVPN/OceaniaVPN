@@ -117,7 +117,7 @@ export function parseVlessList(content) {
 }
 
 export function parseBase64(content) {
-  const raw = String(content ?? "").replace(/^\\uFEFF/, "").trim();
+  const raw = String(content ?? "").replace(/^\uFEFF/, "").trim();
   if (!raw) return { ok: false, error: "Пустая подписка" };
 
   // Subscription servers sometimes return URL-encoded/base64url data,
@@ -134,28 +134,28 @@ export function parseBase64(content) {
 
   for (const value of [...candidates]) {
     if (/^data:[^,]+,/i.test(value)) add(value.replace(/^data:[^,]+,/i, ""));
-    add(value.replace(/[\\s\\r\\n]+/g, ""));
-    add(value.replace(/[\\s\\r\\n]+/g, "").replace(/-/g, "+").replace(/_/g, "/"));
+    add(value.replace(/[\s\r\n]+/g, ""));
+    add(value.replace(/[\s\r\n]+/g, "").replace(/-/g, "+").replace(/_/g, "/"));
   }
 
   for (const value of candidates) {
     const decoded = safeBase64(value);
     if (!decoded) continue;
 
-    const text = decoded.replace(/^\\uFEFF/, "").trim();
+    const text = decoded.replace(/^\uFEFF/, "").trim();
     if (!text) continue;
 
-    if (/^(?:https?|happ|incy|v2raytun):\\/\\//i.test(text)) {
+    if (/^(?:https?|happ|incy|v2raytun):\/\//i.test(text)) {
       return parseVlessList(text);
     }
-    if (/^(?:vless|vmess|trojan|ss|hysteria2?|tuic|wireguard|wg):\\/\\//i.test(text)) {
+    if (/^(?:vless|vmess|trojan|ss|hysteria2?|tuic|wireguard|wg):\/\//i.test(text)) {
       return parseVlessList(text);
     }
-    if (/^\\s*[\\[{]/.test(text)) {
+    if (/^\s*[\[{]/.test(text)) {
       const json = parseJson(text);
       if (json.ok) return json;
     }
-    if (/^(?:proxies|proxy-groups|mixed-port|port|mode)\\s*:/im.test(text)) {
+    if (/^(?:proxies|proxy-groups|mixed-port|port|mode)\s*:/im.test(text)) {
       const yamlResult = parseYaml(text);
       if (yamlResult.ok) return yamlResult;
     }
@@ -176,18 +176,13 @@ export function parseJson(content) {
   try {
     const data = JSON.parse(content), uris = [];
     const tryConvert = ob => singboxToUri(ob) || xrayToUri(ob) || proxyToUri(ob);
-    if (Array.isArray(data?.outbounds)) { const skip = ["direct", "block", "dns", "selector", "urltest", "fallback"]; for (const ob of data.outbounds) { if (skip.includes(ob?.type) || skip.includes(ob?.protocol)) continue; const uri = tryConvert(ob); if (uri) uris.push(uri); } }
-    if (Array.isArray(data?.configs)) for (const c of data.configs) { if (typeof c === "string") uris.push(c); else if (c?.url) uris.push(c.url); else if (c?.config) uris.push(c.config); }
-    if (Array.isArray(data)) for (const item of data) { if (typeof item === "string" && item.includes("://")) uris.push(item); else if (item?.type) { const uri = tryConvert(item); if (uri) uris.push(uri); } else if (Array.isArray(item?.outbounds)) { const skip = ["direct", "block", "dns", "selector", "urltest", "fallback"]; for (const ob of item.outbounds) { if (skip.includes(ob?.type) || skip.includes(ob?.protocol)) continue; const uri = tryConvert(ob); if (uri) uris.push(uri); } } }
-    if (data?.type && !Array.isArray(data)) { const uri = tryConvert(data); if (uri) uris.push(uri); }
-    if (!uris.length) return { ok: false, error: "JSON не содержит распознаваемых конфигов" };
-    return { ok: true, uris: [...new Set(uris)], metadata: {} };
+    if (Array.isArray(data?.outbounds)) { const skip = ["direct", "block", "dns", "selector", "urltest", "loadbalance"]; for (const ob of data.outbounds) { if (!skip.includes(String(ob?.type || "").toLowerCase())) { const uri = tryConvert(ob); if (uri) uris.push(uri); } } }
+    if (Array.isArray(data?.proxies)) for (const p of data.proxies) { const uri = tryConvert(p); if (uri) uris.push(uri); }
+    if (Array.isArray(data)) for (const p of data) { const uri = tryConvert(p); if (uri) uris.push(uri); }
+    return { ok: true, uris, metadata: data?.metadata || extractHeaders(content), title: data?.name || data?.title };
   } catch (e) { return { ok: false, error: `JSON: ${e.message}` }; }
 }
 
-// Полноценный Happ crypt / crypt2 / crypt3 / crypt4 / crypt5.
-// Алгоритм портирован по структуре happ-decrypt-universal: RSA PKCS#1 v1.5
-// для crypt..crypt4 и RSA + ChaCha20-Poly1305 + перестановки для crypt5.
 export async function parseCrypt(content) {
   const parsed = parseCryptMode(content);
   if (!parsed) return { ok: false, error: "Некорректный crypt формат" };
@@ -196,8 +191,6 @@ export async function parseCrypt(content) {
     const value = decrypted.trim();
     if (!value) return { ok: false, error: "Crypt расшифрован, но результат пуст" };
 
-    // Crypt is an envelope: its plaintext can itself be another envelope,
-    // a remote subscription URL, or the final config payload.
     if (/^happ:\/\/crypt(?:[2-5])?\//i.test(value)) return parseCrypt(value);
     if (/^https?:\/\//i.test(value)) return { ok: true, uris: [value], metadata: {}, wrapper: true };
     if (/^(?:happ|incy|v2raytun):\/\/add\//i.test(value)) return { ok: true, uris: [value], metadata: {}, wrapper: true };
