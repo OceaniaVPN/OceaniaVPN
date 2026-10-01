@@ -375,7 +375,7 @@ export async function cmdDevices(cfg, chatId) {
     return sendMessage(
       cfg.telegramToken,
       chatId,
-      `📱 <b>УСТРОЙСТВА</b>\\n\\nПодписка не создана.`,
+      `📱 <b>УСТРОЙСТВА</b>\n\nПодписка не создана.`,
       { inline_keyboard: [[{ text: "🚀 Создать подписку", callback_data: "create" }], [{ text: "🏠 Меню", callback_data: "menu" }]] }
     );
   }
@@ -386,7 +386,7 @@ export async function cmdDevices(cfg, chatId) {
     return sendMessage(
       cfg.telegramToken,
       chatId,
-      `📱 <b>УСТРОЙСТВА</b>\\n\\n<b>0 устройств</b>\\n\\nОткрой подписку в VPN-клиенте, затем нажми «Обновить».`,
+      `📱 <b>УСТРОЙСТВА</b>\n\n<b>0 устройств</b>\n\nОткрой подписку в VPN-клиенте, затем нажми «Обновить».`,
       { inline_keyboard: [[{ text: "🔄 Обновить", callback_data: "devices" }], [{ text: "🏠 Меню", callback_data: "menu" }]] }
     );
   }
@@ -403,14 +403,14 @@ export async function cmdDevices(cfg, chatId) {
     });
   };
 
-  let text = `📱 <b>УСТРОЙСТВА</b>\\n\\n<b>Всего: ${devices.length}</b>\\n\\n`;
+  let text = `📱 <b>УСТРОЙСТВА</b>\n\n<b>${devices.length} ${devices.length === 1 ? "устройство" : devices.length < 5 ? "устройства" : "устройств"}</b>\n\n`;
 
   devices.forEach((device, index) => {
     const icon = device.type === "Tablet" ? "📱" : "📲";
-    text += `${icon} <b>${escapeHtml(device.name || device.id || "Неизвестное устройство")}</b>\\n`;
-    text += `   ${escapeHtml(device.os || "—")} · ${escapeHtml(device.brand || "—")}\\n`;
-    text += `   🕒 ${escapeHtml(formatSeen(device.lastSeen))}\\n`;
-    if (index < devices.length - 1) text += `\\n`;
+    text += `${icon} <b>${escapeHtml(device.name || device.id || "Неизвестное устройство")}</b>\n`;
+    text += `<code>${escapeHtml(device.brand || "—")}</code> · <code>${escapeHtml(device.os || "—")}</code>\n`;
+    text += `🕒 ${escapeHtml(formatSeen(device.lastSeen))}`;
+    if (index < devices.length - 1) text += "\n\n";
   });
 
   await sendMessage(cfg.telegramToken, chatId, text, {
