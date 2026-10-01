@@ -396,6 +396,7 @@ export async function cmdDevices(cfg, chatId) {
     const date = new Date(value);
     if (Number.isNaN(date.getTime())) return "—";
     return date.toLocaleString("ru-RU", {
+      timeZone: "Europe/Moscow",
       day: "2-digit",
       month: "2-digit",
       hour: "2-digit",
