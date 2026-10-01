@@ -7,14 +7,6 @@ const DEVICE_BY_ID = new Map(
   DEVICES.map((device) => [String(device.id).toLowerCase(), device])
 );
 
-function getClientIp(request) {
-  return (
-    request.headers.get("CF-Connecting-IP") ||
-    request.headers.get("X-Forwarded-For")?.split(",")[0]?.trim() ||
-    ""
-  );
-}
-
 async function sha256Hex(value) {
   const data = new TextEncoder().encode(value);
   const digest = await crypto.subtle.digest("SHA-256", data);
@@ -24,25 +16,46 @@ async function sha256Hex(value) {
 }
 
 export function detectDeviceFromRequest(request) {
+  // Happ передаёт модель и ОС отдельными заголовками.
+  // Пример: x-device-model: 2311DRK48G, x-device-os: Android
+  const modelHeader = request.headers.get("x-device-model") || "";
+  const osHeader = request.headers.get("x-device-os") || "";
   const userAgent = request.headers.get("user-agent") || "";
-  const modelHeader = request.headers.get("sec-ch-ua-model") || "";
-  const haystack = `${modelHeader} ${userAgent}`.toLowerCase();
+  const secModel = request.headers.get("sec-ch-ua-model") || "";
+
+  const candidates = [modelHeader, secModel, userAgent]
+    .map((value) => String(value).trim().toLowerCase())
+    .filter(Boolean);
 
   let match = null;
-  for (const [id, device] of DEVICE_BY_ID) {
-    if (haystack.includes(id)) {
-      match = device;
-      break;
+  for (const value of candidates) {
+    for (const [id, device] of DEVICE_BY_ID) {
+      if (value.includes(id)) {
+        match = device;
+        break;
+      }
     }
+    if (match) break;
   }
 
-  if (!match) return null;
+  // Даже если модели ещё нет в devices.json, сохраняем данные клиента,
+  // чтобы вкладка не оставалась пустой.
+  const model = modelHeader || secModel || "";
+  if (!match && !model) return null;
 
   return {
-    device: match,
+    device: match || {
+      id: model || "unknown",
+      name: model || "Неизвестное устройство",
+      brand: "Неизвестно",
+      os: osHeader || "Неизвестно",
+      type: "Устройство",
+      year: null,
+    },
+    model,
+    os: osHeader,
     userAgent,
-    modelHeader,
-    ip: getClientIp(request),
+    hwid: request.headers.get("x-hwid") || "",
   };
 }
 
@@ -52,13 +65,13 @@ export async function recordSubscriptionDevice(kv, chatId, request, secret) {
   const detected = detectDeviceFromRequest(request);
   if (!detected) return null;
 
-  // Не сохраняем IP или User-Agent. Они используются только для создания
-  // стабильного хеша, чтобы несколько запросов одного клиента не считались
-  // разными устройствами.
-  const fingerprint = await sha256Hex(
-    `${secret || ""}|${detected.device.id}|${detected.userAgent}|${detected.modelHeader}|${detected.ip}`
-  );
+  // HWID используем только для дедупликации и не сохраняем в KV.
+  // Если HWID нет, используем комбинацию модели и User-Agent.
+  const identity = detected.hwid
+    ? `hwid:${detected.hwid}`
+    : `device:${detected.device.id}|model:${detected.model}|ua:${detected.userAgent}`;
 
+  const fingerprint = await sha256Hex(`${secret || ""}|${chatId}|${identity}`);
   const key = `${DEVICE_PREFIX}${chatId}:${fingerprint}`;
   const now = new Date().toISOString();
 
@@ -68,9 +81,9 @@ export async function recordSubscriptionDevice(kv, chatId, request, secret) {
       id: detected.device.id,
       name: detected.device.name,
       brand: detected.device.brand,
-      os: detected.device.os,
+      os: detected.device.os || detected.device.os,
       type: detected.device.type,
-      year: detected.device.year,
+      year: detected.device.year || null,
       lastSeen: now,
     },
   });
