@@ -372,31 +372,51 @@ export async function cmdClean(cfg, chatId) {
 export async function cmdDevices(cfg, chatId) {
   const content = await getFileContent(cfg, `user_${chatId}.txt`);
   if (!content) {
-    return sendMessage(cfg.telegramToken, chatId, `📭 <b>Подписка ещё не создана.</b>`, backToMenuKeyboard());
+    return sendMessage(
+      cfg.telegramToken,
+      chatId,
+      `📱 <b>УСТРОЙСТВА</b>\\n\\nПодписка не создана.`,
+      { inline_keyboard: [[{ text: "🚀 Создать подписку", callback_data: "create" }], [{ text: "🏠 Меню", callback_data: "menu" }]] }
+    );
   }
 
   const devices = await listSubscriptionDevices(cfg.kv, chatId);
+
   if (!devices.length) {
     return sendMessage(
       cfg.telegramToken,
       chatId,
-      `📱 <b>УСТРОЙСТВА</b>\\n\\nПока ни одного устройства не удалось определить.\\n\\nУчёт идёт по User-Agent VPN-клиента и базе <code>devices.json</code>.`,
-      { inline_keyboard: [[{ text: "📋 Моя подписка", callback_data: "my" }], [{ text: "🏠 Меню", callback_data: "menu" }]] }
+      `📱 <b>УСТРОЙСТВА</b>\\n\\n<b>0 устройств</b>\\n\\nОткрой подписку в VPN-клиенте, затем нажми «Обновить».`,
+      { inline_keyboard: [[{ text: "🔄 Обновить", callback_data: "devices" }], [{ text: "🏠 Меню", callback_data: "menu" }]] }
     );
   }
 
-  let text = `📱 <b>УСТРОЙСТВА ПОДПИСКИ</b>\\n\\nПодключались: <b>${devices.length}</b>\\n\\n`;
+  const formatSeen = (value) => {
+    if (!value) return "—";
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return "—";
+    return date.toLocaleString("ru-RU", {
+      day: "2-digit",
+      month: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit"
+    });
+  };
+
+  let text = `📱 <b>УСТРОЙСТВА</b>\\n\\n<b>Всего: ${devices.length}</b>\\n\\n`;
+
   devices.forEach((device, index) => {
-    const seen = device.lastSeen ? new Date(device.lastSeen).toLocaleString("ru-RU") : "—";
-    text += `${index + 1}. <b>${escapeHtml(device.name || device.id || "Неизвестное устройство")}</b>\\n`;
-    text += `   🏷 ${escapeHtml(device.brand || "—")} · ${escapeHtml(device.os || "—")}\\n`;
-    text += `   🕒 Последний запрос: <code>${escapeHtml(seen)}</code>\\n\\n`;
+    const icon = device.type === "Tablet" ? "📱" : "📲";
+    text += `${icon} <b>${escapeHtml(device.name || device.id || "Неизвестное устройство")}</b>\\n`;
+    text += `   ${escapeHtml(device.os || "—")} · ${escapeHtml(device.brand || "—")}\\n`;
+    text += `   🕒 ${escapeHtml(formatSeen(device.lastSeen))}\\n`;
+    if (index < devices.length - 1) text += `\\n`;
   });
 
   await sendMessage(cfg.telegramToken, chatId, text, {
     inline_keyboard: [
       [{ text: "🔄 Обновить", callback_data: "devices" }],
-      [{ text: "📋 Моя подписка", callback_data: "my" }, { text: "🏠 Меню", callback_data: "menu" }]
+      [{ text: "📋 Подписка", callback_data: "my" }, { text: "🏠 Меню", callback_data: "menu" }]
     ]
   });
 }
