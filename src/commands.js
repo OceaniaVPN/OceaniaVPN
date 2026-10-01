@@ -5,6 +5,7 @@ import { decodeSubscription, checkServersAlive } from "./decoder.js";
 import { pingServers, cmdDev, cmdDevPing, cmdDevDiag, cmdDevMetrics } from "./devtools.js";
 import { buildFile } from "./build.js";
 import { escapeHtml } from "./config.js";
+import { listSubscriptionDevices, clearSubscriptionDevices } from "./devices.js";
 import { COUNTRIES, matchesCountryKey, detectCountryFromText } from "./contries.js";
 import { cmdProxy, addProxyLink } from "./proxy.js";
 
@@ -302,7 +303,10 @@ export async function cmdDeleteServer(cfg, chatId, n) {
 
 export async function cmdDelete(cfg, chatId) {
   const res = await deleteFile(cfg, `user_${chatId}.txt`, `Delete subscription ${chatId}`);
-  if (res.content || res.sha) return sendMessage(cfg.telegramToken, chatId, `🗑 <b>Подписка удалена.</b>`, { inline_keyboard: [[{ text: "🚀 Создать заново", callback_data: "create" }], [{ text: "🏠 Меню", callback_data: "menu" }]] });
+  if (res.content || res.sha) {
+    await clearSubscriptionDevices(cfg.kv, chatId);
+    return sendMessage(cfg.telegramToken, chatId, `🗑 <b>Подписка удалена.</b>`, { inline_keyboard: [[{ text: "🚀 Создать заново", callback_data: "create" }], [{ text: "🏠 Меню", callback_data: "menu" }]] });
+  }
   return sendMessage(cfg.telegramToken, chatId, `❌ Не удалось удалить подписку.`);
 }
 
@@ -364,6 +368,38 @@ export async function cmdClean(cfg, chatId) {
   await sendMessage(cfg.telegramToken, chatId, `🧹 <b>Готово!</b>\n\nУдалено дублей: <code>${removed}</code>\nОсталось серверов: <code>${unique.length}</code>`, { inline_keyboard: [[{ text: "📡 Список", callback_data: "list" }], [{ text: "⚡ Проверить", callback_data: "check" }], [{ text: "🏠 Меню", callback_data: "menu" }]] });
 }
 
+export async function cmdDevices(cfg, chatId) {
+  const content = await getFileContent(cfg, `user_${chatId}.txt`);
+  if (!content) {
+    return sendMessage(cfg.telegramToken, chatId, `📭 <b>Подписка ещё не создана.</b>`, backToMenuKeyboard());
+  }
+
+  const devices = await listSubscriptionDevices(cfg.kv, chatId);
+  if (!devices.length) {
+    return sendMessage(
+      cfg.telegramToken,
+      chatId,
+      `📱 <b>УСТРОЙСТВА</b>\\n\\nПока ни одного устройства не удалось определить.\\n\\nУчёт идёт по User-Agent VPN-клиента и базе <code>devices.json</code>.`,
+      { inline_keyboard: [[{ text: "📋 Моя подписка", callback_data: "my" }], [{ text: "🏠 Меню", callback_data: "menu" }]] }
+    );
+  }
+
+  let text = `📱 <b>УСТРОЙСТВА ПОДПИСКИ</b>\\n\\nПодключались: <b>${devices.length}</b>\\n\\n`;
+  devices.forEach((device, index) => {
+    const seen = device.lastSeen ? new Date(device.lastSeen).toLocaleString("ru-RU") : "—";
+    text += `${index + 1}. <b>${escapeHtml(device.name || device.id || "Неизвестное устройство")}</b>\\n`;
+    text += `   🏷 ${escapeHtml(device.brand || "—")} · ${escapeHtml(device.os || "—")}\\n`;
+    text += `   🕒 Последний запрос: <code>${escapeHtml(seen)}</code>\\n\\n`;
+  });
+
+  await sendMessage(cfg.telegramToken, chatId, text, {
+    inline_keyboard: [
+      [{ text: "🔄 Обновить", callback_data: "devices" }],
+      [{ text: "📋 Моя подписка", callback_data: "my" }, { text: "🏠 Меню", callback_data: "menu" }]
+    ]
+  });
+}
+
 export async function cmdAnalytics(cfg, chatId) {
   const { links } = await getUserLinks(cfg, chatId);
   if (!links.length) return sendMessage(cfg.telegramToken, chatId, `📭 <b>Нет данных для аналитики.</b>`, backToMenuKeyboard());
@@ -411,6 +447,7 @@ export async function handleCallback(cfg, cb) {
   else if (cb.data === "best") await cmdBest(cfg, chatId);
   else if (cb.data === "clean") await cmdClean(cfg, chatId);
   else if (cb.data === "analytics") await cmdAnalytics(cfg, chatId);
+  else if (cb.data === "devices") await cmdDevices(cfg, chatId);
   else if (cb.data === "share") await cmdShare(cfg, chatId);
   else if (cb.data === "tools") await sendMessage(cfg.telegramToken, chatId, `🧰 <b>Инструменты</b>\n\n📡 Серверы — ping и latency\n🔍 Декодер — импорт подписки\n📤 Экспорт — ссылки\n🌐 Прокси-подписка — общий каталог\n🎨 Оформление — темы\n⚡ Полезные функции — проверка, лучший сервер, очистка, аналитика, шаринг`, { inline_keyboard: [[{ text: "📡 Серверы", callback_data: "list" }, { text: "🔍 Декодер", callback_data: "decode" }], [{ text: "🌐 Прокси", callback_data: "proxy" }, { text: "📤 Экспорт", callback_data: "export" }], [{ text: "⚡ Функции", callback_data: "features" }], [{ text: "🎨 Темы", callback_data: "theme_pick" }], [{ text: "🏠 Меню", callback_data: "menu" }]] });
   else if (cb.data === "proxy") await cmdProxy(cfg, chatId);
