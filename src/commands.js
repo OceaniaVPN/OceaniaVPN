@@ -60,6 +60,7 @@ function mainMenu(isAdmin = false) {
   const rows = [
     [{ text: "🚀  Создать подписку", callback_data: "create" }],
     [{ text: "📋  Моя подписка", callback_data: "my" }, { text: "📡  Серверы", callback_data: "list" }],
+    [{ text: "📱  Устройства", callback_data: "devices" }],
     [{ text: "🌐  Прокси-подписка", callback_data: "proxy" }],
     [{ text: "🔍  Декодер", callback_data: "decode" }, { text: "📤  Экспорт", callback_data: "export" }],
     [{ text: "⚡  Полезные функции", callback_data: "features" }],
