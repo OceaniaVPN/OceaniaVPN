@@ -5,6 +5,7 @@ import { buildFile } from "./build.js";
 import { createOrUpdateFile, getFileContent } from "./github.js";
 import { sendMessage } from "./telegram.js";
 import { COUNTRIES, detectCountryFromText } from "./contries.js";
+import { recordSubscriptionDevice } from "./devices.js";
 
 // ==========================================
 // ОСНОВНАЯ КОНФИГУРАЦИЯ (4 источника)
@@ -138,6 +139,16 @@ async function serveSubscription(request, cfg) {
   if (!content) return new Response("Subscription not found", { status: 404 });
 
   const userAgent = request.headers.get("user-agent") || "";
+
+  // Фиксируем устройство только для запросов личной подписки (?u=...).
+  // devices.json используется для распознавания модели по User-Agent.
+  if (chatIdParam && cfg.kv) {
+    try {
+      await recordSubscriptionDevice(cfg.kv, chatIdParam, request, cfg.subscriptionSecret);
+    } catch (e) {
+      console.error("[Devices] Failed to record device:", e);
+    }
+  }
 
   // 🔒 ГЛАВНЫЙ ФИКС: одна и та же ссылка /sub?u=... — Happ (и другие VPN-клиенты)
   // получают реальные конфиги, браузер на ТОЙ ЖЕ ссылке получает тематическую
