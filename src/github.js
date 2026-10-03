@@ -1,4 +1,4 @@
-async function ghRequest(cfg, method, endpoint, body = null) {
+async function ghRequest(cfg, method, endpoint, body = null, options = {}) {
   const url = `https://api.github.com/repos/${cfg.configRepoOwner}/${cfg.configRepoName}${endpoint}`;
   const headers = {
     Authorization: `token ${cfg.githubToken}`,
@@ -21,6 +21,8 @@ async function ghRequest(cfg, method, endpoint, body = null) {
   }
 
   if (!response.ok) {
+    if (response.status === 404 && options.allowNotFound) return null;
+
     const remaining = response.headers.get("x-ratelimit-remaining");
     const reset = response.headers.get("x-ratelimit-reset");
     const detail = data?.message || `HTTP ${response.status}`;
@@ -41,7 +43,7 @@ async function ghRequest(cfg, method, endpoint, body = null) {
 }
 
 export async function getFileSha(cfg, filename) {
-  const data = await ghRequest(cfg, "GET", `/contents/${cfg.configsFolder}/${filename}?ref=${cfg.branch}`);
+  const data = await ghRequest(cfg, "GET", `/contents/${cfg.configsFolder}/${filename}?ref=${cfg.branch}`, null, { allowNotFound: true });
   return data?.sha || null;
 }
 
@@ -65,7 +67,7 @@ export async function deleteFile(cfg, filename, message) {
 }
 
 export async function getFileContent(cfg, filename) {
-  const data = await ghRequest(cfg, "GET", `/contents/${cfg.configsFolder}/${filename}?ref=${cfg.branch}`);
+  const data = await ghRequest(cfg, "GET", `/contents/${cfg.configsFolder}/${filename}?ref=${cfg.branch}`, null, { allowNotFound: true });
   if (!data?.content) return null;
   try {
     return decodeURIComponent(escape(atob(data.content.replace(/\n/g, ""))));
