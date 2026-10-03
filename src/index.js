@@ -380,33 +380,54 @@ export default {
         if (update.callback_query) {
           const cb = update.callback_query;
 
-          // Telegram показывает индикатор загрузки после нажатия callback-кнопки
-          // до тех пор, пока бот не вызовет answerCallbackQuery. Отвечаем сразу,
-          // а уже потом выполняем тяжёлую бизнес-логику.
+          // Callback подтверждаем до любой тяжёлой логики и возвращаем Telegram 200
+          // сразу. Иначе долгие команды (GitHub/TCP/KV) могут привести к повторной
+          // доставке одного и того же callback_query.
           try {
             await answerCallback(cfg.telegramToken, cb.id);
           } catch (callbackAnswerError) {
             console.error("[Webhook] answerCallbackQuery failed:", callbackAnswerError);
           }
 
-          try {
-            await handleCallback(cfg, cb, { callbackAlreadyAnswered: true });
-          } catch (callbackError) {
-            console.error("[Webhook] Callback handler error:", callbackError);
-
-            const chatId = cb.message?.chat?.id;
-            if (chatId) {
-              try {
-                await sendMessage(
-                  cfg.telegramToken,
-                  chatId,
-                  `❌ <b>Не удалось выполнить кнопку.</b>\\n\\n<code>${String(callbackError?.message || callbackError).replace(/[&<>]/g, "")}</code>`,
-                );
-              } catch (reportError) {
-                console.error("[Webhook] Failed to report callback error:", reportError);
+          // Telegram может повторить webhook update. Один callback_id обрабатываем
+          // только один раз в течение короткого TTL.
+          let duplicate = false;
+          if (cfg.kv && cb.id) {
+            try {
+              const key = `callback_done_${cb.id}`;
+              duplicate = Boolean(await cfg.kv.get(key));
+              if (!duplicate) {
+                await cfg.kv.put(key, "1", { expirationTtl: 300 });
               }
+            } catch (dedupeError) {
+              console.error("[Webhook] Callback dedupe failed:", dedupeError);
             }
           }
+
+          if (!duplicate) {
+            ctx.waitUntil((async () => {
+              try {
+                await handleCallback(cfg, cb, { callbackAlreadyAnswered: true });
+              } catch (callbackError) {
+                console.error("[Webhook] Callback handler error:", callbackError);
+
+                const chatId = cb.message?.chat?.id;
+                if (chatId) {
+                  try {
+                    await sendMessage(
+                      cfg.telegramToken,
+                      chatId,
+                      `❌ <b>Не удалось выполнить кнопку.</b>\\n\\n<code>${String(callbackError?.message || callbackError).replace(/[&<>]/g, "")}</code>`,
+                    );
+                  } catch (reportError) {
+                    console.error("[Webhook] Failed to report callback error:", reportError);
+                  }
+                }
+              }
+            })());
+          }
+
+          return new Response("OK", { status: 200 });
         } else if (update.message) await handleMessage(cfg, update.message);
         return new Response("OK", { status: 200 });
       } catch (e) {
