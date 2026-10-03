@@ -5,11 +5,39 @@ async function ghRequest(cfg, method, endpoint, body = null) {
     Accept: "application/vnd.github.v3+json",
     "User-Agent": "OceaniaVPN-Bot",
   };
-  if (body) {
-    headers["Content-Type"] = "application/json";
-    return fetch(url, { method, headers, body: JSON.stringify(body) }).then((r) => r.json());
+  if (body) headers["Content-Type"] = "application/json";
+
+  const response = await fetch(url, {
+    method,
+    headers,
+    body: body ? JSON.stringify(body) : undefined,
+  });
+
+  let data;
+  try {
+    data = await response.json();
+  } catch {
+    throw new Error(`GitHub API ${method} ${endpoint}: HTTP ${response.status}, invalid JSON`);
   }
-  return fetch(url, { method, headers }).then((r) => r.json());
+
+  if (!response.ok) {
+    const remaining = response.headers.get("x-ratelimit-remaining");
+    const reset = response.headers.get("x-ratelimit-reset");
+    const detail = data?.message || `HTTP ${response.status}`;
+    console.error("[GitHub] Request failed:", {
+      method,
+      endpoint,
+      status: response.status,
+      detail,
+      rateLimitRemaining: remaining,
+      rateLimitReset: reset,
+    });
+
+    const rateInfo = remaining === "0" && reset ? `; rate limit reset at ${new Date(Number(reset) * 1000).toISOString()}` : "";
+    throw new Error(`GitHub API ${method} failed: ${detail}${rateInfo}`);
+  }
+
+  return data;
 }
 
 export async function getFileSha(cfg, filename) {
