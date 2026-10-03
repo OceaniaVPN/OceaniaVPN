@@ -478,7 +478,7 @@ export async function handleCallback(cfg, cb, options = {}) {
     await answerCallback(cfg.telegramToken, cb.id);
   }
 
-  const data = String(data || "").trim();
+  const data = String(cb.data || "").trim();
   if (!data) {
     console.warn("[Callback] Empty callback_data");
     return;
