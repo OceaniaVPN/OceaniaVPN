@@ -414,54 +414,50 @@ export default {
         if (update.callback_query) {
           const cb = update.callback_query;
 
-          // Callback подтверждаем до любой тяжёлой логики и возвращаем Telegram 200
-          // сразу. Иначе долгие команды (GitHub/TCP/KV) могут привести к повторной
-          // доставке одного и того же callback_query.
-          try {
-            await answerCallback(cfg.telegramToken, cb.id);
-          } catch (callbackAnswerError) {
-            console.error("[Webhook] answerCallbackQuery failed:", callbackAnswerError);
-          }
-
-          // Telegram может повторить webhook update. Один callback_id обрабатываем
-          // только один раз в течение короткого TTL.
-          let duplicate = false;
-          if (cfg.kv && cb.id) {
+          // Callback webhook must return HTTP 200 immediately. Telegram only
+          // needs acknowledgement here; all API/KV work is best-effort.
+          ctx.waitUntil((async () => {
             try {
-              const key = `callback_done_${cb.id}`;
-              duplicate = Boolean(await cfg.kv.get(key));
-              if (!duplicate) {
-                await cfg.kv.put(key, "1", { expirationTtl: 300 });
-              }
-            } catch (dedupeError) {
-              // KV is optional for deduplication; never block callbacks on KV errors.
-              console.error("[Webhook] Callback dedupe unavailable; processing anyway:", dedupeError);
-              duplicate = false;
-            }
-          }
-
-          if (!duplicate) {
-            ctx.waitUntil((async () => {
               try {
-                await handleCallback(cfg, cb, { callbackAlreadyAnswered: true });
-              } catch (callbackError) {
-                console.error("[Webhook] Callback handler error:", callbackError);
+                await answerCallback(cfg.telegramToken, cb.id);
+              } catch (callbackAnswerError) {
+                console.error("[Webhook] answerCallbackQuery failed:", callbackAnswerError);
+              }
 
-                const chatId = cb.message?.chat?.id;
-                if (chatId) {
-                  try {
-                    await sendMessage(
-                      cfg.telegramToken,
-                      chatId,
-                      `❌ <b>Не удалось выполнить кнопку.</b>\\n\\n<code>${String(callbackError?.message || callbackError).replace(/[&<>]/g, "")}</code>`,
-                    );
-                  } catch (reportError) {
-                    console.error("[Webhook] Failed to report callback error:", reportError);
+              let duplicate = false;
+              if (cfg.kv && cb.id) {
+                try {
+                  const key = `callback_done_${cb.id}`;
+                  duplicate = Boolean(await cfg.kv.get(key));
+                  if (!duplicate) {
+                    await cfg.kv.put(key, "1", { expirationTtl: 300 });
                   }
+                } catch (dedupeError) {
+                  console.error("[Webhook] Callback dedupe unavailable; processing anyway:", dedupeError);
+                  duplicate = false;
                 }
               }
-            })());
-          }
+
+              if (!duplicate) {
+                await handleCallback(cfg, cb, { callbackAlreadyAnswered: true });
+              }
+            } catch (callbackError) {
+              console.error("[Webhook] Callback handler error:", callbackError);
+
+              const chatId = cb.message?.chat?.id;
+              if (chatId) {
+                try {
+                  await sendMessage(
+                    cfg.telegramToken,
+                    chatId,
+                    `❌ <b>Не удалось выполнить кнопку.</b>\\n\\n<code>${String(callbackError?.message || callbackError).replace(/[&<>]/g, "")}</code>`,
+                  );
+                } catch (reportError) {
+                  console.error("[Webhook] Failed to report callback error:", reportError);
+                }
+              }
+            }
+          })());
 
           return new Response("OK", { status: 200 });
         } else if (update.message) await handleMessage(cfg, update.message);
