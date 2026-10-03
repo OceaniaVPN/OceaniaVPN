@@ -1,10 +1,25 @@
 async function tgRequest(token, method, body) {
   const url = `https://api.telegram.org/bot${token}/${method}`;
-  return fetch(url, {
+  const response = await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
-  }).then((r) => r.json());
+  });
+
+  let data;
+  try {
+    data = await response.json();
+  } catch {
+    throw new Error(`Telegram ${method}: HTTP ${response.status}, invalid JSON response`);
+  }
+
+  if (!response.ok || data?.ok !== true) {
+    const description = data?.description || `HTTP ${response.status}`;
+    console.error(`[Telegram] ${method} failed:`, description, data);
+    throw new Error(`Telegram ${method} failed: ${description}`);
+  }
+
+  return data;
 }
 
 function navigationPanel() {
