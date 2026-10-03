@@ -363,7 +363,7 @@ export default {
           env.TELEGRAM_WEBHOOK_URL ||
           env.WORKER_ORIGIN ||
           url.origin
-        ).replace(/\\/$/, "");
+        ).replace(/\/$/, "");
 
         const apiUrl = "https://api.telegram.org/bot" + cfg.telegramToken +
           "/setWebhook?url=" + encodeURIComponent(workerUrl);
