@@ -1,7 +1,6 @@
 import app from "./index.js";
 import { getConfig } from "./config.js";
 import { getFileContent } from "./github.js";
-import { cmdProxy, handleProxyDocument } from "./proxy.js";
 
 async function servePublicProxy(request, cfg) {
   const url = new URL(request.url);
@@ -26,28 +25,12 @@ export default {
     const url = new URL(request.url);
     if (!cfg.workerOrigin) cfg.workerOrigin = url.origin;
 
+    // This wrapper owns only the public /proxy file route.
+    // All Telegram webhook POST updates must go through the single canonical
+    // handler in src/index.js so callback_query is acknowledged, deduplicated,
+    // and processed consistently.
     if (request.method === "GET" && url.pathname === "/proxy") {
       return servePublicProxy(request, cfg);
-    }
-
-    if (request.method === "POST") {
-      try {
-        const update = await request.clone().json();
-        if (update.message?.document) {
-          await handleProxyDocument(cfg, update.message);
-          return new Response("OK", { status: 200 });
-        }
-        if (update.callback_query?.data === "proxy") {
-          await cmdProxy(cfg, update.callback_query.message.chat.id);
-          return new Response("OK", { status: 200 });
-        }
-        if (update.message?.text?.trim() === "/proxy") {
-          await cmdProxy(cfg, update.message.chat.id);
-          return new Response("OK", { status: 200 });
-        }
-      } catch {
-        // Fall through to the normal worker webhook handler.
-      }
     }
 
     return app.fetch(request, env, ctx);
