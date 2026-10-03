@@ -434,7 +434,9 @@ export default {
                 await cfg.kv.put(key, "1", { expirationTtl: 300 });
               }
             } catch (dedupeError) {
-              console.error("[Webhook] Callback dedupe failed:", dedupeError);
+              // KV is optional for deduplication; never block callbacks on KV errors.
+              console.error("[Webhook] Callback dedupe unavailable; processing anyway:", dedupeError);
+              duplicate = false;
             }
           }
 
