@@ -424,19 +424,9 @@ export default {
                 console.error("[Webhook] answerCallbackQuery failed:", callbackAnswerError);
               }
 
-              let duplicate = false;
-              if (cfg.kv && cb.id) {
-                try {
-                  const key = `callback_done_${cb.id}`;
-                  duplicate = Boolean(await cfg.kv.get(key));
-                  if (!duplicate) {
-                    await cfg.kv.put(key, "1", { expirationTtl: 300 });
-                  }
-                } catch (dedupeError) {
-                  console.error("[Webhook] Callback dedupe unavailable; processing anyway:", dedupeError);
-                  duplicate = false;
-                }
-              }
+              // Callback handling must not depend on BOT_STATE/KV availability.
+              // A broken KV binding must never make Telegram buttons fail.
+              const duplicate = false;
 
               if (!duplicate) {
                 await handleCallback(cfg, cb, { callbackAlreadyAnswered: true });
