@@ -356,9 +356,43 @@ export default {
       if (url.pathname === "/page") return pageSubscription(request, cfg);
       if (url.pathname === "/sub") return serveSubscription(request, cfg);
       if (url.pathname === "/set-webhook") {
-        const workerUrl = url.protocol + "//" + url.host;
-        const res = await fetch("https://api.telegram.org/bot" + cfg.telegramToken + "/setWebhook?url=" + workerUrl, { method: "POST" });
-        return new Response(await res.text(), { headers: { "Content-Type": "application/json" } });
+        // Никогда не брать webhook URL из Host запроса:
+        // старый домен/старый Worker мог перекинуть Telegram обратно на старую версию.
+        // Приоритет: явный TELEGRAM_WEBHOOK_URL -> WORKER_ORIGIN -> текущий host.
+        const workerUrl = (
+          env.TELEGRAM_WEBHOOK_URL ||
+          env.WORKER_ORIGIN ||
+          url.origin
+        ).replace(/\\/$/, "");
+
+        const apiUrl = "https://api.telegram.org/bot" + cfg.telegramToken +
+          "/setWebhook?url=" + encodeURIComponent(workerUrl);
+
+        const res = await fetch(apiUrl, { method: "POST" });
+        const body = await res.text();
+
+        console.log("[Webhook] setWebhook ->", workerUrl, body);
+        return new Response(JSON.stringify({
+          ok: res.ok,
+          webhookUrl: workerUrl,
+          telegram: (() => {
+            try { return JSON.parse(body); } catch { return body; }
+          })()
+        }), {
+          status: res.ok ? 200 : 502,
+          headers: { "Content-Type": "application/json" }
+        });
+      }
+
+      if (url.pathname === "/webhook-info") {
+        const res = await fetch(
+          "https://api.telegram.org/bot" + cfg.telegramToken + "/getWebhookInfo",
+          { method: "POST" }
+        );
+        return new Response(await res.text(), {
+          status: res.ok ? 200 : 502,
+          headers: { "Content-Type": "application/json" }
+        });
       }
       return new Response("Not found", { status: 404 });
     }
