@@ -3,7 +3,7 @@ import { handleCallback, handleMessage } from "./commands.js";
 import { decodeSubscription } from "./decoder.js";
 import { buildFile } from "./build.js";
 import { createOrUpdateFile, getFileContent } from "./github.js";
-import { sendMessage } from "./telegram.js";
+import { sendMessage, answerCallback } from "./telegram.js";
 import { COUNTRIES, detectCountryFromText } from "./contries.js";
 import { recordSubscriptionDevice } from "./devices.js";
 
@@ -377,8 +377,37 @@ export default {
           }
           return new Response("OK", { status: 200 });
         }
-        if (update.callback_query) await handleCallback(cfg, update.callback_query);
-        else if (update.message) await handleMessage(cfg, update.message);
+        if (update.callback_query) {
+          const cb = update.callback_query;
+
+          // Telegram показывает индикатор загрузки после нажатия callback-кнопки
+          // до тех пор, пока бот не вызовет answerCallbackQuery. Отвечаем сразу,
+          // а уже потом выполняем тяжёлую бизнес-логику.
+          try {
+            await answerCallback(cfg.telegramToken, cb.id);
+          } catch (callbackAnswerError) {
+            console.error("[Webhook] answerCallbackQuery failed:", callbackAnswerError);
+          }
+
+          try {
+            await handleCallback(cfg, cb, { callbackAlreadyAnswered: true });
+          } catch (callbackError) {
+            console.error("[Webhook] Callback handler error:", callbackError);
+
+            const chatId = cb.message?.chat?.id;
+            if (chatId) {
+              try {
+                await sendMessage(
+                  cfg.telegramToken,
+                  chatId,
+                  `❌ <b>Не удалось выполнить кнопку.</b>\\n\\n<code>${String(callbackError?.message || callbackError).replace(/[&<>]/g, "")}</code>`,
+                );
+              } catch (reportError) {
+                console.error("[Webhook] Failed to report callback error:", reportError);
+              }
+            }
+          }
+        } else if (update.message) await handleMessage(cfg, update.message);
         return new Response("OK", { status: 200 });
       } catch (e) {
         return new Response("Error: " + e.message, { status: 500 });
