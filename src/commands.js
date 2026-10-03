@@ -459,34 +459,54 @@ export async function cmdStats(cfg, chatId, userId) {
   await sendMessage(cfg.telegramToken, chatId, `📊 <b>Статистика OceaniaVPN</b>\n\n👥 Пользователей: <code>${users.length}</code>\n📁 Профилей: <code>${users.length}</code>\n🧰 DEV-инструменты: <b>online</b>`, { inline_keyboard: [[{ text: "🧰 DEV Center", callback_data: "dev" }], [{ text: "🏠 Меню", callback_data: "menu" }]] });
 }
 
-export async function handleCallback(cfg, cb) {
-  const chatId = cb.message.chat.id;
+export async function handleCallback(cfg, cb, options = {}) {
+  const chatId = cb.message?.chat?.id;
   const userId = cb.from?.id || chatId;
-  await answerCallback(cfg.telegramToken, cb.id);
-  if (cb.data === "menu") await cmdStart(cfg, chatId);
-  else if (cb.data === "features") await sendMessage(cfg.telegramToken, chatId, `⚡ <b>ПОЛЕЗНЫЕ ФУНКЦИИ</b>\n\nПять быстрых инструментов для любого пользователя:`, { inline_keyboard: [[{ text: "⚡ Проверить серверы", callback_data: "check" }], [{ text: "🏆 Найти лучший", callback_data: "best" }], [{ text: "🧹 Убрать дубли", callback_data: "clean" }], [{ text: "📊 Аналитика", callback_data: "analytics" }], [{ text: "📤 Поделиться", callback_data: "share" }], [{ text: "🏠 Главное меню", callback_data: "menu" }]] });
-  else if (cb.data === "check") await cmdCheck(cfg, chatId);
-  else if (cb.data === "best") await cmdBest(cfg, chatId);
-  else if (cb.data === "clean") await cmdClean(cfg, chatId);
-  else if (cb.data === "analytics") await cmdAnalytics(cfg, chatId);
-  else if (cb.data === "devices") await cmdDevices(cfg, chatId);
-  else if (cb.data === "share") await cmdShare(cfg, chatId);
-  else if (cb.data === "tools") await sendMessage(cfg.telegramToken, chatId, `🧰 <b>Инструменты</b>\n\n📡 Серверы — ping и latency\n🔍 Декодер — импорт подписки\n📤 Экспорт — ссылки\n🌐 Прокси-подписка — общий каталог\n🎨 Оформление — темы\n⚡ Полезные функции — проверка, лучший сервер, очистка, аналитика, шаринг`, { inline_keyboard: [[{ text: "📡 Серверы", callback_data: "list" }, { text: "🔍 Декодер", callback_data: "decode" }], [{ text: "🌐 Прокси", callback_data: "proxy" }, { text: "📤 Экспорт", callback_data: "export" }], [{ text: "⚡ Функции", callback_data: "features" }], [{ text: "🎨 Темы", callback_data: "theme_pick" }], [{ text: "🏠 Меню", callback_data: "menu" }]] });
-  else if (cb.data === "proxy") await cmdProxy(cfg, chatId);
-  else if (cb.data === "dev") await cmdDev(cfg, chatId, userId);
-  else if (cb.data === "dev_ping") await cmdDevPing(cfg, chatId, userId);
-  else if (cb.data === "dev_diag") await cmdDevDiag(cfg, chatId, userId);
-  else if (cb.data === "dev_metrics") await cmdDevMetrics(cfg, chatId, userId);
-  else if (cb.data === "create") { await setState(cfg, chatId, { step: "title" }); await sendMessage(cfg.telegramToken, chatId, STEP_MSG.title); }
-  else if (cb.data === "decode") await sendMessage(cfg.telegramToken, chatId, `🔍 <b>Декодер</b>\n\nОтправь URL подписки или используй:\n<code>/decode https://...</code>\n\nПоддержка: YAML · JSON · Base64 · URI · Happ/INCY/V2RayTun`, { inline_keyboard: [[{ text: "🏠 Меню", callback_data: "menu" }]] });
-  else if (cb.data === "my") await cmdMy(cfg, chatId);
-  else if (cb.data === "list") await cmdList(cfg, chatId, 0);
-  else if (cb.data.indexOf("list_page_") === 0) { const page = parseInt(cb.data.substring("list_page_".length), 10) || 0; await cmdList(cfg, chatId, page); }
-  else if (cb.data === "delsrv_prompt") await sendMessage(cfg.telegramToken, chatId, `🗑 <b>Удаление</b>\n\n<code>/delete N</code>`);
-  else if (cb.data === "replacesrv_prompt") await sendMessage(cfg.telegramToken, chatId, `🔁 <b>Замена</b>\n\n<code>/replace N vless://...</code>`);
-  else if (cb.data === "add_prompt") await sendMessage(cfg.telegramToken, chatId, `➕ <b>Добавить сервер</b>\n\nОтправь VLESS/VMess/Trojan/SS или URL подписки.`, { inline_keyboard: [[{ text: "📋 Профиль", callback_data: "my" }], [{ text: "🏠 Меню", callback_data: "menu" }]] });
-  else if (cb.data === "export") await cmdExport(cfg, chatId);
-  else if (cb.data === "theme_pick") {
+
+  // Обычные callback-кнопки из сообщений бота всегда содержат message.
+  // Если Telegram прислал inline callback без message, нельзя выдумывать chat_id.
+  if (!chatId) {
+    console.warn("[Callback] Missing message.chat.id:", {
+      id: cb?.id,
+      data: cb?.data,
+      inlineMessageId: cb?.inline_message_id,
+    });
+    return;
+  }
+
+  if (!options.callbackAlreadyAnswered) {
+    await answerCallback(cfg.telegramToken, cb.id);
+  }
+
+  const data = String(data || "").trim();
+  if (!data) {
+    console.warn("[Callback] Empty callback_data");
+    return;
+  }
+  if (data === "menu") await cmdStart(cfg, chatId);
+  else if (data === "features") await sendMessage(cfg.telegramToken, chatId, `⚡ <b>ПОЛЕЗНЫЕ ФУНКЦИИ</b>\n\nПять быстрых инструментов для любого пользователя:`, { inline_keyboard: [[{ text: "⚡ Проверить серверы", callback_data: "check" }], [{ text: "🏆 Найти лучший", callback_data: "best" }], [{ text: "🧹 Убрать дубли", callback_data: "clean" }], [{ text: "📊 Аналитика", callback_data: "analytics" }], [{ text: "📤 Поделиться", callback_data: "share" }], [{ text: "🏠 Главное меню", callback_data: "menu" }]] });
+  else if (data === "check") await cmdCheck(cfg, chatId);
+  else if (data === "best") await cmdBest(cfg, chatId);
+  else if (data === "clean") await cmdClean(cfg, chatId);
+  else if (data === "analytics") await cmdAnalytics(cfg, chatId);
+  else if (data === "devices") await cmdDevices(cfg, chatId);
+  else if (data === "share") await cmdShare(cfg, chatId);
+  else if (data === "tools") await sendMessage(cfg.telegramToken, chatId, `🧰 <b>Инструменты</b>\n\n📡 Серверы — ping и latency\n🔍 Декодер — импорт подписки\n📤 Экспорт — ссылки\n🌐 Прокси-подписка — общий каталог\n🎨 Оформление — темы\n⚡ Полезные функции — проверка, лучший сервер, очистка, аналитика, шаринг`, { inline_keyboard: [[{ text: "📡 Серверы", callback_data: "list" }, { text: "🔍 Декодер", callback_data: "decode" }], [{ text: "🌐 Прокси", callback_data: "proxy" }, { text: "📤 Экспорт", callback_data: "export" }], [{ text: "⚡ Функции", callback_data: "features" }], [{ text: "🎨 Темы", callback_data: "theme_pick" }], [{ text: "🏠 Меню", callback_data: "menu" }]] });
+  else if (data === "proxy") await cmdProxy(cfg, chatId);
+  else if (data === "dev") await cmdDev(cfg, chatId, userId);
+  else if (data === "dev_ping") await cmdDevPing(cfg, chatId, userId);
+  else if (data === "dev_diag") await cmdDevDiag(cfg, chatId, userId);
+  else if (data === "dev_metrics") await cmdDevMetrics(cfg, chatId, userId);
+  else if (data === "create") { await setState(cfg, chatId, { step: "title" }); await sendMessage(cfg.telegramToken, chatId, STEP_MSG.title); }
+  else if (data === "decode") await sendMessage(cfg.telegramToken, chatId, `🔍 <b>Декодер</b>\n\nОтправь URL подписки или используй:\n<code>/decode https://...</code>\n\nПоддержка: YAML · JSON · Base64 · URI · Happ/INCY/V2RayTun`, { inline_keyboard: [[{ text: "🏠 Меню", callback_data: "menu" }]] });
+  else if (data === "my") await cmdMy(cfg, chatId);
+  else if (data === "list") await cmdList(cfg, chatId, 0);
+  else if (data.indexOf("list_page_") === 0) { const page = parseInt(data.substring("list_page_".length), 10) || 0; await cmdList(cfg, chatId, page); }
+  else if (data === "delsrv_prompt") await sendMessage(cfg.telegramToken, chatId, `🗑 <b>Удаление</b>\n\n<code>/delete N</code>`);
+  else if (data === "replacesrv_prompt") await sendMessage(cfg.telegramToken, chatId, `🔁 <b>Замена</b>\n\n<code>/replace N vless://...</code>`);
+  else if (data === "add_prompt") await sendMessage(cfg.telegramToken, chatId, `➕ <b>Добавить сервер</b>\n\nОтправь VLESS/VMess/Trojan/SS или URL подписки.`, { inline_keyboard: [[{ text: "📋 Профиль", callback_data: "my" }], [{ text: "🏠 Меню", callback_data: "menu" }]] });
+  else if (data === "export") await cmdExport(cfg, chatId);
+  else if (data === "theme_pick") {
     const { pageUrl } = userUrls(cfg, chatId);
     const themeUrl = (themeId = null) => { try { const u = new URL(pageUrl); if (themeId) u.searchParams.set("theme", themeId); return u.toString(); } catch { return pageUrl; } };
     const kb = { inline_keyboard: [] };
@@ -494,10 +514,14 @@ export async function handleCallback(cfg, cb) {
     kb.inline_keyboard.push([{ text: "🎲 Случайная тема", url: themeUrl() }], [{ text: "🏠 Меню", callback_data: "menu" }]);
     await sendMessage(cfg.telegramToken, chatId, `🎨 <b>Оформление</b>\n\nВыбери тему страницы подписки.`, kb);
   }
-  else if (cb.data === "delete") await sendMessage(cfg.telegramToken, chatId, `⚠️ <b>Удалить подписку?</b>\n\nСерверы можно будет добавить заново.`, { inline_keyboard: [[{ text: "🗑 Да, удалить", callback_data: "delete_confirm" }], [{ text: "↩️ Отмена", callback_data: "my" }]] });
-  else if (cb.data === "delete_confirm") await cmdDelete(cfg, chatId);
-  else if (cb.data === "save_alive") { const cached = await cfg.kv.get(`pingcache_${chatId}`, "json"); if (!cached || !cached.uris?.length) await sendMessage(cfg.telegramToken, chatId, `⌛ <b>Кэш устарел</b>\n\nЗапусти /decode заново.`); else { const userFile = `user_${chatId}.txt`; const content = buildFile({ title: cached.title, interval: 4 }, cached.uris); const res = await createOrUpdateFile(cfg, userFile, content, `Save ${cached.uris.length} alive servers`); if (res.content || res.sha) await sendMessage(cfg.telegramToken, chatId, `✅ <b>Подписка сохранена</b>\n\n🟢 Серверов: <code>${cached.uris.length}</code>`, { inline_keyboard: [[{ text: "📡 Серверы", callback_data: "list" }], [{ text: "🏠 Меню", callback_data: "menu" }]] }); else await sendMessage(cfg.telegramToken, chatId, `❌ Ошибка сохранения`); } }
-  else if (cb.data === "help") await cmdHelp(cfg, chatId);
+  else if (data === "delete") await sendMessage(cfg.telegramToken, chatId, `⚠️ <b>Удалить подписку?</b>\n\nСерверы можно будет добавить заново.`, { inline_keyboard: [[{ text: "🗑 Да, удалить", callback_data: "delete_confirm" }], [{ text: "↩️ Отмена", callback_data: "my" }]] });
+  else if (data === "delete_confirm") await cmdDelete(cfg, chatId);
+  else if (data === "save_alive") { const cached = await cfg.kv.get(`pingcache_${chatId}`, "json"); if (!cached || !cached.uris?.length) await sendMessage(cfg.telegramToken, chatId, `⌛ <b>Кэш устарел</b>\n\nЗапусти /decode заново.`); else { const userFile = `user_${chatId}.txt`; const content = buildFile({ title: cached.title, interval: 4 }, cached.uris); const res = await createOrUpdateFile(cfg, userFile, content, `Save ${cached.uris.length} alive servers`); if (res.content || res.sha) await sendMessage(cfg.telegramToken, chatId, `✅ <b>Подписка сохранена</b>\n\n🟢 Серверов: <code>${cached.uris.length}</code>`, { inline_keyboard: [[{ text: "📡 Серверы", callback_data: "list" }], [{ text: "🏠 Меню", callback_data: "menu" }]] }); else await sendMessage(cfg.telegramToken, chatId, `❌ Ошибка сохранения`); } }
+  else if (data === "help") await cmdHelp(cfg, chatId);
+  else {
+    console.warn("[Callback] Unknown callback_data:", data);
+    await sendMessage(cfg.telegramToken, chatId, `⚠️ <b>Кнопка устарела.</b>\\n\\nОткрой меню заново.`, { inline_keyboard: [[{ text: "🏠 Главное меню", callback_data: "menu" }]] });
+  }
 }
 
 export async function handleMessage(cfg, msg) {
