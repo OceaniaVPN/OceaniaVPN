@@ -100,7 +100,7 @@ export async function cmdDevDiag(cfg, chatId, userId) {
   if (userId !== cfg.adminId) return sendMessage(cfg.telegramToken, chatId, "⛔️ Нет прав");
   const checks = [];
   try { const users = await listAllUsers(cfg); checks.push(["GitHub storage", true, `${users.length} users`]); } catch (e) { checks.push(["GitHub storage", false, e?.message || "error"]); }
-  try { await cfg.kv.put(`dev_diag_${chatId}`, String(Date.now()), { expirationTtl: 60 }); const v = await cfg.kv.get(`dev_diag_${chatId}`); checks.push(["KV", v !== null, v !== null ? "read/write OK" : "read failed"]); } catch (e) { checks.push(["KV", false, e?.message || "error"]); }
+  try { await cfg.store.put(`dev_diag_${chatId}`, String(Date.now()), { expirationTtl: 60 }); const v = await cfg.store.get(`dev_diag_${chatId}`); checks.push(["D1", v !== null, v !== null ? "read/write OK" : "read failed"]); } catch (e) { checks.push(["D1", false, e?.message || "error"]); }
   checks.push(["Admin auth", userId === cfg.adminId, "local check"]);
   let msg = `🩺 <b>Системная диагностика</b>\n\n`;
   for (const [name, ok, detail] of checks) msg += `${ok ? "✅" : "❌"} <b>${escape(name)}</b> — <code>${escape(detail)}</code>\n`;
@@ -120,5 +120,5 @@ export async function cmdDevMetrics(cfg, chatId, userId) {
     byProtocol[p] = (byProtocol[p] || 0) + 1;
   }
   const protocols = Object.entries(byProtocol).map(([k, v]) => `${k}: <b>${v}</b>`).join(" · ") || "нет данных";
-  await sendMessage(cfg.telegramToken, chatId, `📊 <b>Метрики</b>\n\n👥 Пользователей: <code>${users.length}</code>\n📡 Серверов в вашем профиле: <code>${links.length}</code>\n🔌 Протоколы: ${protocols}\n\n🧠 Декодер: <code>8 UA / redirect / envelope</code>\n🛡 Storage: <code>GitHub + KV</code>`, { inline_keyboard: [[{ text: "🧰 DEV Center", callback_data: "dev" }], [{ text: "🏠 Меню", callback_data: "menu" }]] });
+  await sendMessage(cfg.telegramToken, chatId, `📊 <b>Метрики</b>\n\n👥 Пользователей: <code>${users.length}</code>\n📡 Серверов в вашем профиле: <code>${links.length}</code>\n🔌 Протоколы: ${protocols}\n\n🧠 Декодер: <code>8 UA / redirect / envelope</code>\n🛡 Storage: <code>GitHub + D1</code>`, { inline_keyboard: [[{ text: "🧰 DEV Center", callback_data: "dev" }], [{ text: "🏠 Меню", callback_data: "menu" }]] });
 }
