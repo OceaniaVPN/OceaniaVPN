@@ -57,5 +57,5 @@ export function isValidChatId(value) {
 }
 
 export function isSafeConfigFilename(value) {
-  return /^(?:user_-?\d{1,20}|decoded_-?\d{1,20}_[a-z0-9]+)\.txt$/i.test(String(value || ""));
+  return /^(?:user_-?\d{1,20}(?:_[a-z0-9-]{1,64})?|decoded_-?\d{1,20}_[a-z0-9]+)\.txt$/i.test(String(value || ""));
 }
