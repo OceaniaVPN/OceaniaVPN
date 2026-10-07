@@ -1,3 +1,4 @@
+import { createD1Store } from "./d1.js";
 export function getConfig(env) {
   return {
     telegramToken: env.TELEGRAM_BOT_TOKEN,
@@ -9,7 +10,9 @@ export function getConfig(env) {
     botRepoName: env.BOT_REPO_NAME || env.CONFIG_REPO_OWNER || "OceaniaVPN",
     configsFolder: env.CONFIGS_FOLDER || "configs",
     branch: env.BRANCH || "main",
-    kv: env.BOT_STATE,
+    db: createD1Store(env.BOT_DB),
+    // Временный fallback для уже работающих инсталляций до привязки D1.
+    store: createD1Store(env.BOT_DB) || env.BOT_STATE,
     // 🎨 Нужен для сборки ссылки на тематическую страницу подписки (/page —
     // см. index.js). Задай в переменных Worker'а (Settings → Variables):
     // WORKER_ORIGIN = https://твой-воркер.workers.dev (без слэша в конце).
