@@ -9,6 +9,7 @@ import { listSubscriptionDevices, clearSubscriptionDevices } from "./devices.js"
 import { COUNTRIES, matchesCountryKey, detectCountryFromText } from "./contries.js";
 import { cmdProxy, addProxyLink } from "./proxy.js";
 import { listSubscriptions, getActiveSubscription, getActiveFilename, createSubscription, setActiveSubscription, deleteSubscriptionRecord } from "./subscriptions.js";
+import { listScheduledChanges, addScheduledChange, cancelScheduledChange } from "./scheduler.js";
 
 function splitSubscriptionFile(content) {
   const lines = content.split("\n");
@@ -150,7 +151,7 @@ export async function cmdStart(cfg, chatId) {
 export async function cmdHelp(cfg, chatId) {
   await sendMessage(cfg.telegramToken, chatId,
     `ℹ️ <b>OCEANIA VPN · Справка</b>\n\n` +
-    `<b>Основное</b>\n/start · главное меню\n/create · создать подписку\n/my · активная подписка\n/subs · все подписки и переключение\n/list · серверы + проверка\n/add · добавить сервер/подписку\n/replace N · заменить сервер\n/delete N · удалить сервер\n/export · ссылки\n/decode URL · декодировать\n/proxy · прокси-подписки\n\n` +
+    `<b>Основное</b>\n/start · главное меню\n/create · создать подписку\n/my · активная подписка\n/subs · все подписки и переключение\n/schedule · черновики: запланировать добавление/удаление сервера\n/list · серверы + проверка\n/add · добавить сервер/подписку\n/replace N · заменить сервер\n/delete N · удалить сервер\n/export · ссылки\n/decode URL · декодировать\n/proxy · прокси-подписки\n\n` +
     `<b>Полезные функции</b>\n/check · проверить серверы\n/best · найти самый быстрый сервер\n/clean · удалить дубли\n/analytics · аналитика профиля\n/share · поделиться подпиской\n/cancel · отменить операцию\n\n` +
     `<b>Для разработчика</b>\n/users · пользователи\n/stats · статистика\n/dev · DEV Control Center\n\n` +
     `<b>Декодер</b>\nYAML · JSON · Base64 · URI · Happ/INCY/V2RayTun redirect · вложенные ссылки\n\n` +
@@ -213,6 +214,73 @@ export async function cmdDecode(cfg, chatId, url) {
     const errorMsg = `⚠️ <b>Ошибка декодирования</b>\n\n<code>${escapeHtml(err.message)}</code>`;
     if (loadingMsgId) { try { await editMessage(cfg.telegramToken, chatId, loadingMsgId, errorMsg); } catch { await sendMessage(cfg.telegramToken, chatId, errorMsg); } } else await sendMessage(cfg.telegramToken, chatId, errorMsg);
   }
+}
+
+export async function cmdSchedule(cfg, chatId, args) {
+  const action = String(args?.[0] || "").toLowerCase();
+  if (!action || action === "list") return cmdScheduledList(cfg, chatId);
+
+  if (action === "cancel" || action === "delete") {
+    const id = String(args?.[1] || "");
+    if (!id) return sendMessage(cfg.telegramToken, chatId, `🗑 <b>Удаление черновика</b>\\n\\nИспользуй: <code>/schedule cancel ID</code>`);
+    const item = await cancelScheduledChange(cfg, chatId, id);
+    return sendMessage(cfg.telegramToken, chatId,
+      item
+        ? `✅ Черновик <code>${escapeHtml(id)}</code> отменён.`
+        : `❌ Черновик <code>${escapeHtml(id)}</code> не найден.`,
+      { inline_keyboard: [[{ text: "📝 Черновики", callback_data: "schedule" }], [{ text: "🏠 Меню", callback_data: "menu" }]] });
+  }
+
+  if (action !== "add" && action !== "remove") {
+    return sendMessage(cfg.telegramToken, chatId,
+      `📝 <b>Черновики подписки</b>\\n\\n` +
+      `Добавить сервер:\\n<code>/schedule add 2026-10-08 21:30 vless://...</code>\\n\\n` +
+      `Удалить сервер:\\n<code>/schedule remove 2026-10-08 21:30 vless://...</code>\\n\\n` +
+      `Время — московское (UTC+3).`);
+  }
+
+  const date = args?.[1];
+  const time = args?.[2];
+  const uri = args?.slice(3).join(" ").trim();
+  if (!date || !time || !uri) {
+    return sendMessage(cfg.telegramToken, chatId, `❌ Формат: <code>/schedule ${action} YYYY-MM-DD HH:mm URI</code>`);
+  }
+
+  try {
+    const item = await addScheduledChange(cfg, chatId, { action, date, time, uri });
+    await sendMessage(cfg.telegramToken, chatId,
+      `✅ <b>Изменение запланировано</b>\\n\\n` +
+      `⏰ <b>${escapeHtml(date)} ${escapeHtml(time)} МСК</b>\\n` +
+      `${action === "add" ? "➕ Добавить" : "🗑 Удалить"} сервер\\n` +
+      `📡 <code>${escapeHtml(uri)}</code>\\n` +
+      `📝 ID: <code>${escapeHtml(item.id)}</code>`,
+      { inline_keyboard: [[{ text: "📝 Все черновики", callback_data: "schedule" }], [{ text: "🏠 Меню", callback_data: "menu" }]] });
+  } catch (error) {
+    await sendMessage(cfg.telegramToken, chatId, `❌ <b>Не удалось запланировать</b>\\n\\n<code>${escapeHtml(error.message || String(error))}</code>`);
+  }
+}
+
+export async function cmdScheduledList(cfg, chatId) {
+  const items = await listScheduledChanges(cfg, chatId);
+  if (!items.length) {
+    return sendMessage(cfg.telegramToken, chatId,
+      `📝 <b>ЧЕРНОВИКИ</b>\\n\\nЗапланированных изменений нет.`,
+      { inline_keyboard: [[{ text: "🏠 Меню", callback_data: "menu" }]] });
+  }
+
+  let text = `📝 <b>ЧЕРНОВИКИ ПОДПИСОК</b>\\n\\n`;
+  const rows = [];
+  for (const item of items.slice(0, 20)) {
+    const when = new Date(item.executeAt).toLocaleString("ru-RU", {
+      timeZone: "Europe/Moscow",
+      day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit"
+    });
+    text += `<b>${escapeHtml(when)} МСК</b> · ${item.action === "add" ? "➕" : "🗑"} ${escapeHtml(item.subscriptionTitle || "Подписка")}\\n`;
+    text += `<code>${escapeHtml(item.uri)}</code>\\nID: <code>${escapeHtml(item.id)}</code>\\n\\n`;
+    rows.push([{ text: `❌ Отменить ${item.id}`, callback_data: `schedule_cancel_${item.id}` }]);
+  }
+  rows.push([{ text: "🏠 Меню", callback_data: "menu" }]);
+  return sendMessage(cfg.telegramToken, chatId, text, { inline_keyboard: rows });
 }
 
 export async function cmdSubscriptions(cfg, chatId) {
@@ -548,6 +616,12 @@ export async function handleCallback(cfg, cb, options = {}) {
   else if (data === "decode") await sendMessage(cfg.telegramToken, chatId, `🔍 <b>Декодер</b>\n\nОтправь URL подписки или используй:\n<code>/decode https://...</code>\n\nПоддержка: YAML · JSON · Base64 · URI · Happ/INCY/V2RayTun`, { inline_keyboard: [[{ text: "🏠 Меню", callback_data: "menu" }]] });
   else if (data === "my") await cmdMy(cfg, chatId);
   else if (data === "subs") await cmdSubscriptions(cfg, chatId);
+  else if (data === "schedule") await cmdScheduledList(cfg, chatId);
+  else if (data.startsWith("schedule_cancel_")) {
+    const id = data.substring("schedule_cancel_".length);
+    const item = await cancelScheduledChange(cfg, chatId, id);
+    await sendMessage(cfg.telegramToken, chatId, item ? `✅ Черновик <code>${escapeHtml(id)}</code> отменён.` : `❌ Черновик не найден.`, { inline_keyboard: [[{ text: "📝 Черновики", callback_data: "schedule" }], [{ text: "🏠 Меню", callback_data: "menu" }]] });
+  }
   else if (data.startsWith("sub_switch_")) await cmdSwitchSubscription(cfg, chatId, data.substring("sub_switch_".length));
   else if (data === "list") await cmdList(cfg, chatId, 0);
   else if (data.indexOf("list_page_") === 0) { const page = parseInt(data.substring("list_page_".length), 10) || 0; await cmdList(cfg, chatId, page); }
@@ -591,6 +665,7 @@ export async function handleMessage(cfg, msg) {
   if (cmd === "/decode") return cmdDecode(cfg, chatId, parts.slice(1).join(" "));
   if (cmd === "/my") return cmdMy(cfg, chatId);
   if (cmd === "/subs") return cmdSubscriptions(cfg, chatId);
+  if (cmd === "/schedule") return cmdSchedule(cfg, chatId, parts.slice(1));
   if (cmd === "/list") return cmdList(cfg, chatId, parts[1] ? (parseInt(parts[1], 10) - 1) : 0);
   if (cmd === "/export") return cmdExport(cfg, chatId);
   if (cmd === "/proxy") return cmdProxy(cfg, chatId);
