@@ -360,7 +360,6 @@ export default {
   async fetch(request, env, ctx) {
     const cfg = getConfig(env);
     const url = new URL(request.url);
-    if (cfg.db && cfg.legacyKv) ctx.waitUntil(migrateLegacyKvToD1(cfg).catch((e) => console.error("[Migration] KV -> D1 failed:", e)));
     if (!cfg.workerOrigin) cfg.workerOrigin = url.origin;
 
     if (request.method === "GET") {
