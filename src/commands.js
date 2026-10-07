@@ -90,7 +90,7 @@ const THEME_LIST = [
 async function handleScheduleStep(cfg, chatId, text, state) {
   const value = String(text || "").trim();
   if (state.step === "schedule_date") {
-    const match = value.match(/^(\\d{4}-\\d{2}-\\d{2})\\s+(\\d{2}:\\d{2})$/);
+    const match = value.match(/^(\d{4}-\d{2}-\d{2})\s+(\d{2}:\d{2})$/);
     if (!match) {
       await sendMessage(cfg.telegramToken, chatId, "❌ Неверный формат. Отправь дату и время так: <code>2026-10-08 21:30</code>", { inline_keyboard: [[{ text: "❌ Отмена", callback_data: "schedule_cancel_flow" }]] });
       return;
