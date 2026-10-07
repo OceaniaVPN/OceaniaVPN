@@ -492,6 +492,9 @@ export default {
       console.error("[Cron] Scheduled changes error:", e);
     }
 
+    // Черновики проверяются каждую минуту, а тяжёлое обновление источников — только раз в 4 часа.
+    if (event.cron !== "0 */4 * * *") return;
+
     // 1. Обновление основного whitelist.txt (4 источника)
     try {
       const { uris: uniqueUris, stats } = await fetchAndMergeSources(AUTO_UPDATE_CONFIG.sources);
