@@ -15,5 +15,8 @@ BRANCH = "main"
 binding = "BOT_STATE"
 id = "e56a18bce1624f87bc03b8de27544eb7"
 
-
+[[d1_databases]]
+binding = "BOT_DB"
+database_name = "kakok"
+database_id = "6f075ed1-56c8-4bee-8e18-961dc9574b55"
 # Deployment trigger: 2026-10-03T20:12:11.410Z
