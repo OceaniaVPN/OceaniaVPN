@@ -23,4 +23,4 @@ database_id = "6f075ed1-56c8-4bee-8e18-961dc9574b55"
 
 
 [triggers]
-crons = ["* * * * *"]
+crons = ["* * * * *", "0 */4 * * *"]
