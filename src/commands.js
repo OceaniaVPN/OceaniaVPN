@@ -248,7 +248,8 @@ export async function cmdMy(cfg, chatId) {
   const { headers, links } = splitSubscriptionFile(content);
   const { pageUrl } = await userUrls(cfg, chatId);
   const msg = `📋 <b>МОЙ ПРОФИЛЬ</b>\n\n🟢 Статус: <b>АКТИВЕН</b>\n📡 Серверов: <code>${links.length}</code>\n\n<b>Параметры</b>\n<pre>${escapeHtml(headers.join("\n"))}</pre>`;
-  await sendMessage(cfg.telegramToken, chatId, msg, { inline_keyboard: [[{ text: "🎨 Страница", url: pageUrl }, { text: "🖼 Тема", callback_data: "theme_pick" }], [{ text: "📡 Серверы", callback_data: "list" }, { text: "📤 Экспорт", callback_data: "export" }],\n    [{ text: "🔀 Все подписки", callback_data: "subs" }], [{ text: "⚡ Проверка", callback_data: "check" }, { text: "📊 Аналитика", callback_data: "analytics" }], [{ text: "🗑 Удалить", callback_data: "delete" }], [{ text: "🏠 Меню", callback_data: "menu" }]] });
+  await sendMessage(cfg.telegramToken, chatId, msg, { inline_keyboard: [[{ text: "🎨 Страница", url: pageUrl }, { text: "🖼 Тема", callback_data: "theme_pick" }], [{ text: "📡 Серверы", callback_data: "list" }, { text: "📤 Экспорт", callback_data: "export" }],
+    [{ text: "🔀 Все подписки", callback_data: "subs" }], [{ text: "⚡ Проверка", callback_data: "check" }, { text: "📊 Аналитика", callback_data: "analytics" }], [{ text: "🗑 Удалить", callback_data: "delete" }], [{ text: "🏠 Меню", callback_data: "menu" }]] });
 }
 
 export async function cmdList(cfg, chatId, page = 0) {
