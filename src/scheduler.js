@@ -14,11 +14,11 @@ function normalizeUri(value) {
 
 function parseWhen(dateText, timeText) {
   const raw = `${String(dateText || "").trim()} ${String(timeText || "").trim()}`;
-  if (/^\\d{4}-\\d{2}-\\d{2}T/.test(raw)) {
+  if (/^\d{4}-\d{2}-\d{2}T/.test(raw)) {
     const d = new Date(raw);
     if (!Number.isNaN(d.getTime())) return d.getTime();
   }
-  const m = raw.match(/^(\\d{4}-\\d{2}-\\d{2})[ T](\\d{2}):(\\d{2})$/);
+  const m = raw.match(/^(\d{4}-\d{2}-\d{2})[ T](\d{2}):(\d{2})$/);
   if (!m) return 0;
   const d = new Date(`${m[1]}T${m[2]}:${m[3]}:00+03:00`);
   return Number.isNaN(d.getTime()) ? 0 : d.getTime();
