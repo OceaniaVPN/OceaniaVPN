@@ -59,8 +59,8 @@ export function detectDeviceFromRequest(request) {
   };
 }
 
-export async function recordSubscriptionDevice(kv, chatId, request, secret) {
-  if (!kv) return null;
+export async function recordSubscriptionDevice(store, chatId, request, secret) {
+  if (!store) return null;
 
   const detected = detectDeviceFromRequest(request);
   if (!detected) return null;
@@ -75,7 +75,7 @@ export async function recordSubscriptionDevice(kv, chatId, request, secret) {
   const key = `${DEVICE_PREFIX}${chatId}:${fingerprint}`;
   const now = new Date().toISOString();
 
-  await kv.put(key, "", {
+  await store.put(key, "", {
     expirationTtl: 60 * 60 * 24 * 90,
     metadata: {
       id: detected.device.id,
@@ -91,15 +91,15 @@ export async function recordSubscriptionDevice(kv, chatId, request, secret) {
   return { ...detected.device, lastSeen: now };
 }
 
-export async function listSubscriptionDevices(kv, chatId) {
-  if (!kv) return [];
+export async function listSubscriptionDevices(store, chatId) {
+  if (!store) return [];
 
   const prefix = `${DEVICE_PREFIX}${chatId}:`;
   const devices = [];
   let cursor;
 
   do {
-    const result = await kv.list({ prefix, limit: 1000, ...(cursor ? { cursor } : {}) });
+    const result = await store.list({ prefix, limit: 1000, ...(cursor ? { cursor } : {}) });
 
     for (const key of result.keys || []) {
       if (key.metadata) devices.push(key.metadata);
@@ -113,16 +113,16 @@ export async function listSubscriptionDevices(kv, chatId) {
   );
 }
 
-export async function clearSubscriptionDevices(kv, chatId) {
-  if (!kv) return;
+export async function clearSubscriptionDevices(store, chatId) {
+  if (!store) return;
 
   const prefix = `${DEVICE_PREFIX}${chatId}:`;
   let cursor;
 
   do {
-    const result = await kv.list({ prefix, limit: 1000, ...(cursor ? { cursor } : {}) });
+    const result = await store.list({ prefix, limit: 1000, ...(cursor ? { cursor } : {}) });
     for (const key of result.keys || []) {
-      await kv.delete(key.name);
+      await store.delete(key.name);
     }
     cursor = result.list_complete ? null : result.cursor;
   } while (cursor);
