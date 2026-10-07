@@ -1,15 +1,15 @@
 export const STEPS = ["title", "announce", "webpage", "interval", "expireDays"];
 
 export async function getState(cfg, chatId) {
-  return await cfg.kv.get(`state_${chatId}`, "json");
+  return await cfg.store.get(`state_${chatId}`, "json");
 }
 
 export async function setState(cfg, chatId, state) {
-  await cfg.kv.put(`state_${chatId}`, JSON.stringify(state), { expirationTtl: 3600 });
+  await cfg.store.put(`state_${chatId}`, JSON.stringify(state), { expirationTtl: 3600 });
 }
 
 export async function clearState(cfg, chatId) {
-  await cfg.kv.delete(`state_${chatId}`);
+  await cfg.store.delete(`state_${chatId}`);
 }
 
 export const STEP_MSG = {
