@@ -293,8 +293,12 @@ export async function cmdScheduledList(cfg, chatId) {
   const items = await listScheduledChanges(cfg, chatId);
   if (!items.length) {
     return sendMessage(cfg.telegramToken, chatId,
-      `📝 <b>ЧЕРНОВИКИ</b>\\n\\nЗапланированных изменений нет.`,
-      { inline_keyboard: [[{ text: "🏠 Меню", callback_data: "menu" }]] });
+      `📝 <b>ЧЕРНОВИКИ</b>\\n\\nЗапланированных изменений нет.\\n\\nВыбери действие:`,
+      { inline_keyboard: [
+        [{ text: "➕ Запланировать добавление", callback_data: "schedule_add" }],
+        [{ text: "🗑 Запланировать удаление", callback_data: "schedule_remove" }],
+        [{ text: "🏠 Меню", callback_data: "menu" }]
+      ] });
   }
 
   let text = `📝 <b>ЧЕРНОВИКИ ПОДПИСОК</b>\\n\\n`;
