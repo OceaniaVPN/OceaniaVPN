@@ -8,6 +8,7 @@ import { COUNTRIES, detectCountryFromText } from "./contries.js";
 import { recordSubscriptionDevice } from "./devices.js";
 import { listSubscriptions, getActiveSubscription } from "./subscriptions.js";
 import { migrateLegacyKvToD1 } from "./migrate.js";
+import { processScheduledChanges } from "./scheduler.js";
 
 // ==========================================
 // ОСНОВНАЯ КОНФИГУРАЦИЯ (4 источника)
@@ -483,6 +484,16 @@ export default {
   async scheduled(event, env, ctx) {
     console.log("[Cron] Auto-update triggered at:", new Date().toISOString());
     const cfg = getConfig(env);
+
+    try {
+      const scheduleResult = await processScheduledChanges(cfg);
+      console.log("[Cron] Scheduled changes:", scheduleResult);
+    } catch (e) {
+      console.error("[Cron] Scheduled changes error:", e);
+    }
+
+    // Черновики проверяются каждую минуту, а тяжёлое обновление источников — только раз в 4 часа.
+    if (event.cron !== "0 */4 * * *") return;
 
     // 1. Обновление основного whitelist.txt (4 источника)
     try {

@@ -20,3 +20,7 @@ binding = "BOT_DB"
 database_name = "kakok"
 database_id = "6f075ed1-56c8-4bee-8e18-961dc9574b55"
 # Deployment trigger: 2026-10-03T20:12:11.410Z
+
+
+[triggers]
+crons = ["* * * * *", "0 */4 * * *"]
