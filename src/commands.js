@@ -8,6 +8,7 @@ import { escapeHtml } from "./config.js";
 import { listSubscriptionDevices, clearSubscriptionDevices } from "./devices.js";
 import { COUNTRIES, matchesCountryKey, detectCountryFromText } from "./contries.js";
 import { cmdProxy, addProxyLink } from "./proxy.js";
+import { listSubscriptions, getActiveSubscription, getActiveFilename, createSubscription, setActiveSubscription, deleteSubscriptionRecord } from "./subscriptions.js";
 
 function splitSubscriptionFile(content) {
   const lines = content.split("\n");
@@ -35,10 +36,12 @@ function protocolOf(uri) {
   return idx === -1 ? "?" : uri.substring(0, idx).toUpperCase();
 }
 
-function userUrls(cfg, chatId) {
+async function userUrls(cfg, chatId) {
+  const active = await getActiveSubscription(cfg, chatId);
+  const suffix = active?.id ? `&s=${encodeURIComponent(active.id)}` : "";
   return {
-    subUrl: `${cfg.workerOrigin}/sub?u=${chatId}`,
-    pageUrl: `${cfg.workerOrigin}/page?u=${chatId}`,
+    subUrl: `${cfg.workerOrigin}/sub?u=${chatId}${suffix}`,
+    pageUrl: `${cfg.workerOrigin}/page?u=${chatId}${suffix}`,
   };
 }
 
@@ -59,7 +62,7 @@ function isTelegramProxyLink(value) {
 function mainMenu(isAdmin = false) {
   const rows = [
     [{ text: "🚀  Создать подписку", callback_data: "create" }],
-    [{ text: "📋  Моя подписка", callback_data: "my" }, { text: "📡  Серверы", callback_data: "list" }],
+    [{ text: "📋  Мои подписки", callback_data: "subs" }, { text: "📡  Серверы", callback_data: "list" }],
     [{ text: "📱  Устройства", callback_data: "devices" }],
     [{ text: "🌐  Прокси-подписка", callback_data: "proxy" }],
     [{ text: "🔍  Декодер", callback_data: "decode" }, { text: "📤  Экспорт", callback_data: "export" }],
@@ -98,27 +101,35 @@ async function handleStepAnswer(cfg, chatId, text, state) {
 }
 
 async function finalizeSubscription(cfg, chatId, state, uris = []) {
-  const userFile = `user_${chatId}.txt`;
-  const content = buildFile(state, uris);
-  const res = await createOrUpdateFile(cfg, userFile, content, `Subscription for user ${chatId}`);
-  await clearState(cfg, chatId);
-  if (res.content || res.sha) {
-    const { subUrl, pageUrl } = userUrls(cfg, chatId);
-    const kb = { inline_keyboard: [
-      [{ text: "📋 Моя подписка", callback_data: "my" }],
-      [{ text: "🎨 Страница подписки", url: pageUrl }, { text: "🖼 Сменить тему", callback_data: "theme_pick" }],
-      [{ text: "📡 Список серверов", callback_data: "list" }],
-      [{ text: "➕ Добавить сервер", callback_data: "add_prompt" }],
-      [{ text: "🗑 Удалить подписку", callback_data: "delete" }],
-    ] };
-    await sendMessage(cfg.telegramToken, chatId,
-      `✅ <b>Подписка создана</b>\n\n━━━━━━━━━━━━━━━━━━━━\n📡 Серверов: <code>${uris.length}</code>\n🔗 Ссылка:\n<code>${subUrl}</code>\n━━━━━━━━━━━━━━━━━━━━\n\n💡 Можно импортировать в v2rayNG, Hiddify, Shadowrocket или Clash Meta.`, kb);
-  } else await sendMessage(cfg.telegramToken, chatId, `❌ Ошибка: ${res.message || "неизвестно"}`);
+  try {
+    const subscription = await createSubscription(cfg, chatId, { title: state.title || "Моя подписка" });
+    const content = buildFile(state, uris);
+    const res = await createOrUpdateFile(cfg, subscription.filename, content, `Create subscription ${subscription.id} for user ${chatId}`);
+    if (res.content || res.sha) {
+      const { subUrl, pageUrl } = await userUrls(cfg, chatId);
+      const kb = { inline_keyboard: [
+        [{ text: "📋 Моя подписка", callback_data: "my" }, { text: "🔀 Все подписки", callback_data: "subs" }],
+        [{ text: "🎨 Страница подписки", url: pageUrl }, { text: "🖼 Сменить тему", callback_data: "theme_pick" }],
+        [{ text: "📡 Список серверов", callback_data: "list" }],
+        [{ text: "➕ Добавить сервер", callback_data: "add_prompt" }],
+        [{ text: "🗑 Удалить подписку", callback_data: "delete" }],
+      ] };
+      await sendMessage(cfg.telegramToken, chatId,
+        `✅ <b>Подписка создана</b>\n\n━━━━━━━━━━━━━━━━━━━━\n🏷 Название: <b>${escapeHtml(subscription.title)}</b>\n📡 Серверов: <code>${uris.length}</code>\n🔗 Ссылка:\n<code>${subUrl}</code>\n━━━━━━━━━━━━━━━━━━━━\n\n💡 Можно иметь несколько подписок и переключаться между ними через «🔀 Все подписки».`, kb);
+    } else {
+      await deleteSubscriptionRecord(cfg, chatId, subscription.id);
+      await sendMessage(cfg.telegramToken, chatId, `❌ Ошибка: ${res.message || "неизвестно"}`);
+    }
+  } catch (error) {
+    await sendMessage(cfg.telegramToken, chatId, `❌ <b>Не удалось создать подписку.</b>\n\n<code>${escapeHtml(error.message || String(error))}</code>`);
+  } finally {
+    await clearState(cfg, chatId);
+  }
 }
 
 export async function cmdStart(cfg, chatId) {
   await clearState(cfg, chatId);
-  const content = await getFileContent(cfg, `user_${chatId}.txt`);
+  const content = await getFileContent(cfg, await getActiveFilename(cfg, chatId));
   const links = content ? splitSubscriptionFile(content).links : [];
   const hasSubscription = Boolean(content);
   const status = hasSubscription ? "🟢 АКТИВНА" : "⚪ НЕ НАСТРОЕНА";
@@ -139,7 +150,7 @@ export async function cmdStart(cfg, chatId) {
 export async function cmdHelp(cfg, chatId) {
   await sendMessage(cfg.telegramToken, chatId,
     `ℹ️ <b>OCEANIA VPN · Справка</b>\n\n` +
-    `<b>Основное</b>\n/start · главное меню\n/create · создать подписку\n/my · мой профиль\n/list · серверы + проверка\n/add · добавить сервер/подписку\n/replace N · заменить сервер\n/delete N · удалить сервер\n/export · ссылки\n/decode URL · декодировать\n/proxy · прокси-подписки\n\n` +
+    `<b>Основное</b>\n/start · главное меню\n/create · создать подписку\n/my · активная подписка\n/subs · все подписки и переключение\n/list · серверы + проверка\n/add · добавить сервер/подписку\n/replace N · заменить сервер\n/delete N · удалить сервер\n/export · ссылки\n/decode URL · декодировать\n/proxy · прокси-подписки\n\n` +
     `<b>Полезные функции</b>\n/check · проверить серверы\n/best · найти самый быстрый сервер\n/clean · удалить дубли\n/analytics · аналитика профиля\n/share · поделиться подпиской\n/cancel · отменить операцию\n\n` +
     `<b>Для разработчика</b>\n/users · пользователи\n/stats · статистика\n/dev · DEV Control Center\n\n` +
     `<b>Декодер</b>\nYAML · JSON · Base64 · URI · Happ/INCY/V2RayTun redirect · вложенные ссылки\n\n` +
@@ -204,13 +215,40 @@ export async function cmdDecode(cfg, chatId, url) {
   }
 }
 
+export async function cmdSubscriptions(cfg, chatId) {
+  const items = await listSubscriptions(cfg, chatId);
+  const active = await getActiveSubscription(cfg, chatId);
+  if (!items.length) {
+    return sendMessage(cfg.telegramToken, chatId, `📭 <b>Подписок пока нет.</b>`, { inline_keyboard: [[{ text: "🚀 Создать подписку", callback_data: "create" }], [{ text: "🏠 Меню", callback_data: "menu" }]] });
+  }
+
+  const rows = items.map((item, index) => [
+    { text: `${item.id === active?.id ? "🟢" : "⚪️"} ${index + 1}. ${item.title || "Моя подписка"}`, callback_data: `sub_switch_${item.id}` }
+  ]);
+  rows.push([{ text: "➕ Создать ещё", callback_data: "create" }]);
+  rows.push([{ text: "🏠 Главное меню", callback_data: "menu" }]);
+
+  await sendMessage(cfg.telegramToken, chatId,
+    `🔀 <b>МОИ ПОДПИСКИ</b>\n\nВсего: <code>${items.length}</code>\n🟢 Выбрана: <b>${escapeHtml(active?.title || "—")}</b>\n\nНажми на подписку, чтобы сделать её активной для кнопок «Серверы», «Экспорт», «Проверка» и ссылки.`,
+    { inline_keyboard: rows });
+}
+
+export async function cmdSwitchSubscription(cfg, chatId, id) {
+  const item = await setActiveSubscription(cfg, chatId, id);
+  if (!item) return sendMessage(cfg.telegramToken, chatId, `❌ <b>Подписка не найдена.</b>`, { inline_keyboard: [[{ text: "🔀 Все подписки", callback_data: "subs" }]] });
+  const { subUrl } = await userUrls(cfg, chatId);
+  await sendMessage(cfg.telegramToken, chatId,
+    `🟢 <b>Подписка выбрана</b>\n\n🏷 ${escapeHtml(item.title)}\n🔗 <code>${escapeHtml(subUrl)}</code>`,
+    { inline_keyboard: [[{ text: "📋 Открыть", callback_data: "my" }], [{ text: "🔀 Все подписки", callback_data: "subs" }], [{ text: "🏠 Меню", callback_data: "menu" }]] });
+}
+
 export async function cmdMy(cfg, chatId) {
   const content = await getFileContent(cfg, `user_${chatId}.txt`);
   if (!content) return sendMessage(cfg.telegramToken, chatId, `📭 <b>Подписка ещё не создана</b>\n\nСоздай профиль или импортируй URL.`, { inline_keyboard: [[{ text: "🚀 Создать", callback_data: "create" }, { text: "🔍 Декодировать", callback_data: "decode" }], [{ text: "🏠 Меню", callback_data: "menu" }]] });
   const { headers, links } = splitSubscriptionFile(content);
   const { pageUrl } = userUrls(cfg, chatId);
   const msg = `📋 <b>МОЙ ПРОФИЛЬ</b>\n\n🟢 Статус: <b>АКТИВЕН</b>\n📡 Серверов: <code>${links.length}</code>\n\n<b>Параметры</b>\n<pre>${escapeHtml(headers.join("\n"))}</pre>`;
-  await sendMessage(cfg.telegramToken, chatId, msg, { inline_keyboard: [[{ text: "🎨 Страница", url: pageUrl }, { text: "🖼 Тема", callback_data: "theme_pick" }], [{ text: "📡 Серверы", callback_data: "list" }, { text: "📤 Экспорт", callback_data: "export" }], [{ text: "⚡ Проверка", callback_data: "check" }, { text: "📊 Аналитика", callback_data: "analytics" }], [{ text: "🗑 Удалить", callback_data: "delete" }], [{ text: "🏠 Меню", callback_data: "menu" }]] });
+  await sendMessage(cfg.telegramToken, chatId, msg, { inline_keyboard: [[{ text: "🎨 Страница", url: pageUrl }, { text: "🖼 Тема", callback_data: "theme_pick" }], [{ text: "📡 Серверы", callback_data: "list" }, { text: "📤 Экспорт", callback_data: "export" }],\n    [{ text: "🔀 Все подписки", callback_data: "subs" }], [{ text: "⚡ Проверка", callback_data: "check" }, { text: "📊 Аналитика", callback_data: "analytics" }], [{ text: "🗑 Удалить", callback_data: "delete" }], [{ text: "🏠 Меню", callback_data: "menu" }]] });
 }
 
 export async function cmdList(cfg, chatId, page = 0) {
@@ -303,10 +341,18 @@ export async function cmdDeleteServer(cfg, chatId, n) {
 }
 
 export async function cmdDelete(cfg, chatId) {
-  const res = await deleteFile(cfg, `user_${chatId}.txt`, `Delete subscription ${chatId}`);
+  const active = await getActiveSubscription(cfg, chatId);
+  if (!active) return sendMessage(cfg.telegramToken, chatId, `📭 <b>Нет подписок.</b>`, { inline_keyboard: [[{ text: "🚀 Создать", callback_data: "create" }]] });
+  const res = await deleteFile(cfg, active.filename, `Delete subscription ${active.id} for ${chatId}`);
   if (res.content || res.sha) {
+    await deleteSubscriptionRecord(cfg, chatId, active.id);
     await clearSubscriptionDevices(cfg.kv, chatId);
-    return sendMessage(cfg.telegramToken, chatId, `🗑 <b>Подписка удалена.</b>`, { inline_keyboard: [[{ text: "🚀 Создать заново", callback_data: "create" }], [{ text: "🏠 Меню", callback_data: "menu" }]] });
+    const remaining = await listSubscriptions(cfg, chatId);
+    return sendMessage(cfg.telegramToken, chatId,
+      `🗑 <b>Подписка «${escapeHtml(active.title)}» удалена.</b>\n\nОсталось подписок: <code>${remaining.length}</code>`,
+      { inline_keyboard: remaining.length
+        ? [[{ text: "🔀 Выбрать подписку", callback_data: "subs" }], [{ text: "🚀 Создать новую", callback_data: "create" }], [{ text: "🏠 Меню", callback_data: "menu" }]]
+        : [[{ text: "🚀 Создать подписку", callback_data: "create" }], [{ text: "🏠 Меню", callback_data: "menu" }]] });
   }
   return sendMessage(cfg.telegramToken, chatId, `❌ Не удалось удалить подписку.`);
 }
@@ -499,7 +545,7 @@ export async function handleCallback(cfg, cb, options = {}) {
   else if (data === "dev_metrics") await cmdDevMetrics(cfg, chatId, userId);
   else if (data === "create") { await setState(cfg, chatId, { step: "title" }); await sendMessage(cfg.telegramToken, chatId, STEP_MSG.title); }
   else if (data === "decode") await sendMessage(cfg.telegramToken, chatId, `🔍 <b>Декодер</b>\n\nОтправь URL подписки или используй:\n<code>/decode https://...</code>\n\nПоддержка: YAML · JSON · Base64 · URI · Happ/INCY/V2RayTun`, { inline_keyboard: [[{ text: "🏠 Меню", callback_data: "menu" }]] });
-  else if (data === "my") await cmdMy(cfg, chatId);
+  else if (data === "my") await cmdMy(cfg, chatId);\n  else if (data === "subs") await cmdSubscriptions(cfg, chatId);\n  else if (data.startsWith("sub_switch_")) await cmdSwitchSubscription(cfg, chatId, data.substring("sub_switch_".length));
   else if (data === "list") await cmdList(cfg, chatId, 0);
   else if (data.indexOf("list_page_") === 0) { const page = parseInt(data.substring("list_page_".length), 10) || 0; await cmdList(cfg, chatId, page); }
   else if (data === "delsrv_prompt") await sendMessage(cfg.telegramToken, chatId, `🗑 <b>Удаление</b>\n\n<code>/delete N</code>`);
@@ -540,7 +586,7 @@ export async function handleMessage(cfg, msg) {
   if (cmd === "/help") return cmdHelp(cfg, chatId);
   if (cmd === "/create") return cmdCreate(cfg, chatId);
   if (cmd === "/decode") return cmdDecode(cfg, chatId, parts.slice(1).join(" "));
-  if (cmd === "/my") return cmdMy(cfg, chatId);
+  if (cmd === "/my") return cmdMy(cfg, chatId);\n  if (cmd === "/subs") return cmdSubscriptions(cfg, chatId);
   if (cmd === "/list") return cmdList(cfg, chatId, parts[1] ? (parseInt(parts[1], 10) - 1) : 0);
   if (cmd === "/export") return cmdExport(cfg, chatId);
   if (cmd === "/proxy") return cmdProxy(cfg, chatId);
