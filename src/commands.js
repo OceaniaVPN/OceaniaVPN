@@ -157,25 +157,52 @@ async function finalizeSubscription(cfg, chatId, state, uris = []) {
 }
 
 export async function cmdStart(cfg, chatId) {
-  await clearState(cfg, chatId);
-  const content = await getFileContent(cfg, await getActiveFilename(cfg, chatId));
+  let content = null;
+  let storageAvailable = true;
+
+  // /start must remain usable even when D1 is unavailable or over quota.
+  // State cleanup and subscription status are best-effort only.
+  try {
+    await clearState(cfg, chatId);
+  } catch (error) {
+    storageAvailable = false;
+    console.error("[Command] /start state cleanup skipped:", error);
+  }
+
+  if (storageAvailable) {
+    try {
+      content = await getFileContent(cfg, await getActiveFilename(cfg, chatId));
+    } catch (error) {
+      storageAvailable = false;
+      console.error("[Command] /start subscription lookup skipped:", error);
+    }
+  }
+
   const links = content ? splitSubscriptionFile(content).links : [];
   const hasSubscription = Boolean(content);
-  const status = hasSubscription ? "🟢 АКТИВНА" : "⚪ НЕ НАСТРОЕНА";
+  const status = !storageAvailable
+    ? "🟡 БАЗА ВРЕМЕННО НЕДОСТУПНА"
+    : hasSubscription
+      ? "🟢 АКТИВНА"
+      : "⚪ НЕ НАСТРОЕНА";
   const servers = hasSubscription ? links.length : 0;
   const admin = chatId === cfg.adminId;
-  await sendMessage(cfg.telegramToken, chatId,
+
+  await sendMessage(
+    cfg.telegramToken,
+    chatId,
     `🌊 <b>OCEANIA VPN</b>\n<i>Control Center · быстрый доступ ко всему</i>\n\n` +
     `╭────────────────────╮\n` +
     `│ ${status}\n` +
     `│ 📡 Серверов: <b>${servers}</b>\n` +
-    `│ 🔐 Профиль: <b>${hasSubscription ? "готов" : "пуст"}</b>\n` +
+    `│ 🔐 Профиль: <b>${storageAvailable ? (hasSubscription ? "готов" : "пуст") : "данные временно недоступны"}</b>\n` +
     `╰────────────────────╯\n\n` +
     `<b>Что делаем?</b>\n` +
-    `Создаём профиль, проверяем серверы, декодируем подписки или открываем полезные функции.`,
-    mainMenu(admin));
+    `Создаём профиль, проверяем серверы, декодируем подписки или открываем полезные функции.` +
+    (storageAvailable ? "" : "\n\n⚠️ Команды, которым нужна база данных, заработают после снятия лимита D1."),
+    mainMenu(admin)
+  );
 }
-
 export async function cmdHelp(cfg, chatId) {
   await sendMessage(cfg.telegramToken, chatId,
     `ℹ️ <b>OCEANIA VPN · Справка</b>\n\n` +
@@ -639,38 +666,90 @@ export async function handleCallback(cfg, cb, options = {}) {
 export async function handleMessage(cfg, msg) {
   const chatId = msg.chat.id;
   const text = msg.text || "";
-  if (text.trim() && isTelegramProxyLink(text.trim())) return addProxyLink(cfg, chatId, text.trim());
-  if (msg.document) return sendMessage(cfg.telegramToken, chatId, `⛔️ <b>Для прокси теперь отправляется именно ссылка Telegram-прокси.</b>\n\nОткрой раздел «🌐 Прокси-подписка» и просто пришли ссылку.`);
-  const state = await getState(cfg, chatId);
-  if (state?.step === "schedule_date" || state?.step === "schedule_uri") {
-    if (!text.startsWith("/")) { await handleScheduleStep(cfg, chatId, text, state); return; }
+  const trimmed = text.trim();
+
+  if (msg.document) {
+    return sendMessage(
+      cfg.telegramToken,
+      chatId,
+      `⛔️ <b>Для прокси теперь отправляется именно ссылка Telegram-прокси.</b>\n\nОткрой раздел «🌐 Прокси-подписка» и просто пришли ссылку.`
+    );
   }
-  if (state && state.step && !text.startsWith("/")) { await handleStepAnswer(cfg, chatId, text, state); return; }
-  if (!text.startsWith("/") && /^https?:\/\//.test(text.trim())) { await cmdDecode(cfg, chatId, text.trim()); return; }
-  if (!text.startsWith("/")) return;
-  const parts = text.split(/\s+/);
-  const cmd = parts[0].split("@")[0].toLowerCase();
-  const userId = msg.from.id;
-  if (cmd === "/start") return cmdStart(cfg, chatId);
-  if (cmd === "/help") return cmdHelp(cfg, chatId);
-  if (cmd === "/create") return cmdCreate(cfg, chatId);
-  if (cmd === "/decode") return cmdDecode(cfg, chatId, parts.slice(1).join(" "));
-  if (cmd === "/my") return cmdMy(cfg, chatId);
-  if (cmd === "/subs") return cmdSubscriptions(cfg, chatId);
-  if (cmd === "/schedule") return cmdSchedule(cfg, chatId, parts.slice(1));
-  if (cmd === "/list") return cmdList(cfg, chatId, parts[1] ? (parseInt(parts[1], 10) - 1) : 0);
-  if (cmd === "/export") return cmdExport(cfg, chatId);
-  if (cmd === "/proxy") return cmdProxy(cfg, chatId);
-  if (cmd === "/check") return cmdCheck(cfg, chatId);
-  if (cmd === "/best") return cmdBest(cfg, chatId);
-  if (cmd === "/clean") return cmdClean(cfg, chatId);
-  if (cmd === "/analytics") return cmdAnalytics(cfg, chatId);
-  if (cmd === "/share") return cmdShare(cfg, chatId);
-  if (cmd === "/add") return cmdAdd(cfg, chatId, parts.slice(1).join(" "));
-  if (cmd === "/replace") return cmdReplaceServer(cfg, chatId, parts.slice(1).join(" "));
-  if (cmd === "/delete") { if (parts.length > 1) return cmdDeleteServer(cfg, chatId, parts[1]); return cmdDelete(cfg, chatId); }
-  if (cmd === "/cancel") return cmdCancel(cfg, chatId);
-  if (cmd === "/users") return cmdUsers(cfg, chatId, userId);
-  if (cmd === "/stats") return cmdStats(cfg, chatId, userId);
-  if (cmd === "/dev") return cmdDev(cfg, chatId, userId);
+
+  // Route slash commands BEFORE touching D1 state. This is critical when D1
+  // is over quota: /start, /help and other non-storage commands must still work.
+  if (trimmed.startsWith("/")) {
+    const parts = trimmed.split(/\s+/);
+    const cmd = parts[0].split("@")[0].toLowerCase();
+    const userId = msg.from?.id || chatId;
+
+    if (cmd === "/start") return cmdStart(cfg, chatId);
+    if (cmd === "/help") return cmdHelp(cfg, chatId);
+    if (cmd === "/create") return cmdCreate(cfg, chatId);
+    if (cmd === "/decode") return cmdDecode(cfg, chatId, parts.slice(1).join(" "));
+    if (cmd === "/my") return cmdMy(cfg, chatId);
+    if (cmd === "/subs") return cmdSubscriptions(cfg, chatId);
+    if (cmd === "/schedule") return cmdSchedule(cfg, chatId, parts.slice(1));
+    if (cmd === "/list") return cmdList(cfg, chatId, parts[1] ? (parseInt(parts[1], 10) - 1) : 0);
+    if (cmd === "/export") return cmdExport(cfg, chatId);
+    if (cmd === "/proxy") return cmdProxy(cfg, chatId);
+    if (cmd === "/check") return cmdCheck(cfg, chatId);
+    if (cmd === "/best") return cmdBest(cfg, chatId);
+    if (cmd === "/clean") return cmdClean(cfg, chatId);
+    if (cmd === "/analytics") return cmdAnalytics(cfg, chatId);
+    if (cmd === "/share") return cmdShare(cfg, chatId);
+    if (cmd === "/add") return cmdAdd(cfg, chatId, parts.slice(1).join(" "));
+    if (cmd === "/replace") return cmdReplaceServer(cfg, chatId, parts.slice(1).join(" "));
+    if (cmd === "/delete") {
+      if (parts.length > 1) return cmdDeleteServer(cfg, chatId, parts[1]);
+      return cmdDelete(cfg, chatId);
+    }
+    if (cmd === "/cancel") return cmdCancel(cfg, chatId);
+    if (cmd === "/users") return cmdUsers(cfg, chatId, userId);
+    if (cmd === "/stats") return cmdStats(cfg, chatId, userId);
+    if (cmd === "/dev") return cmdDev(cfg, chatId, userId);
+
+    return;
+  }
+
+  if (!trimmed) return;
+
+  // Subscription URLs can be decoded without reading D1 first.
+  if (/^https?:\/\//.test(trimmed)) {
+    return cmdDecode(cfg, chatId, trimmed);
+  }
+
+  if (isTelegramProxyLink(trimmed)) {
+    try {
+      return await addProxyLink(cfg, chatId, trimmed);
+    } catch (error) {
+      return sendMessage(
+        cfg.telegramToken,
+        chatId,
+        `❌ <b>База данных сейчас недоступна.</b>\n\nЭта функция требует сохранения данных.\n<code>${escapeHtml(error.message || String(error))}</code>`
+      );
+    }
+  }
+
+  // Non-command conversation steps may need D1 state. Only these flows should
+  // be blocked when the database is over quota.
+  let state;
+  try {
+    state = await getState(cfg, chatId);
+  } catch (error) {
+    console.error("[Command] D1 state unavailable:", error);
+    return sendMessage(
+      cfg.telegramToken,
+      chatId,
+      "⚠️ <b>База данных временно недоступна.</b>\n\nКоманды без базы продолжают работать. Эта операция требует чтения/записи данных."
+    );
+  }
+
+  if (state?.step === "schedule_date" || state?.step === "schedule_uri") {
+    return handleScheduleStep(cfg, chatId, trimmed, state);
+  }
+
+  if (state?.step) {
+    return handleStepAnswer(cfg, chatId, trimmed, state);
+  }
 }

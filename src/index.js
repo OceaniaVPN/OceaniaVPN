@@ -409,8 +409,9 @@ export default {
     }
 
     if (request.method === "POST") {
+      let update = null;
       try {
-        const update = await request.json();
+        update = await request.json();
         const messageText = update.message?.text?.trim();
         if (update.message && messageText === "/update") {
           const chatId = update.message.chat.id;
@@ -464,7 +465,20 @@ export default {
         } else if (update.message) await handleMessage(cfg, update.message);
         return new Response("OK", { status: 200 });
       } catch (e) {
-        return new Response("Error: " + e.message, { status: 500 });
+        console.error("[Webhook] Request handler error:", e);
+        const chatId = update?.message?.chat?.id || update?.callback_query?.message?.chat?.id;
+        if (chatId) {
+          try {
+            await sendMessage(
+              cfg.telegramToken,
+              chatId,
+              `⚠️ <b>Операция не выполнена.</b>\n\n<code>${String(e?.message || e).replace(/[&<>]/g, "")}</code>`
+            );
+          } catch (reportError) {
+            console.error("[Webhook] Failed to report request error:", reportError);
+          }
+        }
+        return new Response("OK", { status: 200 });
       }
     }
     return new Response("Method not allowed", { status: 405 });
