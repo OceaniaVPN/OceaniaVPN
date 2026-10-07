@@ -87,6 +87,35 @@ const THEME_LIST = [
   { id: "site", label: "🌐 Сайт" },
 ];
 
+async function handleScheduleStep(cfg, chatId, text, state) {
+  const value = String(text || "").trim();
+  if (state.step === "schedule_date") {
+    const match = value.match(/^(\\d{4}-\\d{2}-\\d{2})\\s+(\\d{2}:\\d{2})$/);
+    if (!match) {
+      await sendMessage(cfg.telegramToken, chatId, "❌ Неверный формат. Отправь дату и время так: <code>2026-10-08 21:30</code>", { inline_keyboard: [[{ text: "❌ Отмена", callback_data: "schedule_cancel_flow" }]] });
+      return;
+    }
+    await setState(cfg, chatId, { step: "schedule_uri", scheduleAction: state.scheduleAction, scheduleDate: match[1], scheduleTime: match[2] });
+    await sendMessage(cfg.telegramToken, chatId,
+      `${state.scheduleAction === "add" ? "➕" : "🗑"} <b>${state.scheduleAction === "add" ? "Добавление" : "Удаление"} сервера</b>\n\n⏰ <b>${escapeHtml(match[1])} ${escapeHtml(match[2])} МСК</b>\n\nТеперь отправь VLESS/VMess/Trojan/SS ссылку сервера.\n\n<i>Изменение будет применено к активной подписке.</i>`,
+      { inline_keyboard: [[{ text: "❌ Отмена", callback_data: "schedule_cancel_flow" }]] });
+    return;
+  }
+  if (state.step === "schedule_uri") {
+    if (!value || !/^[a-z][a-z0-9+.-]*:\/\//i.test(value)) {
+      await sendMessage(cfg.telegramToken, chatId, "❌ Похоже, это не ссылка сервера. Отправь VLESS/VMess/Trojan/SS URI.", { inline_keyboard: [[{ text: "❌ Отмена", callback_data: "schedule_cancel_flow" }]] });
+      return;
+    }
+    try {
+      const item = await addScheduledChange(cfg, chatId, { action: state.scheduleAction, date: state.scheduleDate, time: state.scheduleTime, uri: value });
+      await clearState(cfg, chatId);
+      await sendMessage(cfg.telegramToken, chatId, `✅ <b>Черновик создан</b>\n\n⏰ <b>${escapeHtml(state.scheduleDate)} ${escapeHtml(state.scheduleTime)} МСК</b>\n${state.scheduleAction === "add" ? "➕ Добавить" : "🗑 Удалить"} сервер\n📡 <code>${escapeHtml(value)}</code>\n📝 ID: <code>${escapeHtml(item.id)}</code>`, { inline_keyboard: [[{ text: "📝 Все черновики", callback_data: "schedule" }], [{ text: "🏠 Меню", callback_data: "menu" }]] });
+    } catch (error) {
+      await sendMessage(cfg.telegramToken, chatId, `❌ <b>Не удалось создать черновик</b>\n\n<code>${escapeHtml(error.message || String(error))}</code>`, { inline_keyboard: [[{ text: "📝 Черновики", callback_data: "schedule" }], [{ text: "🏠 Меню", callback_data: "menu" }]] });
+    }
+  }
+}
+
 async function handleStepAnswer(cfg, chatId, text, state) {
   const step = state.step;
   const val = text.trim();
@@ -279,6 +308,7 @@ export async function cmdScheduledList(cfg, chatId) {
     text += `<code>${escapeHtml(item.uri)}</code>\\nID: <code>${escapeHtml(item.id)}</code>\\n\\n`;
     rows.push([{ text: `❌ Отменить ${item.id}`, callback_data: `schedule_cancel_${item.id}` }]);
   }
+  rows.push([{ text: "➕ Добавить сервер", callback_data: "schedule_add" }, { text: "🗑 Удалить сервер", callback_data: "schedule_remove" }]);
   rows.push([{ text: "🏠 Меню", callback_data: "menu" }]);
   return sendMessage(cfg.telegramToken, chatId, text, { inline_keyboard: rows });
 }
@@ -617,6 +647,17 @@ export async function handleCallback(cfg, cb, options = {}) {
   else if (data === "my") await cmdMy(cfg, chatId);
   else if (data === "subs") await cmdSubscriptions(cfg, chatId);
   else if (data === "schedule") await cmdScheduledList(cfg, chatId);
+  else if (data === "schedule_add" || data === "schedule_remove") {
+    const scheduleAction = data === "schedule_add" ? "add" : "remove";
+    await setState(cfg, chatId, { step: "schedule_date", scheduleAction });
+    await sendMessage(cfg.telegramToken, chatId,
+      `${scheduleAction === "add" ? "➕" : "🗑"} <b>${scheduleAction === "add" ? "Запланировать добавление" : "Запланировать удаление"}</b>\n\nОтправь дату и время в формате <code>YYYY-MM-DD HH:mm</code>.\nНапример: <code>2026-10-08 21:30</code> (МСК).\n\n<i>Изменение будет применено к активной подписке.</i>`,
+      { inline_keyboard: [[{ text: "❌ Отмена", callback_data: "schedule_cancel_flow" }]] });
+  }
+  else if (data === "schedule_cancel_flow") {
+    await clearState(cfg, chatId);
+    await cmdScheduledList(cfg, chatId);
+  }
   else if (data.startsWith("schedule_cancel_")) {
     const id = data.substring("schedule_cancel_".length);
     const item = await cancelScheduledChange(cfg, chatId, id);
@@ -653,6 +694,9 @@ export async function handleMessage(cfg, msg) {
   if (text.trim() && isTelegramProxyLink(text.trim())) return addProxyLink(cfg, chatId, text.trim());
   if (msg.document) return sendMessage(cfg.telegramToken, chatId, `⛔️ <b>Для прокси теперь отправляется именно ссылка Telegram-прокси.</b>\n\nОткрой раздел «🌐 Прокси-подписка» и просто пришли ссылку.`);
   const state = await getState(cfg, chatId);
+  if (state?.step === "schedule_date" || state?.step === "schedule_uri") {
+    if (!text.startsWith("/")) { await handleScheduleStep(cfg, chatId, text, state); return; }
+  }
   if (state && state.step && !text.startsWith("/")) { await handleStepAnswer(cfg, chatId, text, state); return; }
   if (!text.startsWith("/") && /^https?:\/\//.test(text.trim())) { await cmdDecode(cfg, chatId, text.trim()); return; }
   if (!text.startsWith("/")) return;
