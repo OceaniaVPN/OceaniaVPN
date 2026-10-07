@@ -36,7 +36,7 @@ function protocolOf(uri) {
   return idx === -1 ? "?" : uri.substring(0, idx).toUpperCase();
 }
 
-async function await userUrls(cfg, chatId) {
+async function userUrls(cfg, chatId) {
   const active = await getActiveSubscription(cfg, chatId);
   const suffix = active?.id ? `&s=${encodeURIComponent(active.id)}` : "";
   return {
@@ -545,7 +545,9 @@ export async function handleCallback(cfg, cb, options = {}) {
   else if (data === "dev_metrics") await cmdDevMetrics(cfg, chatId, userId);
   else if (data === "create") { await setState(cfg, chatId, { step: "title" }); await sendMessage(cfg.telegramToken, chatId, STEP_MSG.title); }
   else if (data === "decode") await sendMessage(cfg.telegramToken, chatId, `🔍 <b>Декодер</b>\n\nОтправь URL подписки или используй:\n<code>/decode https://...</code>\n\nПоддержка: YAML · JSON · Base64 · URI · Happ/INCY/V2RayTun`, { inline_keyboard: [[{ text: "🏠 Меню", callback_data: "menu" }]] });
-  else if (data === "my") await cmdMy(cfg, chatId);\n  else if (data === "subs") await cmdSubscriptions(cfg, chatId);\n  else if (data.startsWith("sub_switch_")) await cmdSwitchSubscription(cfg, chatId, data.substring("sub_switch_".length));
+  else if (data === "my") await cmdMy(cfg, chatId);
+  else if (data === "subs") await cmdSubscriptions(cfg, chatId);
+  else if (data.startsWith("sub_switch_")) await cmdSwitchSubscription(cfg, chatId, data.substring("sub_switch_".length));
   else if (data === "list") await cmdList(cfg, chatId, 0);
   else if (data.indexOf("list_page_") === 0) { const page = parseInt(data.substring("list_page_".length), 10) || 0; await cmdList(cfg, chatId, page); }
   else if (data === "delsrv_prompt") await sendMessage(cfg.telegramToken, chatId, `🗑 <b>Удаление</b>\n\n<code>/delete N</code>`);
@@ -586,7 +588,8 @@ export async function handleMessage(cfg, msg) {
   if (cmd === "/help") return cmdHelp(cfg, chatId);
   if (cmd === "/create") return cmdCreate(cfg, chatId);
   if (cmd === "/decode") return cmdDecode(cfg, chatId, parts.slice(1).join(" "));
-  if (cmd === "/my") return cmdMy(cfg, chatId);\n  if (cmd === "/subs") return cmdSubscriptions(cfg, chatId);
+  if (cmd === "/my") return cmdMy(cfg, chatId);
+  if (cmd === "/subs") return cmdSubscriptions(cfg, chatId);
   if (cmd === "/list") return cmdList(cfg, chatId, parts[1] ? (parseInt(parts[1], 10) - 1) : 0);
   if (cmd === "/export") return cmdExport(cfg, chatId);
   if (cmd === "/proxy") return cmdProxy(cfg, chatId);
