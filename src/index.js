@@ -7,6 +7,7 @@ import { sendMessage, answerCallback } from "./telegram.js";
 import { COUNTRIES, detectCountryFromText } from "./contries.js";
 import { recordSubscriptionDevice } from "./devices.js";
 import { listSubscriptions, getActiveSubscription } from "./subscriptions.js";
+import { migrateLegacyKvToD1 } from "./migrate.js";
 
 // ==========================================
 // ОСНОВНАЯ КОНФИГУРАЦИЯ (4 источника)
@@ -368,6 +369,7 @@ export default {
   async fetch(request, env, ctx) {
     const cfg = getConfig(env);
     const url = new URL(request.url);
+    if (cfg.db && cfg.legacyKv) ctx.waitUntil(migrateLegacyKvToD1(cfg).catch((e) => console.error("[Migration] KV -> D1 failed:", e)));
     if (!cfg.workerOrigin) cfg.workerOrigin = url.origin;
 
     if (request.method === "GET") {
@@ -443,19 +445,9 @@ export default {
                 console.error("[Webhook] answerCallbackQuery failed:", callbackAnswerError);
               }
 
-              let duplicate = false;
-              if (cfg.kv && cb.id) {
-                try {
-                  const key = `callback_done_${cb.id}`;
-                  duplicate = Boolean(await cfg.kv.get(key));
-                  if (!duplicate) {
-                    await cfg.kv.put(key, "1", { expirationTtl: 300 });
-                  }
-                } catch (dedupeError) {
-                  console.error("[Webhook] Callback dedupe unavailable; processing anyway:", dedupeError);
-                  duplicate = false;
-                }
-              }
+              // Callback handling must not depend on legacy KV availability.
+              // Telegram buttons remain functional during and after the D1 migration.
+              const duplicate = false;
 
               if (!duplicate) {
                 await handleCallback(cfg, cb, { callbackAlreadyAnswered: true });
