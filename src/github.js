@@ -79,7 +79,13 @@ export async function getFileContent(cfg, filename) {
 export async function listAllUsers(cfg) {
   const data = await ghRequest(cfg, "GET", `/contents/${cfg.configsFolder}?ref=${cfg.branch}`);
   if (!Array.isArray(data)) return [];
-  return data.filter((f) => f.type === "file" && f.name.startsWith("user_")).map((f) => f.name);
+  const names = data.filter((f) => f.type === "file" && f.name.startsWith("user_") && f.name.endsWith(".txt")).map((f) => f.name);
+  const users = new Set();
+  for (const name of names) {
+    const match = name.match(/^user_(-?\d{1,20})(?:_[a-z0-9-]{1,64})?\.txt$/i);
+    if (match) users.add(match[1]);
+  }
+  return [...users].map((chatId) => `user_${chatId}.txt`);
 }
 
 export async function listProxyFiles(cfg) {
