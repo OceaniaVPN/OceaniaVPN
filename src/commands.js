@@ -347,7 +347,7 @@ export async function cmdDelete(cfg, chatId) {
   const res = await deleteFile(cfg, active.filename, `Delete subscription ${active.id} for ${chatId}`);
   if (res.content || res.sha) {
     await deleteSubscriptionRecord(cfg, chatId, active.id);
-    await clearSubscriptionDevices(cfg.kv, chatId);
+    await clearSubscriptionDevices(cfg.store, chatId);
     const remaining = await listSubscriptions(cfg, chatId);
     return sendMessage(cfg.telegramToken, chatId,
       `🗑 <b>Подписка «${escapeHtml(active.title)}» удалена.</b>\n\nОсталось подписок: <code>${remaining.length}</code>`,
@@ -427,7 +427,7 @@ export async function cmdDevices(cfg, chatId) {
     );
   }
 
-  const devices = await listSubscriptionDevices(cfg.kv, chatId);
+  const devices = await listSubscriptionDevices(cfg.store, chatId);
 
   if (!devices.length) {
     return sendMessage(
@@ -565,7 +565,7 @@ export async function handleCallback(cfg, cb, options = {}) {
   }
   else if (data === "delete") await sendMessage(cfg.telegramToken, chatId, `⚠️ <b>Удалить подписку?</b>\n\nСерверы можно будет добавить заново.`, { inline_keyboard: [[{ text: "🗑 Да, удалить", callback_data: "delete_confirm" }], [{ text: "↩️ Отмена", callback_data: "my" }]] });
   else if (data === "delete_confirm") await cmdDelete(cfg, chatId);
-  else if (data === "save_alive") { const cached = await cfg.kv.get(`pingcache_${chatId}`, "json"); if (!cached || !cached.uris?.length) await sendMessage(cfg.telegramToken, chatId, `⌛ <b>Кэш устарел</b>\n\nЗапусти /decode заново.`); else { const userFile = await getActiveFilename(cfg, chatId); const content = buildFile({ title: cached.title, interval: 4 }, cached.uris); const res = await createOrUpdateFile(cfg, userFile, content, `Save ${cached.uris.length} alive servers`); if (res.content || res.sha) await sendMessage(cfg.telegramToken, chatId, `✅ <b>Подписка сохранена</b>\n\n🟢 Серверов: <code>${cached.uris.length}</code>`, { inline_keyboard: [[{ text: "📡 Серверы", callback_data: "list" }], [{ text: "🏠 Меню", callback_data: "menu" }]] }); else await sendMessage(cfg.telegramToken, chatId, `❌ Ошибка сохранения`); } }
+  else if (data === "save_alive") { const cached = await cfg.store.get(`pingcache_${chatId}`, "json"); if (!cached || !cached.uris?.length) await sendMessage(cfg.telegramToken, chatId, `⌛ <b>Кэш устарел</b>\n\nЗапусти /decode заново.`); else { const userFile = await getActiveFilename(cfg, chatId); const content = buildFile({ title: cached.title, interval: 4 }, cached.uris); const res = await createOrUpdateFile(cfg, userFile, content, `Save ${cached.uris.length} alive servers`); if (res.content || res.sha) await sendMessage(cfg.telegramToken, chatId, `✅ <b>Подписка сохранена</b>\n\n🟢 Серверов: <code>${cached.uris.length}</code>`, { inline_keyboard: [[{ text: "📡 Серверы", callback_data: "list" }], [{ text: "🏠 Меню", callback_data: "menu" }]] }); else await sendMessage(cfg.telegramToken, chatId, `❌ Ошибка сохранения`); } }
   else if (data === "help") await cmdHelp(cfg, chatId);
   else {
     console.warn("[Callback] Unknown callback_data:", data);
