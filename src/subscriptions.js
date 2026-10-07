@@ -7,14 +7,14 @@ function indexKey(chatId) { return `${INDEX_PREFIX}${chatId}`; }
 function activeKey(chatId) { return `${ACTIVE_PREFIX}${chatId}`; }
 
 async function readIndex(cfg, chatId) {
-  if (!cfg.kv) return [];
-  const value = await cfg.kv.get(indexKey(chatId), "json");
+  if (!cfg.store) return [];
+  const value = await cfg.store.get(indexKey(chatId), "json");
   return Array.isArray(value) ? value : [];
 }
 
 async function writeIndex(cfg, chatId, items) {
-  if (!cfg.kv) throw new Error("BOT_STATE KV is required for multiple subscriptions");
-  await cfg.kv.put(indexKey(chatId), JSON.stringify(items));
+  if (!cfg.store) throw new Error("D1 storage is required for multiple subscriptions");
+  await cfg.store.put(indexKey(chatId), JSON.stringify(items));
 }
 
 export async function ensureSubscriptionIndex(cfg, chatId) {
@@ -33,7 +33,7 @@ export async function ensureSubscriptionIndex(cfg, chatId) {
   };
   items = [item];
   await writeIndex(cfg, chatId, items);
-  await cfg.kv.put(activeKey(chatId), item.id);
+  await cfg.store.put(activeKey(chatId), item.id);
   return items;
 }
 
@@ -45,11 +45,11 @@ export async function getActiveSubscription(cfg, chatId) {
   const items = await ensureSubscriptionIndex(cfg, chatId);
   if (!items.length) return null;
 
-  let activeId = cfg.kv ? await cfg.kv.get(activeKey(chatId)) : null;
+  let activeId = cfg.store ? await cfg.store.get(activeKey(chatId)) : null;
   let active = items.find((item) => item.id === activeId);
   if (!active) {
     active = items[0];
-    if (cfg.kv) await cfg.kv.put(activeKey(chatId), active.id);
+    if (cfg.store) await cfg.store.put(activeKey(chatId), active.id);
   }
   return active;
 }
@@ -60,7 +60,7 @@ export async function getActiveFilename(cfg, chatId) {
 }
 
 export async function createSubscription(cfg, chatId, { title = "Моя подписка" } = {}) {
-  if (!cfg.kv) throw new Error("BOT_STATE KV is required for multiple subscriptions");
+  if (!cfg.store) throw new Error("D1 storage is required for multiple subscriptions");
   const items = await ensureSubscriptionIndex(cfg, chatId);
   const id = crypto.randomUUID().replace(/[^a-zA-Z0-9-]/g, "").slice(0, 32);
   const item = {
@@ -71,7 +71,7 @@ export async function createSubscription(cfg, chatId, { title = "Моя подп
   };
   items.push(item);
   await writeIndex(cfg, chatId, items);
-  await cfg.kv.put(activeKey(chatId), item.id);
+  await cfg.store.put(activeKey(chatId), item.id);
   return item;
 }
 
@@ -79,7 +79,7 @@ export async function setActiveSubscription(cfg, chatId, id) {
   const items = await ensureSubscriptionIndex(cfg, chatId);
   const item = items.find((entry) => entry.id === id);
   if (!item) return null;
-  await cfg.kv.put(activeKey(chatId), item.id);
+  await cfg.store.put(activeKey(chatId), item.id);
   return item;
 }
 
@@ -90,10 +90,10 @@ export async function deleteSubscriptionRecord(cfg, chatId, id) {
 
   const next = items.filter((item) => item.id !== id);
   await writeIndex(cfg, chatId, next);
-  const activeId = cfg.kv ? await cfg.kv.get(activeKey(chatId)) : null;
+  const activeId = cfg.store ? await cfg.store.get(activeKey(chatId)) : null;
   if (activeId === id) {
-    if (next.length) await cfg.kv.put(activeKey(chatId), next[0].id);
-    else await cfg.kv.delete(activeKey(chatId));
+    if (next.length) await cfg.store.put(activeKey(chatId), next[0].id);
+    else await cfg.store.delete(activeKey(chatId));
   }
   return { deleted, items: next };
 }
