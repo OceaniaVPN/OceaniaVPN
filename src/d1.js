@@ -1,5 +1,14 @@
 const TABLE = "bot_kv";
 
+const SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS bot_kv (
+  key TEXT PRIMARY KEY,
+  value TEXT,
+  metadata TEXT,
+  expires_at INTEGER,
+  updated_at INTEGER NOT NULL
+)`;
+
 function normalizeMetadata(metadata) {
   return metadata == null ? null : JSON.stringify(metadata);
 }
@@ -7,8 +16,17 @@ function normalizeMetadata(metadata) {
 export function createD1Store(db) {
   if (!db) return null;
 
+  let schemaPromise;
+  const ensureSchema = () => {
+    if (!schemaPromise) {
+      schemaPromise = db.prepare(SCHEMA_SQL).run();
+    }
+    return schemaPromise;
+  };
+
   return {
     async get(key, type) {
+      await ensureSchema();
       const row = await db.prepare(
         "SELECT value, metadata, expires_at FROM bot_kv WHERE key = ?1"
       ).bind(String(key)).first();
@@ -27,6 +45,7 @@ export function createD1Store(db) {
     },
 
     async put(key, value, options = {}) {
+      await ensureSchema();
       const ttl = Number(options.expirationTtl || 0);
       const expiresAt = ttl > 0 ? Date.now() + ttl * 1000 : null;
       const metadata = normalizeMetadata(options.metadata);
@@ -43,10 +62,12 @@ export function createD1Store(db) {
     },
 
     async delete(key) {
+      await ensureSchema();
       await db.prepare("DELETE FROM bot_kv WHERE key = ?1").bind(String(key)).run();
     },
 
     async list(options = {}) {
+      await ensureSchema();
       const prefix = String(options.prefix || "");
       const limit = Math.min(Math.max(Number(options.limit || 1000), 1), 1000);
       const cursor = Number(options.cursor || 0);
