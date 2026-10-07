@@ -11,8 +11,10 @@ export function getConfig(env) {
     configsFolder: env.CONFIGS_FOLDER || "configs",
     branch: env.BRANCH || "main",
     db: createD1Store(env.BOT_DB),
-    // Временный fallback для уже работающих инсталляций до привязки D1.
+    // D1 is the primary state store. BOT_STATE remains available only during
+    // the one-time KV -> D1 migration window.
     store: createD1Store(env.BOT_DB) || env.BOT_STATE,
+    legacyKv: env.BOT_STATE || null,
     // 🎨 Нужен для сборки ссылки на тематическую страницу подписки (/page —
     // см. index.js). Задай в переменных Worker'а (Settings → Variables):
     // WORKER_ORIGIN = https://твой-воркер.workers.dev (без слэша в конце).
