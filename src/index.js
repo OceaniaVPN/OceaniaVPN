@@ -5,7 +5,6 @@ import { buildFile } from "./build.js";
 import { createOrUpdateFile, getFileContent } from "./github.js";
 import { sendMessage, answerCallback } from "./telegram.js";
 import { COUNTRIES, detectCountryFromText } from "./contries.js";
-import { recordSubscriptionDevice } from "./devices.js";
 import { listSubscriptions, getActiveSubscription } from "./subscriptions.js";
 import { migrateLegacyKvToD1 } from "./migrate.js";
 import { processScheduledChanges } from "./scheduler.js";
@@ -16,7 +15,7 @@ import { processScheduledChanges } from "./scheduler.js";
 const AUTO_UPDATE_CONFIG = {
   targetFilename: "whitelist.txt",
   title: "Steklo_VPN whitelist",
-  interval: 4,
+  interval: 1,
   webpage: "https://t.me/free_vpn123456",
   announce: "Steklo vpn besplatno",
   userinfo: "upload=0; download=12884901888; total=536870912000; expire=0",
@@ -36,7 +35,7 @@ const SECONDARY_CONFIG = {
   targetUrl: "https://okeaniavpn.dimastekolnikov1.workers.dev/sub?token=0fe191f6-7ec7-44ec-aed7-cc6423745ca8",
   targetFilename: "okeania_auto.txt", // Имя файла для этой подписки
   title: "OkeaniaVPN Auto",
-  interval: 4,
+  interval: 1,
   webpage: "https://t.me/free_vpn123456",
   announce: "OkeaniaVPN Auto Update",
   userinfo: "upload=0; download=0; total=536870912000; expire=0",
@@ -154,15 +153,6 @@ async function serveSubscription(request, cfg) {
 
   const userAgent = request.headers.get("user-agent") || "";
 
-  // Фиксируем устройство только для запросов личной подписки (?u=...).
-  // devices.json используется для распознавания модели по User-Agent.
-  if (chatIdParam && cfg.kv) {
-    try {
-      await recordSubscriptionDevice(cfg.kv, chatIdParam, request, cfg.subscriptionSecret);
-    } catch (e) {
-      console.error("[Devices] Failed to record device:", e);
-    }
-  }
 
   // 🔒 ГЛАВНЫЙ ФИКС: одна и та же ссылка /sub?u=... — Happ (и другие VPN-клиенты)
   // получают реальные конфиги, браузер на ТОЙ ЖЕ ссылке получает тематическую
@@ -493,7 +483,7 @@ export default {
     }
 
     // Черновики проверяются каждую минуту, а тяжёлое обновление источников — только раз в 4 часа.
-    if (event.cron !== "0 */4 * * *") return;
+    if (event.cron !== "0 * * * *") return;
 
     // 1. Обновление основного whitelist.txt (4 источника)
     try {

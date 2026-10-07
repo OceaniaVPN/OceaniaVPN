@@ -5,7 +5,6 @@ import { decodeSubscription, checkServersAlive } from "./decoder.js";
 import { pingServers, cmdDev, cmdDevPing, cmdDevDiag, cmdDevMetrics } from "./devtools.js";
 import { buildFile } from "./build.js";
 import { escapeHtml } from "./config.js";
-import { listSubscriptionDevices, clearSubscriptionDevices } from "./devices.js";
 import { COUNTRIES, matchesCountryKey, detectCountryFromText } from "./contries.js";
 import { cmdProxy, addProxyLink } from "./proxy.js";
 import { listSubscriptions, getActiveSubscription, getActiveFilename, createSubscription, setActiveSubscription, deleteSubscriptionRecord } from "./subscriptions.js";
@@ -64,7 +63,7 @@ function mainMenu(isAdmin = false) {
   const rows = [
     [{ text: "🚀  Создать подписку", callback_data: "create" }],
     [{ text: "📋  Мои подписки", callback_data: "subs" }, { text: "📡  Серверы", callback_data: "list" }],
-    [{ text: "📱  Устройства", callback_data: "devices" }, { text: "📝  Черновики", callback_data: "schedule" }],
+    [{ text: "📝  Черновики", callback_data: "schedule" }],
     [{ text: "🌐  Прокси-подписка", callback_data: "proxy" }],
     [{ text: "🔍  Декодер", callback_data: "decode" }, { text: "📤  Экспорт", callback_data: "export" }],
     [{ text: "⚡  Полезные функции", callback_data: "features" }],
@@ -449,7 +448,6 @@ export async function cmdDelete(cfg, chatId) {
   const res = await deleteFile(cfg, active.filename, `Delete subscription ${active.id} for ${chatId}`);
   if (res.content || res.sha) {
     await deleteSubscriptionRecord(cfg, chatId, active.id);
-    await clearSubscriptionDevices(cfg.store, chatId);
     const remaining = await listSubscriptions(cfg, chatId);
     return sendMessage(cfg.telegramToken, chatId,
       `🗑 <b>Подписка «${escapeHtml(active.title)}» удалена.</b>\n\nОсталось подписок: <code>${remaining.length}</code>`,
@@ -516,59 +514,6 @@ export async function cmdClean(cfg, chatId) {
   const res = await createOrUpdateFile(cfg, await getActiveFilename(cfg, chatId), content, `Remove ${removed} duplicate servers for ${chatId}`);
   if (!(res.content || res.sha)) return sendMessage(cfg.telegramToken, chatId, `❌ <b>Не удалось сохранить очистку.</b>`);
   await sendMessage(cfg.telegramToken, chatId, `🧹 <b>Готово!</b>\n\nУдалено дублей: <code>${removed}</code>\nОсталось серверов: <code>${unique.length}</code>`, { inline_keyboard: [[{ text: "📡 Список", callback_data: "list" }], [{ text: "⚡ Проверить", callback_data: "check" }], [{ text: "🏠 Меню", callback_data: "menu" }]] });
-}
-
-export async function cmdDevices(cfg, chatId) {
-  const content = await getFileContent(cfg, await getActiveFilename(cfg, chatId));
-  if (!content) {
-    return sendMessage(
-      cfg.telegramToken,
-      chatId,
-      `📱 <b>УСТРОЙСТВА</b>\n\nПодписка не создана.`,
-      { inline_keyboard: [[{ text: "🚀 Создать подписку", callback_data: "create" }], [{ text: "🏠 Меню", callback_data: "menu" }]] }
-    );
-  }
-
-  const devices = await listSubscriptionDevices(cfg.store, chatId);
-
-  if (!devices.length) {
-    return sendMessage(
-      cfg.telegramToken,
-      chatId,
-      `📱 <b>УСТРОЙСТВА</b>\n\n<b>0 устройств</b>\n\nОткрой подписку в VPN-клиенте, затем нажми «Обновить».`,
-      { inline_keyboard: [[{ text: "🔄 Обновить", callback_data: "devices" }], [{ text: "🏠 Меню", callback_data: "menu" }]] }
-    );
-  }
-
-  const formatSeen = (value) => {
-    if (!value) return "—";
-    const date = new Date(value);
-    if (Number.isNaN(date.getTime())) return "—";
-    return date.toLocaleString("ru-RU", {
-      timeZone: "Europe/Moscow",
-      day: "2-digit",
-      month: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit"
-    });
-  };
-
-  let text = `📱 <b>УСТРОЙСТВА</b>\n\n<b>${devices.length} ${devices.length === 1 ? "устройство" : devices.length < 5 ? "устройства" : "устройств"}</b>\n\n`;
-
-  devices.forEach((device, index) => {
-    const icon = device.type === "Tablet" ? "📱" : "📲";
-    text += `${icon} <b>${escapeHtml(device.name || device.id || "Неизвестное устройство")}</b>\n`;
-    text += `<code>${escapeHtml(device.brand || "—")}</code> · <code>${escapeHtml(device.os || "—")}</code>\n`;
-    text += `🕒 ${escapeHtml(formatSeen(device.lastSeen))}`;
-    if (index < devices.length - 1) text += "\n\n";
-  });
-
-  await sendMessage(cfg.telegramToken, chatId, text, {
-    inline_keyboard: [
-      [{ text: "🔄 Обновить", callback_data: "devices" }],
-      [{ text: "📋 Подписка", callback_data: "my" }, { text: "🏠 Меню", callback_data: "menu" }]
-    ]
-  });
 }
 
 export async function cmdAnalytics(cfg, chatId) {
@@ -638,7 +583,6 @@ export async function handleCallback(cfg, cb, options = {}) {
   else if (data === "best") await cmdBest(cfg, chatId);
   else if (data === "clean") await cmdClean(cfg, chatId);
   else if (data === "analytics") await cmdAnalytics(cfg, chatId);
-  else if (data === "devices") await cmdDevices(cfg, chatId);
   else if (data === "share") await cmdShare(cfg, chatId);
   else if (data === "tools") await sendMessage(cfg.telegramToken, chatId, `🧰 <b>Инструменты</b>\n\n📡 Серверы — ping и latency\n🔍 Декодер — импорт подписки\n📤 Экспорт — ссылки\n🌐 Прокси-подписка — общий каталог\n🎨 Оформление — темы\n⚡ Полезные функции — проверка, лучший сервер, очистка, аналитика, шаринг`, { inline_keyboard: [[{ text: "📡 Серверы", callback_data: "list" }, { text: "🔍 Декодер", callback_data: "decode" }], [{ text: "🌐 Прокси", callback_data: "proxy" }, { text: "📤 Экспорт", callback_data: "export" }], [{ text: "⚡ Функции", callback_data: "features" }], [{ text: "🎨 Темы", callback_data: "theme_pick" }], [{ text: "🏠 Меню", callback_data: "menu" }]] });
   else if (data === "proxy") await cmdProxy(cfg, chatId);
