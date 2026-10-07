@@ -27,6 +27,9 @@ export async function migrateLegacyKvToD1(cfg) {
       const values = await kv.get(names, "text");
 
       for (const item of batch) {
+        // Device tracking was removed; never migrate its historical high-volume keys.
+        if (String(item.name || "").startsWith("subscription_device:")) continue;
+
         const value = values instanceof Map ? values.get(item.name) : null;
         if (value == null) continue;
 
