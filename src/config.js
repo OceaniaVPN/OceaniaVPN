@@ -1,5 +1,6 @@
 import { createD1Store } from "./d1.js";
 export function getConfig(env) {
+  const d1 = createD1Store(env.BOT_DB);
   return {
     telegramToken: env.TELEGRAM_BOT_TOKEN,
     githubToken: env.GITHUB_TOKEN,
@@ -10,10 +11,10 @@ export function getConfig(env) {
     botRepoName: env.BOT_REPO_NAME || env.CONFIG_REPO_OWNER || "OceaniaVPN",
     configsFolder: env.CONFIGS_FOLDER || "configs",
     branch: env.BRANCH || "main",
-    db: createD1Store(env.BOT_DB),
+    db: d1,
     // D1 is the primary state store. BOT_STATE remains available only during
     // the one-time KV -> D1 migration window.
-    store: createD1Store(env.BOT_DB) || env.BOT_STATE,
+    store: d1 || env.BOT_STATE,
     legacyKv: env.BOT_STATE || null,
     // 🎨 Нужен для сборки ссылки на тематическую страницу подписки (/page —
     // см. index.js). Задай в переменных Worker'а (Settings → Variables):
