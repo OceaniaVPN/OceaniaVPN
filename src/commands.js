@@ -36,7 +36,7 @@ function protocolOf(uri) {
   return idx === -1 ? "?" : uri.substring(0, idx).toUpperCase();
 }
 
-async function userUrls(cfg, chatId) {
+async function await userUrls(cfg, chatId) {
   const active = await getActiveSubscription(cfg, chatId);
   const suffix = active?.id ? `&s=${encodeURIComponent(active.id)}` : "";
   return {
@@ -243,16 +243,16 @@ export async function cmdSwitchSubscription(cfg, chatId, id) {
 }
 
 export async function cmdMy(cfg, chatId) {
-  const content = await getFileContent(cfg, `user_${chatId}.txt`);
+  const content = await getFileContent(cfg, await getActiveFilename(cfg, chatId));
   if (!content) return sendMessage(cfg.telegramToken, chatId, `📭 <b>Подписка ещё не создана</b>\n\nСоздай профиль или импортируй URL.`, { inline_keyboard: [[{ text: "🚀 Создать", callback_data: "create" }, { text: "🔍 Декодировать", callback_data: "decode" }], [{ text: "🏠 Меню", callback_data: "menu" }]] });
   const { headers, links } = splitSubscriptionFile(content);
-  const { pageUrl } = userUrls(cfg, chatId);
+  const { pageUrl } = await userUrls(cfg, chatId);
   const msg = `📋 <b>МОЙ ПРОФИЛЬ</b>\n\n🟢 Статус: <b>АКТИВЕН</b>\n📡 Серверов: <code>${links.length}</code>\n\n<b>Параметры</b>\n<pre>${escapeHtml(headers.join("\n"))}</pre>`;
   await sendMessage(cfg.telegramToken, chatId, msg, { inline_keyboard: [[{ text: "🎨 Страница", url: pageUrl }, { text: "🖼 Тема", callback_data: "theme_pick" }], [{ text: "📡 Серверы", callback_data: "list" }, { text: "📤 Экспорт", callback_data: "export" }],\n    [{ text: "🔀 Все подписки", callback_data: "subs" }], [{ text: "⚡ Проверка", callback_data: "check" }, { text: "📊 Аналитика", callback_data: "analytics" }], [{ text: "🗑 Удалить", callback_data: "delete" }], [{ text: "🏠 Меню", callback_data: "menu" }]] });
 }
 
 export async function cmdList(cfg, chatId, page = 0) {
-  const content = await getFileContent(cfg, `user_${chatId}.txt`);
+  const content = await getFileContent(cfg, await getActiveFilename(cfg, chatId));
   if (!content) return sendMessage(cfg.telegramToken, chatId, `📭 <b>Нет серверов</b>`);
   const { links } = splitSubscriptionFile(content);
   const pageSize = 10;
@@ -272,9 +272,9 @@ export async function cmdList(cfg, chatId, page = 0) {
 }
 
 export async function cmdExport(cfg, chatId) {
-  const content = await getFileContent(cfg, `user_${chatId}.txt`);
+  const content = await getFileContent(cfg, await getActiveFilename(cfg, chatId));
   if (!content) return sendMessage(cfg.telegramToken, chatId, `📭 <b>Нет подписки</b>`);
-  const { subUrl, pageUrl } = userUrls(cfg, chatId);
+  const { subUrl, pageUrl } = await userUrls(cfg, chatId);
   await sendMessage(cfg.telegramToken, chatId, `📤 <b>ЭКСПОРТ</b>\n\n🔗 Подписка:\n<code>${escapeHtml(subUrl)}</code>\n\n🎨 Страница:\n<code>${escapeHtml(pageUrl)}</code>`, { inline_keyboard: [[{ text: "📋 Подписка", url: subUrl }, { text: "🎨 Страница", url: pageUrl }], [{ text: "📤 Поделиться", callback_data: "share" }], [{ text: "🏠 Меню", callback_data: "menu" }]] });
 }
 
@@ -282,13 +282,13 @@ export async function cmdAdd(cfg, chatId, value) {
   const text = String(value || "").trim();
   if (!text) return sendMessage(cfg.telegramToken, chatId, `➕ <b>Добавление</b>\n\nОтправь VLESS/VMess/Trojan/SS или URL подписки.`);
   if (isTelegramProxyLink(text)) return addProxyLink(cfg, chatId, text);
-  const content = await getFileContent(cfg, `user_${chatId}.txt`);
+  const content = await getFileContent(cfg, await getActiveFilename(cfg, chatId));
   const lines = content ? splitSubscriptionFile(content).links : [];
   if (/^(vless|vmess|trojan|ss|hysteria2|hy2):\/\//i.test(text)) {
     lines.push(text);
     const oldHeaders = content ? splitSubscriptionFile(content).headers : [];
     const newContent = [...oldHeaders, ...lines].join("\n");
-    const res = await createOrUpdateFile(cfg, `user_${chatId}.txt`, newContent, `Add server for ${chatId}`);
+    const res = await createOrUpdateFile(cfg, await getActiveFilename(cfg, chatId), newContent, `Add server for ${chatId}`);
     if (res.content || res.sha) return sendMessage(cfg.telegramToken, chatId, `✅ <b>Сервер добавлен.</b>\n\n📡 Всего: <code>${lines.length}</code>`, { inline_keyboard: [[{ text: "📡 Список", callback_data: "list" }], [{ text: "🏠 Меню", callback_data: "menu" }]] });
     return sendMessage(cfg.telegramToken, chatId, `❌ Не удалось сохранить сервер.`);
   }
@@ -314,13 +314,13 @@ export async function cmdReplaceServer(cfg, chatId, value) {
   if (!idx || !uri || !isSupportedServerUri(uri)) {
     return sendMessage(cfg.telegramToken, chatId, `❌ <b>Неверный формат</b>\n\nИспользуй:\n<code>/replace 2 vless://...</code>\n\nПоддерживаются VLESS, VMess, Trojan, SS и Hysteria.`);
   }
-  const content = await getFileContent(cfg, `user_${chatId}.txt`);
+  const content = await getFileContent(cfg, await getActiveFilename(cfg, chatId));
   if (!content) return sendMessage(cfg.telegramToken, chatId, `📭 <b>Нет подписки.</b>`);
   const parsed = splitSubscriptionFile(content);
   if (idx > parsed.links.length) return sendMessage(cfg.telegramToken, chatId, `❌ Сервер №${idx} не найден.\n\nВ подписке серверов: <code>${parsed.links.length}</code>`);
   parsed.links[idx - 1] = uri;
   const newContent = [...parsed.headers, ...parsed.links].join("\n");
-  const res = await createOrUpdateFile(cfg, `user_${chatId}.txt`, newContent, `Replace server ${idx} for ${chatId}`);
+  const res = await createOrUpdateFile(cfg, await getActiveFilename(cfg, chatId), newContent, `Replace server ${idx} for ${chatId}`);
   if (res.content || res.sha) {
     return sendMessage(cfg.telegramToken, chatId, `✅ <b>Сервер №${idx} заменён.</b>\n\nНовый сервер сохранён в подписке.`, { inline_keyboard: [[{ text: "📡 Список серверов", callback_data: "list" }], [{ text: "📋 Моя подписка", callback_data: "my" }], [{ text: "🏠 Меню", callback_data: "menu" }]] });
   }
@@ -329,13 +329,13 @@ export async function cmdReplaceServer(cfg, chatId, value) {
 
 export async function cmdDeleteServer(cfg, chatId, n) {
   const idx = parseServerIndex(n);
-  const content = await getFileContent(cfg, `user_${chatId}.txt`);
+  const content = await getFileContent(cfg, await getActiveFilename(cfg, chatId));
   if (!content) return sendMessage(cfg.telegramToken, chatId, `📭 <b>Нет подписки.</b>`);
   const parsed = splitSubscriptionFile(content);
   if (!idx || idx > parsed.links.length) return sendMessage(cfg.telegramToken, chatId, `❌ Сервер не найден.`);
   parsed.links.splice(idx - 1, 1);
   const newContent = [...parsed.headers, ...parsed.links].join("\n");
-  const res = await createOrUpdateFile(cfg, `user_${chatId}.txt`, newContent, `Delete server ${idx} for ${chatId}`);
+  const res = await createOrUpdateFile(cfg, await getActiveFilename(cfg, chatId), newContent, `Delete server ${idx} for ${chatId}`);
   if (res.content || res.sha) return sendMessage(cfg.telegramToken, chatId, `✅ <b>Сервер №${idx} удалён.</b>`);
   return sendMessage(cfg.telegramToken, chatId, `❌ Не удалось сохранить изменения.`);
 }
@@ -358,7 +358,7 @@ export async function cmdDelete(cfg, chatId) {
 }
 
 async function getUserLinks(cfg, chatId) {
-  const content = await getFileContent(cfg, `user_${chatId}.txt`);
+  const content = await getFileContent(cfg, await getActiveFilename(cfg, chatId));
   return content ? splitSubscriptionFile(content) : { headers: [], links: [] };
 }
 
@@ -410,13 +410,13 @@ export async function cmdClean(cfg, chatId) {
   const removed = links.length - unique.length;
   if (!removed) return sendMessage(cfg.telegramToken, chatId, `✨ <b>Дубликатов нет.</b>\n\n📡 Серверов: <code>${links.length}</code>`, { inline_keyboard: [[{ text: "📡 Серверы", callback_data: "list" }], [{ text: "🏠 Меню", callback_data: "menu" }]] });
   const content = [...headers, ...unique].join("\n");
-  const res = await createOrUpdateFile(cfg, `user_${chatId}.txt`, content, `Remove ${removed} duplicate servers for ${chatId}`);
+  const res = await createOrUpdateFile(cfg, await getActiveFilename(cfg, chatId), content, `Remove ${removed} duplicate servers for ${chatId}`);
   if (!(res.content || res.sha)) return sendMessage(cfg.telegramToken, chatId, `❌ <b>Не удалось сохранить очистку.</b>`);
   await sendMessage(cfg.telegramToken, chatId, `🧹 <b>Готово!</b>\n\nУдалено дублей: <code>${removed}</code>\nОсталось серверов: <code>${unique.length}</code>`, { inline_keyboard: [[{ text: "📡 Список", callback_data: "list" }], [{ text: "⚡ Проверить", callback_data: "check" }], [{ text: "🏠 Меню", callback_data: "menu" }]] });
 }
 
 export async function cmdDevices(cfg, chatId) {
-  const content = await getFileContent(cfg, `user_${chatId}.txt`);
+  const content = await getFileContent(cfg, await getActiveFilename(cfg, chatId));
   if (!content) {
     return sendMessage(
       cfg.telegramToken,
@@ -486,9 +486,9 @@ export async function cmdAnalytics(cfg, chatId) {
 }
 
 export async function cmdShare(cfg, chatId) {
-  const content = await getFileContent(cfg, `user_${chatId}.txt`);
+  const content = await getFileContent(cfg, await getActiveFilename(cfg, chatId));
   if (!content) return sendMessage(cfg.telegramToken, chatId, `📭 <b>Нет подписки для отправки.</b>`, backToMenuKeyboard());
-  const { subUrl, pageUrl } = userUrls(cfg, chatId);
+  const { subUrl, pageUrl } = await userUrls(cfg, chatId);
   const shareUrl = `https://t.me/share/url?url=${encodeURIComponent(subUrl)}&text=${encodeURIComponent("Моя подписка OceaniaVPN")}`;
   await sendMessage(cfg.telegramToken, chatId, `🔗 <b>ПОДЕЛИТЬСЯ ПОДПИСКОЙ</b>\n\nСсылка на подписку:\n<code>${escapeHtml(subUrl)}</code>\n\nСтраница:\n<code>${escapeHtml(pageUrl)}</code>`, { inline_keyboard: [[{ text: "📤 Поделиться в Telegram", url: shareUrl }], [{ text: "📋 Открыть подписку", url: subUrl }], [{ text: "🏠 Меню", callback_data: "menu" }]] });
 }
@@ -553,7 +553,7 @@ export async function handleCallback(cfg, cb, options = {}) {
   else if (data === "add_prompt") await sendMessage(cfg.telegramToken, chatId, `➕ <b>Добавить сервер</b>\n\nОтправь VLESS/VMess/Trojan/SS или URL подписки.`, { inline_keyboard: [[{ text: "📋 Профиль", callback_data: "my" }], [{ text: "🏠 Меню", callback_data: "menu" }]] });
   else if (data === "export") await cmdExport(cfg, chatId);
   else if (data === "theme_pick") {
-    const { pageUrl } = userUrls(cfg, chatId);
+    const { pageUrl } = await userUrls(cfg, chatId);
     const themeUrl = (themeId = null) => { try { const u = new URL(pageUrl); if (themeId) u.searchParams.set("theme", themeId); return u.toString(); } catch { return pageUrl; } };
     const kb = { inline_keyboard: [] };
     for (let i = 0; i < THEME_LIST.length; i += 2) kb.inline_keyboard.push(THEME_LIST.slice(i, i + 2).map(t => ({ text: t.label, url: themeUrl(t.id) })));
@@ -562,7 +562,7 @@ export async function handleCallback(cfg, cb, options = {}) {
   }
   else if (data === "delete") await sendMessage(cfg.telegramToken, chatId, `⚠️ <b>Удалить подписку?</b>\n\nСерверы можно будет добавить заново.`, { inline_keyboard: [[{ text: "🗑 Да, удалить", callback_data: "delete_confirm" }], [{ text: "↩️ Отмена", callback_data: "my" }]] });
   else if (data === "delete_confirm") await cmdDelete(cfg, chatId);
-  else if (data === "save_alive") { const cached = await cfg.kv.get(`pingcache_${chatId}`, "json"); if (!cached || !cached.uris?.length) await sendMessage(cfg.telegramToken, chatId, `⌛ <b>Кэш устарел</b>\n\nЗапусти /decode заново.`); else { const userFile = `user_${chatId}.txt`; const content = buildFile({ title: cached.title, interval: 4 }, cached.uris); const res = await createOrUpdateFile(cfg, userFile, content, `Save ${cached.uris.length} alive servers`); if (res.content || res.sha) await sendMessage(cfg.telegramToken, chatId, `✅ <b>Подписка сохранена</b>\n\n🟢 Серверов: <code>${cached.uris.length}</code>`, { inline_keyboard: [[{ text: "📡 Серверы", callback_data: "list" }], [{ text: "🏠 Меню", callback_data: "menu" }]] }); else await sendMessage(cfg.telegramToken, chatId, `❌ Ошибка сохранения`); } }
+  else if (data === "save_alive") { const cached = await cfg.kv.get(`pingcache_${chatId}`, "json"); if (!cached || !cached.uris?.length) await sendMessage(cfg.telegramToken, chatId, `⌛ <b>Кэш устарел</b>\n\nЗапусти /decode заново.`); else { const userFile = await getActiveFilename(cfg, chatId); const content = buildFile({ title: cached.title, interval: 4 }, cached.uris); const res = await createOrUpdateFile(cfg, userFile, content, `Save ${cached.uris.length} alive servers`); if (res.content || res.sha) await sendMessage(cfg.telegramToken, chatId, `✅ <b>Подписка сохранена</b>\n\n🟢 Серверов: <code>${cached.uris.length}</code>`, { inline_keyboard: [[{ text: "📡 Серверы", callback_data: "list" }], [{ text: "🏠 Меню", callback_data: "menu" }]] }); else await sendMessage(cfg.telegramToken, chatId, `❌ Ошибка сохранения`); } }
   else if (data === "help") await cmdHelp(cfg, chatId);
   else {
     console.warn("[Callback] Unknown callback_data:", data);
