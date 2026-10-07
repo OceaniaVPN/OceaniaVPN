@@ -6,6 +6,7 @@ import { createOrUpdateFile, getFileContent } from "./github.js";
 import { sendMessage, answerCallback } from "./telegram.js";
 import { COUNTRIES, detectCountryFromText } from "./contries.js";
 import { recordSubscriptionDevice } from "./devices.js";
+import { listSubscriptions, getActiveSubscription } from "./subscriptions.js";
 
 // ==========================================
 // ОСНОВНАЯ КОНФИГУРАЦИЯ (4 источника)
@@ -131,8 +132,19 @@ function isVpnClientUA(ua) {
 async function serveSubscription(request, cfg) {
   const url = new URL(request.url);
   const chatIdParam = url.searchParams.get("u");
+  const subscriptionId = url.searchParams.get("s");
   const filenameParam = url.searchParams.get("f");
-  const filename = chatIdParam ? `user_${chatIdParam}.txt` : filenameParam;
+
+  let filename = filenameParam;
+  if (chatIdParam) {
+    const subscriptions = await listSubscriptions(cfg, chatIdParam);
+    const selected = subscriptionId
+      ? subscriptions.find((item) => item.id === subscriptionId)
+      : await getActiveSubscription(cfg, chatIdParam);
+    if (!selected) return new Response("Subscription not found", { status: 404 });
+    filename = selected.filename;
+  }
+
   if (!filename) return new Response("Missing ?u= or ?f= parameter", { status: 400 });
 
   const content = await getFileContent(cfg, filename);
@@ -275,9 +287,16 @@ async function renderThemedPage(request, cfg, content) {
 async function pageSubscription(request, cfg) {
   const url = new URL(request.url);
   const chatId = url.searchParams.get("u");
+  const subscriptionId = url.searchParams.get("s");
   if (!chatId) return new Response("Missing ?u= parameter", { status: 400 });
-  const filename = `user_${chatId}.txt`;
-  const content = await getFileContent(cfg, filename);
+
+  const subscriptions = await listSubscriptions(cfg, chatId);
+  const selected = subscriptionId
+    ? subscriptions.find((item) => item.id === subscriptionId)
+    : await getActiveSubscription(cfg, chatId);
+  if (!selected) return new Response("Subscription not found", { status: 404 });
+
+  const content = await getFileContent(cfg, selected.filename);
   if (!content) return new Response("Subscription not found", { status: 404 });
   return renderThemedPage(request, cfg, content);
 }
