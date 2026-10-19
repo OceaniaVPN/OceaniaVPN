@@ -358,9 +358,27 @@ async function runManualUpdate(env, reportChatId) {
 
 export default {
   async fetch(request, env, ctx) {
-    const cfg = getConfig(env);
     const url = new URL(request.url);
-    if (!cfg.workerOrigin) cfg.workerOrigin = url.origin;
+
+    // Health check must not depend on D1/KV bindings or Telegram/GitHub secrets.
+    // This lets us distinguish a live Worker from failures in application setup.
+    if (request.method === "GET" && url.pathname === "/") {
+      return new Response("OceaniaVPN Bot OK", {
+        headers: { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store" }
+      });
+    }
+
+    let cfg;
+    try {
+      cfg = getConfig(env);
+      if (!cfg.workerOrigin) cfg.workerOrigin = url.origin;
+    } catch (e) {
+      console.error("[Startup] Configuration initialization failed:", e?.stack || e);
+      return new Response("Worker configuration error", {
+        status: 500,
+        headers: { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store" }
+      });
+    }
 
     if (request.method === "GET") {
       if (url.pathname === "/") return new Response("OceaniaVPN Bot OK", { headers: { "Content-Type": "text/plain; charset=utf-8" } });
