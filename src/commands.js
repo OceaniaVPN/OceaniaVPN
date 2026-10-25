@@ -345,7 +345,7 @@ async function runDecodeWithProfile(cfg, chatId, url) {
     }
     const kb = { inline_keyboard: [
       [{ text: "📋 Обычная подписка", url: rawUrl }],
-      [{ text: "📱 Happ — Android", url: `happ://add/${encodeURIComponent(androidProfileUrl)}` }, { text: "🖥 Happ — Windows", url: `happ://add/${encodeURIComponent(windowsProfileUrl)}` }],
+      [{ text: "📱 Android — открыть профиль", url: androidProfileUrl }, { text: "🖥 Windows — открыть профиль", url: windowsProfileUrl }],
       [{ text: "🌐 Настроить прокси", callback_data: "px_home" }],
       [{ text: "📡 Серверы", callback_data: "list" }, { text: "🏠 Меню", callback_data: "menu" }],
     ] };
@@ -787,7 +787,7 @@ async function proxySelectionMessage(cfg, chatId, platform, country, endpoint) {
     text += `Прокси сохранён, но активная подписка ещё не найдена. Сначала создай или декодируй подписку — после этого здесь появится ссылка профиля.`;
   }
   const rows = [];
-  if (hasProfileUrl) rows.push([{ text: "🚀 Импортировать в Happ", url: `happ://add/${encodeURIComponent(subUrl)}` }]);
+  if (hasProfileUrl) rows.push([{ text: "🔗 Открыть ссылку профиля", url: subUrl }]);
   rows.push([{ text: "🌍 Выбрать другую страну", callback_data: `px_on_${platform}` }]);
   rows.push([{ text: "🚫 Отключить прокси", callback_data: `px_off_${platform}` }]);
   rows.push([{ text: "🏠 Главное меню", callback_data: "menu" }]);
@@ -942,7 +942,7 @@ export async function handleCallback(cfg, cb, options = {}) {
       `В профиле <code>p=${platform}</code> цепочка через выбранный прокси не используется. Если профиль уже импортирован в Happ, обнови его.` +
       (subUrl ? `\n\n🔗 <b>Ссылка профиля без прокси:</b>\n<code>${escapeHtml(subUrl)}</code>` : "\n\nСначала создай или декодируй подписку, чтобы получить ссылку профиля.");
     const rows = [];
-    if (subUrl) rows.push([{ text: "🚀 Открыть профиль в Happ", url: `happ://add/${encodeURIComponent(subUrl)}` }]);
+    if (subUrl) rows.push([{ text: "🔗 Открыть ссылку профиля", url: subUrl }]);
     rows.push([{ text: "🌐 Выбрать прокси", callback_data: `px_on_${platform}` }]);
     rows.push([{ text: "⬅️ К выбору платформы", callback_data: "px_home" }]);
     rows.push([{ text: "🏠 Главное меню", callback_data: "menu" }]);
