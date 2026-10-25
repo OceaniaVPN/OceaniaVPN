@@ -65,6 +65,7 @@ async function fetchViaHttpProxy(url, options, proxyEndpoint, timeoutMs) {
       if (timeoutId === id) timeoutId = null;
     }
   };
+  let phase = "подключение к HTTP-прокси";
   const readUntil = async (streamReader, marker, limit = 16384) => {
     const decoder = new TextDecoder();
     let text = "";
@@ -73,12 +74,19 @@ async function fetchViaHttpProxy(url, options, proxyEndpoint, timeoutMs) {
       if (part.done) break;
       text += decoder.decode(part.value, { stream: true });
     }
-    if (!text.includes(marker)) throw new Error("Некорректный ответ HTTP-прокси");
+    if (!text.includes(marker)) {
+      const detail = text.trim().slice(0, 180);
+      throw new Error(detail
+        ? `Прокси закрыл соединение до HTTP-заголовков (этап: ${phase}). Ответ: ${detail}`
+        : `Прокси закрыл соединение без HTTP-заголовков (этап: ${phase})`);
+    }
     return text;
   };
 
   try {
+    phase = "ожидание соединения с прокси";
     await timeout(socket.opened);
+    phase = "HTTP CONNECT";
     writer = socket.writable.getWriter();
     await writer.write(new TextEncoder().encode(
       `CONNECT ${target.hostname}:${target.port || (target.protocol === "https:" ? 443 : 80)} HTTP/1.1\r\n` +
@@ -99,10 +107,12 @@ async function fetchViaHttpProxy(url, options, proxyEndpoint, timeoutMs) {
     reader = null;
 
     if (target.protocol === "https:") {
+      phase = "TLS через прокси";
       socket = socket.startTls({ expectedServerHostname: target.hostname });
       await timeout(socket.opened);
     }
 
+    phase = "ожидание HTTP-ответа целевого сервера";
     const requestHeaders = new Headers(options.headers || {});
     requestHeaders.set("Host", target.host);
     requestHeaders.set("Connection", "close");
@@ -149,7 +159,12 @@ async function fetchViaHttpProxy(url, options, proxyEndpoint, timeoutMs) {
         if (chunked && new TextDecoder().decode(raw.slice(headerEnd)).includes("\r\n0\r\n\r\n")) break;
       }
     }
-    if (headerEnd < 0) throw new Error("Прокси не вернул HTTP-ответ");
+    if (headerEnd < 0) {
+      const receivedBytes = raw.length;
+      throw new Error(receivedBytes
+        ? `Соединение закрыто до получения HTTP-заголовков (этап: ${phase}, получено байт: ${receivedBytes})`
+        : `Прокси/сервер закрыл соединение без HTTP-ответа (этап: ${phase}). Проверьте доступность и совместимость прокси`);
+    }
     const headerText = new TextDecoder().decode(raw.slice(0, headerEnd));
     const lines = headerText.split("\r\n");
     const status = Number((lines.shift().match(/^HTTP\/\d(?:\.\d)?\s+(\d{3})/i) || [])[1] || 502);
@@ -177,6 +192,14 @@ async function fetchViaHttpProxy(url, options, proxyEndpoint, timeoutMs) {
       responseHeaders.delete("transfer-encoding");
     }
     return new Response(body, { status, headers: responseHeaders });
+  } catch (error) {
+    if (error?.name === "TimeoutError" || /Таймаут запроса через прокси/.test(String(error?.message || ""))) {
+      throw new Error(`Тайм-аут на этапе «${phase}»: прокси не ответил вовремя`);
+    }
+    if (/TLS|certificate|cert|handshake/i.test(String(error?.message || "")) && phase === "TLS через прокси") {
+      throw new Error(`Не удалось установить TLS через прокси: ${error.message}`);
+    }
+    throw error;
   } finally {
     if (timeoutId) clearTimeout(timeoutId);
     try { if (reader) reader.releaseLock(); } catch {}
