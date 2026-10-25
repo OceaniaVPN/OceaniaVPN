@@ -73,3 +73,39 @@ export async function setLastDecodedProfile(cfg, chatId, filename) {
   await cfg.store.put(lastDecodedProfileKey(chatId), filename);
   return true;
 }
+
+
+function decodedProfileProxyKey(chatId, filename, platform) {
+  return `decoded_proxy_${String(chatId)}_${platform}_${filename}`;
+}
+
+// Proxy choices made during /decode belong to that generated profile only.
+// They must not fall back to the user's older/global platform preference.
+export async function getDecodedProfileProxyPreference(cfg, chatId, filename, platform) {
+  if (!cfg?.store || !VALID_PLATFORMS.has(platform) || !isOwnedDecodedFilename(filename, chatId)) return null;
+  try {
+    const value = await cfg.store.get(decodedProfileProxyKey(chatId, filename, platform), "json");
+    if (!value || typeof value !== "object" || !["on", "off"].includes(value.mode)) return null;
+    if (value.mode === "off") return { mode: "off", endpoint: null, country: null };
+    if (!value.endpoint || typeof value.endpoint !== "string") return null;
+    return { mode: "on", endpoint: value.endpoint, country: String(value.country || "") };
+  } catch (error) {
+    console.error("[Proxy] decoded profile preference read failed:", error?.message || error);
+    return null;
+  }
+}
+
+export async function setDecodedProfileProxyPreference(cfg, chatId, filename, platform, preference) {
+  if (!cfg?.store) throw new Error("Для сохранения выбора прокси нужна настроенная KV/D1 база");
+  if (!VALID_PLATFORMS.has(platform)) throw new Error("Неизвестная платформа");
+  if (!isOwnedDecodedFilename(filename, chatId)) throw new Error("Файл декодированной подписки не принадлежит этому пользователю");
+  if (!preference || !["on", "off"].includes(preference.mode)) throw new Error("Некорректный режим прокси");
+  const normalized = preference.mode === "on"
+    ? { mode: "on", endpoint: String(preference.endpoint || ""), country: String(preference.country || ""), updatedAt: Date.now() }
+    : { mode: "off", endpoint: null, country: null, updatedAt: Date.now() };
+  if (normalized.mode === "on" && !normalized.endpoint) throw new Error("Не выбран адрес прокси");
+  // The file is an immutable generated decode result. Keep its choice long enough
+  // for clients to refresh the profile, without making it a global user setting.
+  await cfg.store.put(decodedProfileProxyKey(chatId, filename, platform), JSON.stringify(normalized), { expirationTtl: 60 * 24 * 3600 });
+  return normalized;
+}

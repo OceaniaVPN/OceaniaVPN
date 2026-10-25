@@ -7,7 +7,7 @@ import { sendMessage, answerCallback } from "./telegram.js";
 import { COUNTRIES, detectCountryFromText } from "./contries.js";
 import { listSubscriptions, getActiveSubscription, makeSubscriptionDeviceKey } from "./subscriptions.js";
 import { buildHappJsonSubscription } from "./json-subscription.js";
-import { getProxyPreference } from "./proxy-preferences.js";
+import { getProxyPreference, getDecodedProfileProxyPreference } from "./proxy-preferences.js";
 import { isKnownHttpProxyEndpoint } from "./proxy-check.js";
 import { migrateLegacyKvToD1 } from "./migrate.js";
 import { processScheduledChanges } from "./scheduler.js";
@@ -163,6 +163,7 @@ async function serveSubscription(request, cfg) {
 
   let filename = filenameParam;
   let selected = null;
+  let isOwnedDecodedProfile = false;
   if (chatIdParam) {
     if (filenameParam) {
       // A decoded profile may be served with ?u=<owner>&f=decoded_<owner>_...&p=platform.
@@ -171,6 +172,7 @@ async function serveSubscription(request, cfg) {
         filenameParam.startsWith(`decoded_${String(chatIdParam)}_`);
       if (!ownedDecodedName || subscriptionId) return new Response("Subscription not found", { status: 404 });
       filename = filenameParam;
+      isOwnedDecodedProfile = true;
     } else {
       const subscriptions = await listSubscriptions(cfg, chatIdParam);
       selected = subscriptionId
@@ -265,8 +267,14 @@ async function serveSubscription(request, cfg) {
 
   const requestedPlatform = url.searchParams.get("p");
   const validPlatform = requestedPlatform === "android" || requestedPlatform === "windows";
+  const isDecodeWizardProfile = isOwnedDecodedProfile && url.searchParams.get("scope") === "decode";
+  // Only URLs created by the current /decode wizard use a per-file preference.
+  // An explicit off choice must never inherit an older/global proxy selection.
+  // The separate legacy proxy menu continues to use its platform preference.
   const proxyPreference = chatIdParam && validPlatform
-    ? await getProxyPreference(cfg, chatIdParam, requestedPlatform)
+    ? (isDecodeWizardProfile
+        ? (await getDecodedProfileProxyPreference(cfg, chatIdParam, filenameParam, requestedPlatform) || { mode: "off", endpoint: null, country: null })
+        : await getProxyPreference(cfg, chatIdParam, requestedPlatform))
     : null;
   let httpProxyEndpoint = null;
   if (proxyPreference?.mode === "on") {

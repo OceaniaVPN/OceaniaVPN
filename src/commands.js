@@ -9,7 +9,7 @@ import { escapeHtml } from "./config.js";
 import { COUNTRIES, matchesCountryKey, detectCountryFromText } from "./contries.js";
 import { cmdProxy, addProxyLink } from "./proxy.js";
 import { HTTP_PROXY_COUNTRIES, checkCountryProxies, checkProxyTcp, isKnownHttpProxyEndpoint } from "./proxy-check.js";
-import { getProxyPreference, getActiveProxyPreference, setProxyPreference, getLastDecodedProfile, setLastDecodedProfile } from "./proxy-preferences.js";
+import { getProxyPreference, getActiveProxyPreference, setProxyPreference, getLastDecodedProfile, setLastDecodedProfile, setDecodedProfileProxyPreference } from "./proxy-preferences.js";
 import { listSubscriptions, getActiveSubscription, getActiveFilename, createSubscription, setActiveSubscription, deleteSubscriptionRecord, updateSubscriptionSettings, makeSubscriptionDeviceKey } from "./subscriptions.js";
 import { listScheduledChanges, addScheduledChange, cancelScheduledChange } from "./scheduler.js";
 
@@ -241,6 +241,50 @@ export async function cmdCancel(cfg, chatId) {
   else await sendMessage(cfg.telegramToken, chatId, `ℹ️ Нет активного процесса.`);
 }
 
+function decodePlatformKeyboard() {
+  return { inline_keyboard: [
+    [{ text: "📱 Android", callback_data: "decode_platform_android" }, { text: "🖥 Windows", callback_data: "decode_platform_windows" }],
+    [{ text: "❌ Отмена", callback_data: "decode_cancel" }],
+  ] };
+}
+
+function decodeProxyModeKeyboard(platform) {
+  return { inline_keyboard: [
+    [{ text: "🚫 Без прокси", callback_data: `decode_proxy_off_${platform}` }],
+    [{ text: "🌐 С прокси", callback_data: `decode_proxy_on_${platform}` }],
+    [{ text: "⬅️ К выбору платформы", callback_data: "decode_back_platform" }],
+    [{ text: "❌ Отмена", callback_data: "decode_cancel" }],
+  ] };
+}
+
+function decodeProxyCountryKeyboard(platform) {
+  const rows = HTTP_PROXY_COUNTRIES.map((country, index) => [{
+    text: `${country.flag} ${country.name} — ${country.servers.length} серверов`,
+    callback_data: `decode_country_${platform}_${index}`,
+  }]);
+  rows.push([{ text: "⬅️ К режиму прокси", callback_data: `decode_back_mode_${platform}` }]);
+  rows.push([{ text: "❌ Отмена", callback_data: "decode_cancel" }]);
+  return { inline_keyboard: rows };
+}
+
+async function beginDecodeFlow(cfg, chatId, url) {
+  await setState(cfg, chatId, { step: "decode_platform", decodeUrl: String(url || "").trim() });
+  return sendMessage(cfg.telegramToken, chatId,
+    `🔍 <b>Шаг 2/4 — платформа</b>\n\nСсылка принята. Выбери Android или Windows, затем режим прокси. Декодирование начнётся только после выбора всех настроек.`,
+    decodePlatformKeyboard());
+}
+
+async function decodeStateOrRestart(cfg, chatId) {
+  const state = await getState(cfg, chatId).catch(() => null);
+  if (!state?.decodeUrl || !String(state.step || "").startsWith("decode_")) {
+    await sendMessage(cfg.telegramToken, chatId,
+      `⚠️ <b>Шаг декодирования устарел.</b>\n\nЗапусти <code>/decode</code> заново и пройди выборы по порядку.`,
+      { inline_keyboard: [[{ text: "🔍 Начать /decode", callback_data: "decode" }], [{ text: "🏠 Меню", callback_data: "menu" }]] });
+    return null;
+  }
+  return state;
+}
+
 export async function cmdDecode(cfg, chatId, url) {
   const inputUrl = String(url || "").trim();
   if (isTelegramProxyLink(inputUrl)) return addProxyLink(cfg, chatId, inputUrl);
@@ -248,53 +292,127 @@ export async function cmdDecode(cfg, chatId, url) {
   if (!inputUrl) {
     await setState(cfg, chatId, { step: "decode_url" });
     return sendMessage(cfg.telegramToken, chatId,
-      `🔗 <b>Ссылка подписки</b>\n\nОтправь HTTP(S)-ссылку или прямую ссылку <code>happ://crypt5/...</code> для декодирования.`,
+      `🔗 <b>Шаг 1/4 — ссылка подписки</b>\n\nОтправь HTTP(S)-ссылку или прямую ссылку <code>happ://crypt5/...</code>. После этого выберешь платформу и прокси.`,
       { inline_keyboard: [[{ text: "❌ Отмена", callback_data: "decode_cancel" }]] });
   }
 
-  if (/^happ:\/\/crypt5\//i.test(inputUrl)) {
-    return runDecodeWithProfile(cfg, chatId, inputUrl);
-  }
+  if (/^happ:\/\/crypt5\//i.test(inputUrl)) return beginDecodeFlow(cfg, chatId, inputUrl);
   let parsedUrl;
   try { parsedUrl = new URL(inputUrl); } catch { parsedUrl = null; }
   if (!parsedUrl || !["http:", "https:"].includes(parsedUrl.protocol)) {
     return sendMessage(cfg.telegramToken, chatId,
       `❌ <b>Нужна HTTP(S)-ссылка или happ://crypt5/</b>\n\nИспользуй <code>/decode https://example.com/sub</code>.`);
   }
-  return runDecodeWithProfile(cfg, chatId, parsedUrl.toString());
+  return beginDecodeFlow(cfg, chatId, parsedUrl.toString());
 }
 
 async function handleDecodeFlowText(cfg, chatId, text, state) {
   const value = String(text || "").trim();
-  const directCrypt5 = /^happ:\/\/crypt5\//i.test(value);
-  let parsedUrl;
-  try { parsedUrl = new URL(value); } catch { parsedUrl = null; }
   if (isTelegramProxyLink(value)) {
     await clearState(cfg, chatId);
     return addProxyLink(cfg, chatId, value);
   }
+  const directCrypt5 = /^happ:\/\/crypt5\//i.test(value);
+  let parsedUrl;
+  try { parsedUrl = new URL(value); } catch { parsedUrl = null; }
   if (!directCrypt5 && (!parsedUrl || !["http:", "https:"].includes(parsedUrl.protocol))) {
     return sendMessage(cfg.telegramToken, chatId,
       `❌ Нужна HTTP(S)-ссылка или <code>happ://crypt5/...</code>. Отправь URL ещё раз или нажми «Отмена».`,
       { inline_keyboard: [[{ text: "❌ Отмена", callback_data: "decode_cancel" }]] });
   }
-  await clearState(cfg, chatId);
-  return runDecodeWithProfile(cfg, chatId, directCrypt5 ? value : parsedUrl.toString());
+  return beginDecodeFlow(cfg, chatId, directCrypt5 ? value : parsedUrl.toString());
 }
 
-async function runDecodeWithProfile(cfg, chatId, url) {
+async function showDecodeProxyCountry(cfg, chatId, platform, index) {
+  const country = HTTP_PROXY_COUNTRIES[index];
+  if (!country) return sendMessage(cfg.telegramToken, chatId, "❌ Страна не найдена.", decodeProxyCountryKeyboard(platform));
+  const state = await decodeStateOrRestart(cfg, chatId);
+  if (!state) return;
+  if (state.platform !== platform || !["decode_proxy_country", "decode_proxy_select"].includes(state.step)) {
+    return sendMessage(cfg.telegramToken, chatId, "⚠️ Шаг выбора прокси устарел. Запусти /decode заново.");
+  }
+  await setState(cfg, chatId, { ...state, step: "decode_proxy_country", countryIndex: index, checkedProxyEndpoints: [] });
+  const rows = country.servers.map((endpoint, i) => [{
+    text: `🧪 Проверить сервер ${i + 1}`,
+    callback_data: `decode_check_one_${platform}_${index}_${i}`,
+  }]);
+  // The country-wide check is intentionally at the bottom, as requested.
+  rows.push([{ text: "🧪 Проверить все серверы страны", callback_data: `decode_check_all_${platform}_${index}` }]);
+  rows.push([{ text: "⬅️ К списку стран", callback_data: `decode_proxy_on_${platform}` }]);
+  rows.push([{ text: "❌ Отмена", callback_data: "decode_cancel" }]);
+  const addressList = country.servers.map((endpoint, i) => `${i + 1}. <code>${escapeHtml(endpoint)}</code>`).join("\n");
+  return sendMessage(cfg.telegramToken, chatId,
+    `${country.flag} <b>${escapeHtml(country.name)}</b>\n\n` +
+    `Серверов: <b>${country.servers.length}</b>\n${addressList}\n\n` +
+    `Сначала запусти проверку. Выбрать можно будет только сервер, который ответил на HTTP CONNECT. Проверка выполняется из Cloudflare, не с устройства.`,
+    { inline_keyboard: rows });
+}
+
+async function checkDecodeProxyServers(cfg, chatId, platform, countryIndex, onlyServer = -1) {
+  const state = await decodeStateOrRestart(cfg, chatId);
+  if (!state) return;
+  const country = HTTP_PROXY_COUNTRIES[countryIndex];
+  if (!country || state.platform !== platform || !["decode_proxy_country", "decode_proxy_select"].includes(state.step) || state.countryIndex !== countryIndex) {
+    return sendMessage(cfg.telegramToken, chatId, "⚠️ Выбор страны устарел. Вернись к списку стран и выбери её заново.");
+  }
+  const one = onlyServer >= 0 ? country.servers[onlyServer] : null;
+  if (onlyServer >= 0 && !one) return sendMessage(cfg.telegramToken, chatId, "❌ Сервер не найден.");
+
+  await sendMessage(cfg.telegramToken, chatId,
+    `⏳ <b>Проверяю ${escapeHtml(country.name)}</b>\n` +
+    (one ? `Сервер: <code>${escapeHtml(one)}</code>` : `Серверов: ${country.servers.length}; параллельная проверка ограничена.`));
+
+  const results = one
+    ? [{ endpoint: one, ...(await checkProxyTcp(one)) }]
+    : await checkCountryProxies(country);
+  const passedNow = results.filter((item) => item.ok).map((item) => item.endpoint);
+  const passed = onlyServer >= 0
+    ? [...new Set([...(state.checkedProxyEndpoints || []), ...passedNow])]
+    : passedNow;
+  await setState(cfg, chatId, { ...state, step: "decode_proxy_select", countryIndex, checkedProxyEndpoints: passed });
+
+  const lines = results.map((item) => {
+    const status = item.ok
+      ? `🟢 CONNECT работает · <b>${item.ms} мс</b>`
+      : `🔴 ${escapeHtml(item.reason)}${item.ms !== null ? ` · ${item.ms} мс` : ""}`;
+    return `<code>${escapeHtml(item.endpoint)}</code> — ${status}`;
+  });
+  const rows = [];
+  for (let i = 0; i < country.servers.length; i++) {
+    if (passed.includes(country.servers[i])) {
+      rows.push([{ text: `✅ Выбрать ${i + 1} (${country.servers[i]})`, callback_data: `decode_use_${platform}_${countryIndex}_${i}` }]);
+    }
+  }
+  rows.push([{ text: "🔄 Проверить все ещё раз", callback_data: `decode_check_all_${platform}_${countryIndex}` }]);
+  rows.push([{ text: "⬅️ К серверам страны", callback_data: `decode_country_${platform}_${countryIndex}` }]);
+  rows.push([{ text: "❌ Отмена", callback_data: "decode_cancel" }]);
+  const summary = `📋 <b>Результат проверки: ${escapeHtml(country.name)}</b>\n\n` +
+    `Работают: <b>${passedNow.length}/${results.length}</b> в этой проверке.\n\n${lines.join("\n\n")}\n\n` +
+    `<i>Это проверка HTTP CONNECT к example.com:443 с Cloudflare. Она подтверждает ответ прокси, но не гарантирует доступ к каждому VPN-узлу с твоего устройства.</i>` +
+    (passed.length ? `\n\nВыбери один из проверенных серверов ниже.` : `\n\nРабочих ответов не найдено. Попробуй повторить проверку или выбрать другую страну.`);
+  return sendMessage(cfg.telegramToken, chatId, summary, { inline_keyboard: rows });
+}
+
+async function runDecodeWithProfile(cfg, chatId, url, selection) {
   const inputRawUrl = String(url || "").trim();
   const directCrypt5 = /^happ:\/\/crypt5\//i.test(inputRawUrl);
+  const platform = selection?.platform;
+  const mode = selection?.mode;
+  if (!["android", "windows"].includes(platform) || !["on", "off"].includes(mode)) {
+    return sendMessage(cfg.telegramToken, chatId, `⚠️ Сначала пройди все шаги /decode: платформа и режим прокси.`);
+  }
+  if (mode === "on" && !isKnownHttpProxyEndpoint(selection?.endpoint)) {
+    return sendMessage(cfg.telegramToken, chatId, `❌ Выбранный прокси отсутствует в разрешённом списке. Вернись к выбору страны и проверь сервер.`);
+  }
   let parsedUrl;
   try { parsedUrl = new URL(inputRawUrl); } catch { parsedUrl = null; }
   if (!directCrypt5 && (!parsedUrl || !["http:", "https:"].includes(parsedUrl.protocol))) {
     return sendMessage(cfg.telegramToken, chatId, `❌ <b>Нужна HTTP(S)-ссылка или happ://crypt5/</b>`);
   }
   url = directCrypt5 ? inputRawUrl : parsedUrl.toString();
+  await clearState(cfg, chatId).catch(() => {});
   let loadingMsgId = null;
   try {
-    // Crypt5 hides the real subscription URL. Reveal it to the user, then
-    // continue through the normal guarded HTTP(S) fetch path.
     if (directCrypt5) {
       const revealed = String(decryptCrypt5(inputRawUrl) || "").trim();
       let revealedUrl;
@@ -304,10 +422,14 @@ async function runDecodeWithProfile(cfg, chatId, url) {
       }
       url = revealedUrl.toString();
       parsedUrl = revealedUrl;
-      await sendMessage(cfg.telegramToken, chatId,
-        `🔓 <b>Crypt5-ссылка раскрыта</b>\n\n<code>${escapeHtml(url)}</code>\n\n⏭️ <b>Продолжаю по расшифрованной ссылке…</b>`);
+      await sendMessage(cfg.telegramToken, chatId, `🔓 Crypt5-ссылка раскрыта; продолжаю декодирование после выбранных настроек…`);
     }
-    const loadingMsg = await sendMessage(cfg.telegramToken, chatId, `⏳ <b>Декодирую подписку</b>\n\n🌐 Источник: <code>${escapeHtml(directCrypt5 ? "crypt5 → " + (parsedUrl?.hostname || "subscription") : parsedUrl.hostname)}</code>\n🌐 Прямой HTTP-запрос с авторизацией сервиса при необходимости\n🔍 Формат → извлечение → сохранение...`);
+    const loadingMsg = await sendMessage(cfg.telegramToken, chatId,
+      `⏳ <b>Декодирую подписку</b>\n\n` +
+      `🌐 Источник: <code>${escapeHtml(directCrypt5 ? "crypt5 → " + (parsedUrl?.hostname || "subscription") : parsedUrl.hostname)}</code>\n` +
+      `🖥 Платформа: <b>${platform === "android" ? "Android" : "Windows"}</b>\n` +
+      `🌐 Прокси: <b>${mode === "on" ? `${escapeHtml(selection.country || "Страна")}, ${escapeHtml(selection.endpoint)}` : "выключен"}</b>\n\n` +
+      `🔍 Формат → извлечение → сохранение…`);
     if (loadingMsg?.result?.message_id) loadingMsgId = loadingMsg.result.message_id;
     const result = await decodeSubscription(url, false, false, {
       apiToken: cfg.subscriptionApiSecret || "",
@@ -321,7 +443,7 @@ async function runDecodeWithProfile(cfg, chatId, url) {
       return;
     }
     const uris = result.uris || [];
-    if (loadingMsgId) await editMessage(cfg.telegramToken, chatId, loadingMsgId, `⏳ <b>Найдено ${uris.length} конфигураций</b>\n\n💾 Сохраняю результат...`);
+    if (loadingMsgId) await editMessage(cfg.telegramToken, chatId, loadingMsgId, `⏳ <b>Найдено ${uris.length} конфигураций</b>\n\n💾 Сохраняю результат…`);
     const timestamp = Date.now().toString(36);
     const filename = `decoded_${chatId}_${timestamp}.txt`;
     const meta = result.metadata || {};
@@ -333,26 +455,46 @@ async function runDecodeWithProfile(cfg, chatId, url) {
       if (loadingMsgId) await editMessage(cfg.telegramToken, chatId, loadingMsgId, errorMsg); else await sendMessage(cfg.telegramToken, chatId, errorMsg);
       return;
     }
-    const rawUrl = `${cfg.workerOrigin}/sub?f=${encodeURIComponent(filename)}`;
+
+    // Store the current run's exact choice per generated profile. Never consult
+    // a previous Android/Windows proxy preference for this decoded filename.
+    await setDecodedProfileProxyPreference(cfg, chatId, filename, platform, {
+      mode,
+      endpoint: mode === "on" ? selection.endpoint : null,
+      country: mode === "on" ? selection.country : null,
+    });
     await setLastDecodedProfile(cfg, chatId, filename).catch((error) => {
       console.warn("[Proxy] Could not store last decoded profile:", error?.message || error);
     });
-    const androidProfileUrl = `${cfg.workerOrigin}/sub?u=${encodeURIComponent(chatId)}&f=${encodeURIComponent(filename)}&p=android`;
-    const windowsProfileUrl = `${cfg.workerOrigin}/sub?u=${encodeURIComponent(chatId)}&f=${encodeURIComponent(filename)}&p=windows`;
+
+    const profileUrl = `${cfg.workerOrigin}/sub?u=${encodeURIComponent(chatId)}&f=${encodeURIComponent(filename)}&p=${encodeURIComponent(platform)}&scope=decode`;
     const stats = { vless: 0, vmess: 0, trojan: 0, ss: 0, hysteria: 0, other: 0 };
-    for (const u of uris) {
-      if (u.startsWith("vless://")) stats.vless++; else if (u.startsWith("vmess://")) stats.vmess++; else if (u.startsWith("trojan://")) stats.trojan++; else if (u.startsWith("ss://")) stats.ss++; else if (u.startsWith("hysteria")) stats.hysteria++; else stats.other++;
+    for (const uri of uris) {
+      if (uri.startsWith("vless://")) stats.vless++;
+      else if (uri.startsWith("vmess://")) stats.vmess++;
+      else if (uri.startsWith("trojan://")) stats.trojan++;
+      else if (uri.startsWith("ss://")) stats.ss++;
+      else if (uri.startsWith("hysteria")) stats.hysteria++;
+      else stats.other++;
     }
+    const platformLabel = platform === "android" ? "Android" : "Windows";
+    const proxyLabel = mode === "on" ? `${selection.country} · ${selection.endpoint}` : "Без прокси";
     const kb = { inline_keyboard: [
-      [{ text: "📋 Обычная подписка", url: rawUrl }],
-      [{ text: "📱 Android — открыть профиль", url: androidProfileUrl }, { text: "🖥 Windows — открыть профиль", url: windowsProfileUrl }],
-      [{ text: "🌐 Настроить прокси", callback_data: "px_home" }],
-      [{ text: "📡 Серверы", callback_data: "list" }, { text: "🏠 Меню", callback_data: "menu" }],
+      [{ text: `🔗 Итоговый профиль · ${platformLabel}`, url: profileUrl }],
+      [{ text: "🔄 Декодировать другую ссылку", callback_data: "decode" }],
+      [{ text: "🏠 Главное меню", callback_data: "menu" }],
     ] };
-    const successMsg = `✅ <b>Подписка расшифрована</b>\n\n━━━━━━━━━━━━━━━━━━━━\n📡 Серверов: <code>${uris.length}</code>\n🔌 VLESS <b>${stats.vless}</b> · VMess <b>${stats.vmess}</b>\n🔌 Trojan <b>${stats.trojan}</b> · SS <b>${stats.ss}</b>\n🔌 Hysteria <b>${stats.hysteria}</b> · Other <b>${stats.other}</b>\n━━━━━━━━━━━━━━━━━━━━\n🔗 <b>Обычная ссылка:</b> <code>${escapeHtml(rawUrl)}</code>\n📱 <b>Android-профиль:</b> <code>${escapeHtml(androidProfileUrl)}</code>\n🖥 <b>Windows-профиль:</b> <code>${escapeHtml(windowsProfileUrl)}</code>\n\nПрофили Android/Windows учитывают выбор прокси из меню. При включённом прокси поддерживаемые TCP-узлы будут оформлены как Happ JSON.`;
+    const successMsg = `✅ <b>Подписка расшифрована</b>\n\n` +
+      `━━━━━━━━━━━━━━━━━━━━\n📡 Серверов: <code>${uris.length}</code>\n` +
+      `🔌 VLESS <b>${stats.vless}</b> · VMess <b>${stats.vmess}</b>\n` +
+      `🔌 Trojan <b>${stats.trojan}</b> · SS <b>${stats.ss}</b>\n` +
+      `🔌 Hysteria <b>${stats.hysteria}</b> · Other <b>${stats.other}</b>\n━━━━━━━━━━━━━━━━━━━━\n\n` +
+      `🖥 <b>Платформа:</b> ${platformLabel}\n🌐 <b>Прокси:</b> ${escapeHtml(proxyLabel)}\n\n` +
+      `🔗 <b>Ссылка с выбранными настройками:</b>\n<code>${escapeHtml(profileUrl)}</code>\n\n` +
+      `В результат включены только настройки, выбранные в этом запуске /decode. Старый прокси с другой попытки не применяется.`;
     if (loadingMsgId) await editMessage(cfg.telegramToken, chatId, loadingMsgId, successMsg, kb); else await sendMessage(cfg.telegramToken, chatId, successMsg, kb);
   } catch (err) {
-    const errorMsg = `⚠️ <b>Ошибка декодирования</b>\n\n<code>${escapeHtml(err.message)}</code>`;
+    const errorMsg = `⚠️ <b>Ошибка декодирования</b>\n\n<code>${escapeHtml(err.message || String(err))}</code>`;
     if (loadingMsgId) { try { await editMessage(cfg.telegramToken, chatId, loadingMsgId, errorMsg); } catch { await sendMessage(cfg.telegramToken, chatId, errorMsg); } } else await sendMessage(cfg.telegramToken, chatId, errorMsg);
   }
 }
@@ -904,6 +1046,92 @@ export async function handleCallback(cfg, cb, options = {}) {
     console.warn("[Callback] Empty callback_data");
     return;
   }
+  if (data === "decode_cancel") {
+    await clearState(cfg, chatId).catch(() => {});
+    return sendMessage(cfg.telegramToken, chatId, `❌ Настройка /decode отменена.`,
+      { inline_keyboard: [[{ text: "🔍 Начать заново", callback_data: "decode" }], [{ text: "🏠 Меню", callback_data: "menu" }]] });
+  }
+  if (data === "decode_back_platform") {
+    const state = await decodeStateOrRestart(cfg, chatId);
+    if (!state) return;
+    await setState(cfg, chatId, { step: "decode_platform", decodeUrl: state.decodeUrl });
+    return sendMessage(cfg.telegramToken, chatId, `🖥 <b>Шаг 2/4 — платформа</b>\n\nВыбери платформу для итогового профиля.`, decodePlatformKeyboard());
+  }
+  {
+    const match = data.match(/^decode_platform_(android|windows)$/);
+    if (match) {
+      const state = await decodeStateOrRestart(cfg, chatId);
+      if (!state) return;
+      if (state.step !== "decode_platform") return sendMessage(cfg.telegramToken, chatId, `⚠️ Сначала отправь ссылку через /decode.`, { inline_keyboard: [[{ text: "🔍 /decode", callback_data: "decode" }]] });
+      const platform = match[1];
+      await setState(cfg, chatId, { step: "decode_proxy_mode", decodeUrl: state.decodeUrl, platform });
+      return sendMessage(cfg.telegramToken, chatId,
+        `🖥 <b>Шаг 3/4 — прокси</b>\n\nПлатформа: <b>${platform === "android" ? "Android" : "Windows"}</b>\n\nВыбери режим для этой ссылки. Этот выбор действует только на текущий результат декодирования.`,
+        decodeProxyModeKeyboard(platform));
+    }
+  }
+  {
+    const match = data.match(/^decode_proxy_off_(android|windows)$/);
+    if (match) {
+      const state = await decodeStateOrRestart(cfg, chatId);
+      if (!state) return;
+      const platform = match[1];
+      if (state.step !== "decode_proxy_mode" || state.platform !== platform) return sendMessage(cfg.telegramToken, chatId, `⚠️ Шаг выбора режима устарел. Запусти /decode заново.`);
+      return runDecodeWithProfile(cfg, chatId, state.decodeUrl, { platform, mode: "off" });
+    }
+  }
+  {
+    const match = data.match(/^decode_proxy_on_(android|windows)$/);
+    if (match) {
+      const state = await decodeStateOrRestart(cfg, chatId);
+      if (!state) return;
+      const platform = match[1];
+      if (state.step !== "decode_proxy_mode" || state.platform !== platform) return sendMessage(cfg.telegramToken, chatId, `⚠️ Шаг выбора режима устарел. Запусти /decode заново.`);
+      await setState(cfg, chatId, { step: "decode_proxy_country", decodeUrl: state.decodeUrl, platform, checkedProxyEndpoints: [] });
+      return sendMessage(cfg.telegramToken, chatId,
+        `🌐 <b>Шаг 4/4 — выбери страну прокси</b>\n\nПосле выбора страны проверь один сервер или все серверы. Декодирование начнётся только после выбора проверенного сервера.`,
+        decodeProxyCountryKeyboard(platform));
+    }
+  }
+  {
+    const match = data.match(/^decode_back_mode_(android|windows)$/);
+    if (match) {
+      const state = await decodeStateOrRestart(cfg, chatId);
+      if (!state) return;
+      const platform = match[1];
+      if (state.platform !== platform) return;
+      await setState(cfg, chatId, { step: "decode_proxy_mode", decodeUrl: state.decodeUrl, platform });
+      return sendMessage(cfg.telegramToken, chatId, `🖥 <b>Выбор режима</b>\n\nПлатформа: ${platform === "android" ? "Android" : "Windows"}`, decodeProxyModeKeyboard(platform));
+    }
+  }
+  {
+    const match = data.match(/^decode_country_(android|windows)_(\d+)$/);
+    if (match) return showDecodeProxyCountry(cfg, chatId, match[1], Number(match[2]));
+  }
+  {
+    const match = data.match(/^decode_check_all_(android|windows)_(\d+)$/);
+    if (match) return checkDecodeProxyServers(cfg, chatId, match[1], Number(match[2]));
+  }
+  {
+    const match = data.match(/^decode_check_one_(android|windows)_(\d+)_(\d+)$/);
+    if (match) return checkDecodeProxyServers(cfg, chatId, match[1], Number(match[2]), Number(match[3]));
+  }
+  {
+    const match = data.match(/^decode_use_(android|windows)_(\d+)_(\d+)$/);
+    if (match) {
+      const [, platform, countryText, serverText] = match;
+      const countryIndex = Number(countryText), serverIndex = Number(serverText);
+      const state = await decodeStateOrRestart(cfg, chatId);
+      if (!state) return;
+      const country = HTTP_PROXY_COUNTRIES[countryIndex];
+      const endpoint = country?.servers?.[serverIndex];
+      if (state.step !== "decode_proxy_select" || state.platform !== platform || state.countryIndex !== countryIndex || !endpoint || !(state.checkedProxyEndpoints || []).includes(endpoint) || !isKnownHttpProxyEndpoint(endpoint)) {
+        return sendMessage(cfg.telegramToken, chatId, `❌ Этот сервер не подтверждён последней проверкой. Проверь его ещё раз перед выбором.`,
+          { inline_keyboard: [[{ text: "🧪 Вернуться к проверке", callback_data: `decode_country_${platform}_${countryIndex}` }], [{ text: "❌ Отмена", callback_data: "decode_cancel" }]] });
+      }
+      return runDecodeWithProfile(cfg, chatId, state.decodeUrl, { platform, mode: "on", endpoint, country: country.name });
+    }
+  }
   if (data === "px_home") {
     const activeProxy = await getActiveProxyPreference(cfg, chatId);
     const pref = activeProxy.preference;
@@ -984,16 +1212,6 @@ export async function handleCallback(cfg, cb, options = {}) {
   else if (data === "dev_metrics") await cmdDevMetrics(cfg, chatId, userId);
   else if (data === "create") { await setState(cfg, chatId, { step: "title" }); await sendMessage(cfg.telegramToken, chatId, STEP_MSG.title); }
   else if (data === "decode") await cmdDecode(cfg, chatId, "");
-  else if (data === "decode_platform_android" || data === "decode_platform_windows" || data === "decode_version_default") {
-    await clearState(cfg, chatId);
-    await sendMessage(cfg.telegramToken, chatId,
-      `Выбор профиля отключён: декодер не выдаёт себя за клиент. Отправь ссылку через /decode.`,
-      { inline_keyboard: [[{ text: "🔍 Декодировать", callback_data: "decode" }], [{ text: "🏠 Меню", callback_data: "menu" }]] });
-  }
-  else if (data === "decode_cancel") {
-    await clearState(cfg, chatId);
-    await sendMessage(cfg.telegramToken, chatId, `❌ Настройка декодера отменена.`, { inline_keyboard: [[{ text: "🔍 Декодировать", callback_data: "decode" }], [{ text: "🏠 Меню", callback_data: "menu" }]] });
-  }
   else if (data === "my") await cmdMy(cfg, chatId);
   else if (data === "subs") await cmdSubscriptions(cfg, chatId);
   else if (data === "schedule") await cmdScheduledList(cfg, chatId);
