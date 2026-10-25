@@ -165,13 +165,23 @@ async function serveSubscription(request, cfg) {
   const appMatch = userAgent.match(/(Happ|Hiddify|v2rayNG|v2rayTun|v2rayN|V2Box)[\/ ]([^\/ ]+)/i);
   const clientIp = request.headers.get("cf-connecting-ip") || "unknown";
   console.log("[ClientLog] " + JSON.stringify({
+    method: request.method,
     path: url.pathname,
+    userAgent,
     client: appMatch ? appMatch[1] : (userAgent.split("/")[0] || "unknown"),
     appVersion: request.headers.get("x-app-version") || (appMatch ? appMatch[2] : "unknown"),
+    deviceLocale: request.headers.get("x-device-locale") || "unknown",
     os: request.headers.get("x-device-os") || (userAgent.split("/")[2] || "unknown"),
     osVersion: request.headers.get("x-ver-os") || "unknown",
     device: request.headers.get("x-device-model") || "unknown",
-    country: request.headers.get("cf-ipcountry") || "unknown",
+    country: request.headers.get("cf-ipcountry") || request.cf?.country || "unknown",
+    colo: request.cf?.colo || "unknown",
+    asn: request.cf?.asn ?? null,
+    asOrganization: request.cf?.asOrganization || "unknown",
+    city: request.cf?.city || "unknown",
+    region: request.cf?.region || "unknown",
+    timezone: request.cf?.timezone || "unknown",
+    tlsVersion: request.cf?.tlsVersion || "unknown",
     ip: clientIp,
     ipMeaning: "Cloudflare peer IP; may be VPN/proxy exit IP"
   }));
@@ -207,7 +217,6 @@ async function serveSubscription(request, cfg) {
   const content = await getFileContent(cfg, filename);
   if (!content) return new Response("Subscription not found", { status: 404 });
 
-  const userAgent = request.headers.get("user-agent") || "";
   const hasServiceAuth = hasValidSubscriptionApiToken(request, cfg.subscriptionApiSecret);
   if (!isVpnClientUA(userAgent) && !hasServiceAuth) {
     return renderThemedPage(request, cfg, content);
