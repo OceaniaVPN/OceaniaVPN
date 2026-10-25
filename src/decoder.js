@@ -6,6 +6,8 @@ import { TARGET_USER_AGENTS } from "./useragents.js";
 import { connect } from "cloudflare:sockets";
 
 const BLOCKED_DOMAINS = [
+  "okeaniavpn.dimastekolnikov1.workers.dev",
+  "broxvpn.apruxdomain.online",
   "okeaniavpn.dimastekolnikov13.workers.dev",
   "sub.chkav-vpn.workers.dev"
 ];
