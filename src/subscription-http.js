@@ -40,7 +40,13 @@ async function fetchViaHttpProxy(url, options, proxyEndpoint, timeoutMs) {
   const proxy = parseHttpProxyEndpoint(proxyEndpoint);
   if (!proxy) throw new Error("Некорректный HTTP-прокси");
 
-  let socket = connect({ hostname: proxy.hostname, port: proxy.port });
+  // HTTPS is negotiated after the HTTP CONNECT tunnel is established.
+  // Cloudflare requires the socket to be created in STARTTLS mode before
+  // startTls() can upgrade the tunnel.
+  let socket = connect(
+    { hostname: proxy.hostname, port: proxy.port },
+    { secureTransport: "starttls" },
+  );
   let timeoutId;
   let reader;
   let writer;
