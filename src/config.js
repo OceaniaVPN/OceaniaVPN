@@ -22,6 +22,16 @@ export function getConfig(env) {
     workerOrigin: (env.WORKER_ORIGIN || "").replace(/\/$/, ""),
     subscriptionSecret: env.SUBSCRIPTION_SECRET || env.TELEGRAM_BOT_TOKEN || "",
     webhookSecret: env.TELEGRAM_WEBHOOK_SECRET || "",
+    // Happ client profile for subscription requests. Configure in wrangler.toml
+    // or Worker Settings → Variables. Android is the default; Windows is tried next.
+    happClient: {
+      happPlatform: env.HAPP_PLATFORM || "Android",
+      happVersion: env.HAPP_VERSION || "",
+      happDeviceId: env.HAPP_DEVICE_ID || "",
+      happDeviceLocale: env.HAPP_DEVICE_LOCALE || "ru",
+      happDeviceModel: env.HAPP_DEVICE_MODEL || "",
+      happOsVersion: env.HAPP_OS_VERSION || "",
+    },
   };
 }
 

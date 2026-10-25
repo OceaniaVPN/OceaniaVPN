@@ -238,7 +238,7 @@ export async function cmdDecode(cfg, chatId, url) {
   try {
     const loadingMsg = await sendMessage(cfg.telegramToken, chatId, `⏳ <b>Декодирую подписку</b>\n\n🌐 Источник: <code>${escapeHtml(parsedUrl.hostname)}</code>\n🥷 Happ-compatible\n🔍 Формат → извлечение → сохранение...`);
     if (loadingMsg?.result?.message_id) loadingMsgId = loadingMsg.result.message_id;
-    const result = await decodeSubscription(url, false, false);
+    const result = await decodeSubscription(url, false, false, cfg.happClient || {});
     if (!result.ok) {
       const errorMsg = `❌ <b>Не удалось расшифровать</b>\n\n${escapeHtml(result.error || "Неизвестная ошибка")}`;
       if (loadingMsgId) await editMessage(cfg.telegramToken, chatId, loadingMsgId, errorMsg); else await sendMessage(cfg.telegramToken, chatId, errorMsg);

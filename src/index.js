@@ -49,13 +49,13 @@ const SECONDARY_CONFIG = {
 // ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
 // ==========================================
 
-async function fetchAndMergeSources(sourcesUrls) {
+async function fetchAndMergeSources(sourcesUrls, happClient = {}) {
   const allUris = [];
   const stats = {};
   for (const url of sourcesUrls) {
     try {
       console.log("[Merge] Decoding source: " + url);
-      const result = await decodeSubscription(url);
+      const result = await decodeSubscription(url, false, false, happClient);
       if (result.ok && result.uris && result.uris.length > 0) {
         allUris.push(...result.uris);
         stats[url] = result.uris.length;
@@ -379,7 +379,7 @@ async function runManualUpdate(env, reportChatId) {
   };
 
   try {
-    const { uris: uniqueUris } = await fetchAndMergeSources(AUTO_UPDATE_CONFIG.sources);
+    const { uris: uniqueUris } = await fetchAndMergeSources(AUTO_UPDATE_CONFIG.sources, cfg.happClient);
     if (uniqueUris.length > 0) {
       const finalUris = AUTO_UPDATE_CONFIG.doRename ? applyRename(uniqueUris) : uniqueUris;
       const profileMetadata = {
@@ -405,7 +405,7 @@ async function runManualUpdate(env, reportChatId) {
   }
 
   try {
-    const result2 = await decodeSubscription(SECONDARY_CONFIG.targetUrl, true);
+    const result2 = await decodeSubscription(SECONDARY_CONFIG.targetUrl, true, false, cfg.happClient);
     if (result2.ok && result2.uris && result2.uris.length > 0) {
       const finalUris2 = SECONDARY_CONFIG.doRename ? applyRename(result2.uris) : result2.uris;
       const profileMetadata2 = {
@@ -595,7 +595,7 @@ export default {
 
     // 1. Обновление основного whitelist.txt (4 источника)
     try {
-      const { uris: uniqueUris, stats } = await fetchAndMergeSources(AUTO_UPDATE_CONFIG.sources);
+      const { uris: uniqueUris, stats } = await fetchAndMergeSources(AUTO_UPDATE_CONFIG.sources, cfg.happClient);
       if (uniqueUris.length > 0) {
         let finalUris = AUTO_UPDATE_CONFIG.doRename ? applyRename(uniqueUris) : uniqueUris;
         const profileMetadata = {
@@ -623,7 +623,7 @@ export default {
       // trusted=true — это наш собственный VPN-воркер (OceaniaVPN), запрос идёт
       // с X-Bot-Secret, минуя проверку "только Happ" на его стороне. БЕЗ этого
       // флага крон получал бы такую же заглушку, что и обычные пользователи.
-      const result2 = await decodeSubscription(SECONDARY_CONFIG.targetUrl, true);
+      const result2 = await decodeSubscription(SECONDARY_CONFIG.targetUrl, true, false, cfg.happClient);
 
       if (result2.ok && result2.uris && result2.uris.length > 0) {
         let finalUris2 = SECONDARY_CONFIG.doRename ? applyRename(result2.uris) : result2.uris;

@@ -2,7 +2,12 @@ import {
   parseVlessList, parseBase64, parseYaml, parseJson, parseCrypt, safeBase64
 } from "./parsers.js";
 import { escapeHtml } from "./config.js";
-import { TARGET_USER_AGENTS } from "./useragents.js";
+import {
+  getHappUserAgents,
+  getHappPlatformFromUserAgent,
+  getHappVersionFromUserAgent,
+  getHappDeviceIdFromUserAgent,
+} from "./useragents.js";
 import { connect } from "cloudflare:sockets";
 
 const BLOCKED_DOMAINS = [
@@ -77,40 +82,40 @@ function extractRedirectTarget(url) {
   } catch { return null; }
 }
 
-function buildHappHeaders(ua, isFirstRequest = false, trusted = false) {
-  // Header shape captured from a real Happ Android 4.8.0 request.
-  // Never hardcode a real user's HWID from logs; generate a synthetic identifier.
-  const randomHex = (length = 16) => {
-    const bytes = new Uint8Array(Math.ceil(length / 2));
-    crypto.getRandomValues(bytes);
-    return Array.from(bytes, b => b.toString(16).padStart(2, "0")).join("").slice(0, length);
-  };
-  const hwid = randomHex(16);
+function buildHappHeaders(ua, isFirstRequest = false, trusted = false, clientOptions = {}) {
+  const platform = getHappPlatformFromUserAgent(ua);
+  const version = getHappVersionFromUserAgent(ua);
+  const hwid = getHappDeviceIdFromUserAgent(ua) || String(clientOptions.happDeviceId || "").trim();
   const requestId = crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).substring(7)}`;
-  const isAndroidHapp = /happ\//i.test(ua) && /android/i.test(ua);
   const headers = {
-    "User-Agent": ua, "Accept": "*/*", "Accept-Language": "ru", "Accept-Encoding": "gzip, deflate, br", "Connection": "keep-alive",
-    "X-Request-ID": requestId, "X-App-Name": "Happ",
+    "User-Agent": ua,
+    "Accept": "*/*",
+    "Accept-Language": "en-US,en;q=0.9,ru;q=0.8",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Connection": "keep-alive",
+    "DNT": "1",
+    "Sec-Fetch-Dest": "empty",
+    "Sec-Fetch-Mode": "cors",
+    "Sec-Fetch-Site": "cross-site",
+    "X-Client-Version": "3.26.3",
+    "X-Client-Platform": platform,
+    "X-Request-ID": requestId,
+    "X-App-Name": "Happ",
+    "X-Device-Os": platform,
+    "X-Device-Locale": String(clientOptions.happDeviceLocale || "ru").slice(0, 16),
+    ...(version ? { "X-App-Version": version } : {}),
+    ...(clientOptions.happDeviceModel ? { "X-Device-Model": String(clientOptions.happDeviceModel).slice(0, 80) } : {}),
+    ...(clientOptions.happOsVersion ? { "X-Ver-Os": String(clientOptions.happOsVersion).slice(0, 40) } : {}),
     ...(isFirstRequest && { "X-First-Launch": "true", "X-Install-Time": String(Date.now() - 86400000 * (Math.floor(Math.random() * 30) + 1)) }),
   };
-  if (isAndroidHapp) {
-    // Observed real Android header names: X-Hwid, X-Device-Os, X-Device-Model,
-    // X-Device-Locale and X-Ver-Os. Values below are synthetic/generic, not copied
-    // from a particular user's device identifier.
-    headers["X-Hwid"] = hwid;
-    headers["X-Device-Locale"] = "ru";
-    headers["X-Device-Os"] = "Android";
-    headers["X-Device-Model"] = "Android Device";
-    headers["X-Ver-Os"] = "16";
-    headers["X-Happ-HWID"] = hwid;
-    headers["X-Device-ID"] = hwid;
+  if (/^Happ\//i.test(ua)) {
     headers["X-Happ-App"] = "Happ";
-    headers["X-Happ-Platform"] = "android";
-  } else if (ua.includes("Happ")) {
-    headers["X-Happ-HWID"] = hwid;
-    headers["X-Device-ID"] = hwid;
-    headers["X-Happ-App"] = "Happ";
-    headers["X-Happ-Platform"] = ua.includes("iOS") ? "ios" : "android";
+    headers["X-Happ-Platform"] = platform.toLowerCase();
+    if (hwid) {
+      headers["X-Happ-HWID"] = hwid;
+      headers["X-Device-ID"] = hwid;
+      headers["X-Hwid"] = hwid;
+    }
   }
   if (ua.includes("V2raytun")) { headers["X-V2Ray-Version"] = "5.25.81"; headers["X-App-Type"] = "v2ray"; }
   if (ua.includes("INCY")) headers["X-INCY-Version"] = "3.4.2";
@@ -202,7 +207,7 @@ function hasParsableContent(text) {
   return false;
 }
 
-async function fetchSubscription(url, trusted = false) {
+async function fetchSubscription(url, trusted = false, clientOptions = {}) {
   try {
     const lowerUrl = url.toLowerCase();
     const isBlocked = BLOCKED_DOMAINS.some(domain => lowerUrl.includes(domain.toLowerCase()));
@@ -210,14 +215,15 @@ async function fetchSubscription(url, trusted = false) {
     const redirectTarget = extractRedirectTarget(url);
     const actualUrl = redirectTarget ? new URL(redirectTarget, url).toString() : url;
     let lastError = "Неизвестная ошибка", attempts = 0, bestContent = null, bestContentType = null;
-    const MAX_ATTEMPTS = Math.min(8, TARGET_USER_AGENTS.length);
+    const userAgents = getHappUserAgents(clientOptions);
+    const MAX_ATTEMPTS = Math.min(8, userAgents.length);
     const RETRY_DELAYS = [0, 250, 500, 1000, 1500, 2500, 4000, 5000];
     for (let i = 0; i < MAX_ATTEMPTS; i++) {
       attempts = i + 1;
-      const ua = TARGET_USER_AGENTS[i];
+      const ua = userAgents[i];
       try {
         if (i > 0) await new Promise(resolve => setTimeout(resolve, RETRY_DELAYS[i] || 1000));
-        const res = await fetchWithRedirects(actualUrl, buildHappHeaders(ua, i === 0, trusted));
+        const res = await fetchWithRedirects(actualUrl, buildHappHeaders(ua, i === 0, trusted, clientOptions));
         if (!res.ok) { lastError = `HTTP ${res.status}`; continue; }
         const text = normalizeText(await res.text());
         const ct = res.headers.get("content-type") || "";
@@ -227,7 +233,7 @@ async function fetchSubscription(url, trusted = false) {
         const envelopeUrl = unwrapEnvelope(text);
         if (envelopeUrl && envelopeUrl !== actualUrl) {
           try {
-            const nested = await fetchWithRedirects(envelopeUrl, buildHappHeaders(ua, false, trusted));
+            const nested = await fetchWithRedirects(envelopeUrl, buildHappHeaders(ua, false, trusted, clientOptions));
             if (nested.ok) {
               const nestedText = normalizeText(await nested.text());
               if (nestedText) return { ok: true, content: nestedText, contentType: nested.headers.get("content-type") || "text/plain", attempts };
@@ -241,7 +247,7 @@ async function fetchSubscription(url, trusted = false) {
             const allContents = [];
             for (const subUrl of allUrls) {
               try {
-                const subRes = await fetchWithRedirects(subUrl, buildHappHeaders(ua, false, trusted));
+                const subRes = await fetchWithRedirects(subUrl, buildHappHeaders(ua, false, trusted, clientOptions));
                 if (!subRes.ok) continue;
                 const subText = normalizeText(await subRes.text());
                 if (!subText || isStubResponse(subText) || isTemporaryMessage(subText)) continue;
@@ -250,7 +256,7 @@ async function fetchSubscription(url, trusted = false) {
                   const nestedUrls = extractAllUrlsFromHtml(subText, subUrl).slice(0, 6);
                   for (const nestedUrl of nestedUrls) {
                     try {
-                      const nestedRes = await fetchWithRedirects(nestedUrl, buildHappHeaders(ua, false, trusted));
+                      const nestedRes = await fetchWithRedirects(nestedUrl, buildHappHeaders(ua, false, trusted, clientOptions));
                       if (nestedRes.ok) {
                         const nestedText = normalizeText(await nestedRes.text());
                         if (nestedText && !isStubResponse(nestedText) && !isTemporaryMessage(nestedText)) allContents.push(nestedText);
@@ -282,11 +288,11 @@ function detectFormat(content) {
   return "base64";
 }
 
-export async function decodeSubscription(url, trusted = false, pingCheck = false) {
+export async function decodeSubscription(url, trusted = false, pingCheck = false, clientOptions = {}) {
   if (!url || typeof url !== "string") return { ok: false, error: "Не указана ссылка", configs: [], uris: [], attempts: 0 };
   const cleanUrl = url.trim().replace(/^<|>$/g, "");
   if (!/^https?:\/\//i.test(cleanUrl)) return { ok: false, error: "Нужна HTTP(S)-ссылка", configs: [], uris: [], attempts: 0 };
-  const result = await fetchSubscription(cleanUrl, trusted);
+  const result = await fetchSubscription(cleanUrl, trusted, clientOptions);
   if (!result.ok) return { ...result, configs: [], uris: [] };
   let content = result.content || "";
   const format = detectFormat(content);
@@ -296,7 +302,7 @@ export async function decodeSubscription(url, trusted = false, pingCheck = false
     if (format === "envelope") {
       const nestedUrl = unwrapEnvelope(content);
       if (nestedUrl) {
-        const nested = await fetchSubscription(nestedUrl, trusted);
+        const nested = await fetchSubscription(nestedUrl, trusted, clientOptions);
         if (!nested.ok) return { ...nested, configs: [], uris: [] };
         content = nested.content || "";
       }
