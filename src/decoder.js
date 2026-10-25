@@ -2,17 +2,16 @@ import {
   parseVlessList, parseBase64, parseYaml, parseJson, parseCrypt, safeBase64
 } from "./parsers.js";
 import { escapeHtml } from "./config.js";
-import { TARGET_USER_AGENTS } from "./useragents.js";
+import { DECODER_USER_AGENT } from "./useragents.js";
+import { fetchWithRedirects } from "./subscription-http.js";
 import { connect } from "cloudflare:sockets";
 
 const BLOCKED_DOMAINS = [
   "okeaniavpn.dimastekolnikov1.workers.dev",
-  "broxvpn.apruxdomain.online",
   "okeaniavpn.dimastekolnikov13.workers.dev",
   "sub.chkav-vpn.workers.dev"
 ];
 
-const TRUSTED_BOT_SECRET = "d2a27a0c959353ad5a695917e4c022b35f2376b6b84a66c8";
 
 function normalizeText(text) {
   return String(text || "")
@@ -41,33 +40,6 @@ function isTemporaryMessage(text) {
     /^(?:конфигурация|подписка).{0,80}(?:готов|обнов|через).{0,40}(?:секунд|минут)/i.test(t);
 }
 
-async function fetchWithTimeout(url, options, timeoutMs = 6000) {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
-  try { return await fetch(url, { ...options, signal: controller.signal }); }
-  finally { clearTimeout(timeout); }
-}
-
-async function fetchWithRedirects(url, headers, max = 5) {
-  let currentUrl = url;
-  for (let i = 0; i < max; i++) {
-    const res = await fetchWithTimeout(currentUrl, { method: "GET", headers, redirect: "manual" }, 6000);
-    if ([301, 302, 303, 307, 308].includes(res.status)) {
-      const loc = res.headers.get("location");
-      if (!loc) return res;
-      if (/^(?:happ|incy|v2raytun):\/\//i.test(loc.trim())) {
-        return new Response(loc.trim(), { status: 200, headers: { "content-type": "text/plain;charset=utf-8" } });
-      }
-      currentUrl = new URL(loc, currentUrl).toString();
-      const redirectTarget = extractRedirectTarget(currentUrl);
-      if (redirectTarget) currentUrl = new URL(redirectTarget, currentUrl).toString();
-      continue;
-    }
-    return res;
-  }
-  return await fetchWithTimeout(currentUrl, { method: "GET", headers }, 6000);
-}
-
 function extractRedirectTarget(url) {
   try {
     const urlObj = new URL(url);
@@ -78,66 +50,11 @@ function extractRedirectTarget(url) {
   } catch { return null; }
 }
 
-function randomDigits(length) {
-  const bytes = crypto.getRandomValues(new Uint8Array(length));
-  return Array.from(bytes, (byte, index) => String(index === 0 ? 1 + (byte % 9) : byte % 10)).join("");
-}
-
-function randomHex(byteLength) {
-  const bytes = crypto.getRandomValues(new Uint8Array(byteLength));
-  return Array.from(bytes, byte => byte.toString(16).padStart(2, "0")).join("");
-}
-
-function randomUuidV4() {
-  const bytes = crypto.getRandomValues(new Uint8Array(16));
-  bytes[6] = (bytes[6] & 0x0f) | 0x40;
-  bytes[8] = (bytes[8] & 0x3f) | 0x80;
-  const hex = Array.from(bytes, byte => byte.toString(16).padStart(2, "0")).join("");
-  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
-}
-
-function buildHappHeaders(uaTemplate, _isFirstRequest = false, trusted = false) {
-  const template = String(uaTemplate || "Happ/4.8.0/Android/{id}");
-  const windows = /\/Windows\//i.test(template);
-  const android = /\/Android\//i.test(template);
-  let userAgent = template;
-  let headers;
-
-  if (android) {
-    // Mirrors the observed Android /sub header shape. The UA suffix and HWID
-    // are distinct values and use their own observed formats.
-    userAgent = template.replace("{id}", randomDigits(20));
-    headers = {
-      "User-Agent": userAgent,
-      "x-device-locale": "ru",
-      "x-hwid": randomHex(8),
-      "x-device-os": "Android",
-      "x-ver-os": "16",
-      "x-device-model": "2311DRK48G",
-    };
-  } else if (windows) {
-    // Windows emits a different app version, locale, OS-version and UUID HWID.
-    userAgent = template.replace("{id}", randomDigits(13));
-    headers = {
-      "User-Agent": userAgent,
-      "x-app-version": "4.5.4",
-      "x-device-locale": "RU",
-      "x-device-os": "Windows",
-      "x-device-model": "DESKTOP-AMMPFKL_x86_64",
-      "x-hwid": randomUuidV4(),
-      "x-ver-os": "10_10.0.19045",
-      "Accept-Language": "ru-RU,en,*",
-    };
-  } else {
-    // Only profiles backed by the supplied real logs should be used here.
-    userAgent = template.replace("{id}", randomDigits(20));
-    headers = { "User-Agent": userAgent };
-  }
-
-  // No Accept: */*, no browser-only sec-fetch headers, and no duplicated ID fields.
-  // Cloudflare's fetch runtime may add transport-level headers on its own.
-  if (trusted) headers["X-Bot-Secret"] = TRUSTED_BOT_SECRET;
-  return headers;
+function buildDecoderHeaders() {
+  return {
+    "User-Agent": DECODER_USER_AGENT,
+    "Accept": "*/*",
+  };
 }
 
 function addCandidate(set, value, originalUrl = "") {
@@ -224,23 +141,36 @@ function hasParsableContent(text) {
   return false;
 }
 
-async function fetchSubscription(url, trusted = false) {
+async function fetchSubscription(url, trusted = false, requestOptions = {}) {
   try {
     const lowerUrl = url.toLowerCase();
     const isBlocked = BLOCKED_DOMAINS.some(domain => lowerUrl.includes(domain.toLowerCase()));
     if (isBlocked && !trusted) return { ok: false, error: "🚫 Домен заблокирован", attempts: 0 };
+    if (trusted && (!requestOptions.upstreamSecret || !requestOptions.upstreamOrigin)) {
+      return {
+        ok: false,
+        error: "Не настроен SUBSCRIPTION_UPSTREAM_SECRET или SUBSCRIPTION_UPSTREAM_ORIGIN",
+        attempts: 0,
+      };
+    }
     const redirectTarget = extractRedirectTarget(url);
     const actualUrl = redirectTarget ? new URL(redirectTarget, url).toString() : url;
     let lastError = "Неизвестная ошибка", attempts = 0, bestContent = null, bestContentType = null;
-    const MAX_ATTEMPTS = Math.min(8, TARGET_USER_AGENTS.length);
-    const RETRY_DELAYS = [0, 250, 500, 1000, 1500, 2500, 4000, 5000];
+    const MAX_ATTEMPTS = 3;
+    const RETRY_DELAYS = [0, 400, 1000];
+    const headers = buildDecoderHeaders();
+    const httpOptions = {
+      ...requestOptions,
+      headers,
+      timeoutMs: 8000,
+      maxRedirects: 5,
+      extractRedirectTarget,
+    };
     for (let i = 0; i < MAX_ATTEMPTS; i++) {
       attempts = i + 1;
-      const ua = TARGET_USER_AGENTS[i];
-      const headers = buildHappHeaders(ua, i === 0, trusted);
       try {
-        if (i > 0) await new Promise(resolve => setTimeout(resolve, RETRY_DELAYS[i] || 1000));
-        const res = await fetchWithRedirects(actualUrl, headers);
+        if (i > 0) await new Promise(resolve => setTimeout(resolve, RETRY_DELAYS[i]));
+        const res = await fetchWithRedirects(actualUrl, httpOptions);
         if (!res.ok) { lastError = `HTTP ${res.status}`; continue; }
         const text = normalizeText(await res.text());
         const ct = res.headers.get("content-type") || "";
@@ -250,7 +180,7 @@ async function fetchSubscription(url, trusted = false) {
         const envelopeUrl = unwrapEnvelope(text);
         if (envelopeUrl && envelopeUrl !== actualUrl) {
           try {
-            const nested = await fetchWithRedirects(envelopeUrl, headers);
+            const nested = await fetchWithRedirects(envelopeUrl, httpOptions);
             if (nested.ok) {
               const nestedText = normalizeText(await nested.text());
               if (nestedText) return { ok: true, content: nestedText, contentType: nested.headers.get("content-type") || "text/plain", attempts };
@@ -264,7 +194,7 @@ async function fetchSubscription(url, trusted = false) {
             const allContents = [];
             for (const subUrl of allUrls) {
               try {
-                const subRes = await fetchWithRedirects(subUrl, headers);
+                const subRes = await fetchWithRedirects(subUrl, httpOptions);
                 if (!subRes.ok) continue;
                 const subText = normalizeText(await subRes.text());
                 if (!subText || isStubResponse(subText) || isTemporaryMessage(subText)) continue;
@@ -273,7 +203,7 @@ async function fetchSubscription(url, trusted = false) {
                   const nestedUrls = extractAllUrlsFromHtml(subText, subUrl).slice(0, 6);
                   for (const nestedUrl of nestedUrls) {
                     try {
-                      const nestedRes = await fetchWithRedirects(nestedUrl, headers);
+                      const nestedRes = await fetchWithRedirects(nestedUrl, httpOptions);
                       if (nestedRes.ok) {
                         const nestedText = normalizeText(await nestedRes.text());
                         if (nestedText && !isStubResponse(nestedText) && !isTemporaryMessage(nestedText)) allContents.push(nestedText);
@@ -290,7 +220,7 @@ async function fetchSubscription(url, trusted = false) {
         const candidateUrls = extractAllUrlsFromHtml(text, url).slice(0, 8);
         if (candidateUrls.length > 0) return { ok: true, content: candidateUrls.join("\n"), contentType: "text/plain", attempts };
         bestContent = text; bestContentType = ct || "text/plain"; lastError = "Не найдено поддерживаемых конфигураций";
-      } catch (e) { lastError = e?.name === "AbortError" ? "Таймаут" : (e?.message || "Ошибка запроса"); }
+      } catch (e) { lastError = (e?.name === "AbortError" || e?.name === "TimeoutError") ? "Таймаут запроса" : (e?.message || "Ошибка запроса"); }
     }
     return { ok: false, error: lastError, attempts, content: bestContent, contentType: bestContentType };
   } catch (e) { return { ok: false, error: e?.message || "Ошибка декодирования", attempts: 0 }; }
@@ -305,11 +235,11 @@ function detectFormat(content) {
   return "base64";
 }
 
-export async function decodeSubscription(url, trusted = false, pingCheck = false) {
+export async function decodeSubscription(url, trusted = false, pingCheck = false, requestOptions = {}) {
   if (!url || typeof url !== "string") return { ok: false, error: "Не указана ссылка", configs: [], uris: [], attempts: 0 };
   const cleanUrl = url.trim().replace(/^<|>$/g, "");
   if (!/^https?:\/\//i.test(cleanUrl)) return { ok: false, error: "Нужна HTTP(S)-ссылка", configs: [], uris: [], attempts: 0 };
-  const result = await fetchSubscription(cleanUrl, trusted);
+  const result = await fetchSubscription(cleanUrl, trusted, requestOptions);
   if (!result.ok) return { ...result, configs: [], uris: [] };
   let content = result.content || "";
   const format = detectFormat(content);
@@ -319,7 +249,7 @@ export async function decodeSubscription(url, trusted = false, pingCheck = false
     if (format === "envelope") {
       const nestedUrl = unwrapEnvelope(content);
       if (nestedUrl) {
-        const nested = await fetchSubscription(nestedUrl, trusted);
+        const nested = await fetchSubscription(nestedUrl, trusted, requestOptions);
         if (!nested.ok) return { ...nested, configs: [], uris: [] };
         content = nested.content || "";
       }

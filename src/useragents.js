@@ -1,6 +1,4 @@
-// Header profiles grounded in the supplied successful /sub request logs.
-// The per-request numeric suffix is generated separately from the HWID.
-export const TARGET_USER_AGENTS = [
-  "Happ/4.8.0/Android/{id}",
-  "Happ/4.5.4/Windows/{id}",
-];
+// Identify the actual service making the request. Do not impersonate a VPN app
+// or invent device identifiers; servers that need machine access should use an
+// explicit, scoped API credential instead.
+export const DECODER_USER_AGENT = "OceaniaVPN-Decoder/1.0";

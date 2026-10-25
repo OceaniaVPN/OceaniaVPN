@@ -7,6 +7,8 @@ import { sendMessage, answerCallback } from "./telegram.js";
 import { COUNTRIES, detectCountryFromText } from "./contries.js";
 import { listSubscriptions, getActiveSubscription, makeSubscriptionDeviceKey } from "./subscriptions.js";
 import { buildHappJsonSubscription } from "./json-subscription.js";
+import { getProxyPreference } from "./proxy-preferences.js";
+import { isKnownHttpProxyEndpoint } from "./proxy-check.js";
 import { migrateLegacyKvToD1 } from "./migrate.js";
 import { processScheduledChanges } from "./scheduler.js";
 
@@ -49,13 +51,13 @@ const SECONDARY_CONFIG = {
 // ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
 // ==========================================
 
-async function fetchAndMergeSources(sourcesUrls, happClient = {}) {
+async function fetchAndMergeSources(sourcesUrls, requestOptions = {}) {
   const allUris = [];
   const stats = {};
   for (const url of sourcesUrls) {
     try {
       console.log("[Merge] Decoding source: " + url);
-      const result = await decodeSubscription(url, false, false, happClient);
+      const result = await decodeSubscription(url, false, false, requestOptions);
       if (result.ok && result.uris && result.uris.length > 0) {
         allUris.push(...result.uris);
         stats[url] = result.uris.length;
@@ -140,6 +142,19 @@ function base64HeaderText(value) {
   return `base64:${btoa(binary)}`;
 }
 
+function hasValidSubscriptionApiToken(request, configuredSecret) {
+  if (!configuredSecret) return false;
+  const authorization = request.headers.get("authorization") || "";
+  if (!authorization.startsWith("Bearer ")) return false;
+  const supplied = authorization.slice(7);
+  if (supplied.length !== configuredSecret.length) return false;
+  let diff = 0;
+  for (let i = 0; i < configuredSecret.length; i++) {
+    diff |= supplied.charCodeAt(i) ^ configuredSecret.charCodeAt(i);
+  }
+  return diff === 0;
+}
+
 async function serveSubscription(request, cfg) {
   const url = new URL(request.url);
   const chatIdParam = url.searchParams.get("u");
@@ -149,12 +164,21 @@ async function serveSubscription(request, cfg) {
   let filename = filenameParam;
   let selected = null;
   if (chatIdParam) {
-    const subscriptions = await listSubscriptions(cfg, chatIdParam);
-    selected = subscriptionId
-      ? subscriptions.find((item) => item.id === subscriptionId)
-      : await getActiveSubscription(cfg, chatIdParam);
-    if (!selected) return new Response("Subscription not found", { status: 404 });
-    filename = selected.filename;
+    if (filenameParam) {
+      // A decoded profile may be served with ?u=<owner>&f=decoded_<owner>_...&p=platform.
+      // Only filenames generated for this exact chat ID are accepted here.
+      const ownedDecodedName = /^decoded_-?\d{1,20}_[a-z0-9]+\.txt$/i.test(filenameParam) &&
+        filenameParam.startsWith(`decoded_${String(chatIdParam)}_`);
+      if (!ownedDecodedName || subscriptionId) return new Response("Subscription not found", { status: 404 });
+      filename = filenameParam;
+    } else {
+      const subscriptions = await listSubscriptions(cfg, chatIdParam);
+      selected = subscriptionId
+        ? subscriptions.find((item) => item.id === subscriptionId)
+        : await getActiveSubscription(cfg, chatIdParam);
+      if (!selected) return new Response("Subscription not found", { status: 404 });
+      filename = selected.filename;
+    }
   }
 
   if (!filename) return new Response("Missing ?u= or ?f= parameter", { status: 400 });
@@ -163,7 +187,8 @@ async function serveSubscription(request, cfg) {
   if (!content) return new Response("Subscription not found", { status: 404 });
 
   const userAgent = request.headers.get("user-agent") || "";
-  if (!isVpnClientUA(userAgent)) {
+  const hasServiceAuth = hasValidSubscriptionApiToken(request, cfg.subscriptionApiSecret);
+  if (!isVpnClientUA(userAgent) && !hasServiceAuth) {
     return renderThemedPage(request, cfg, content);
   }
 
@@ -238,16 +263,36 @@ async function serveSubscription(request, cfg) {
     }
   }
 
-  const format = selected?.format === "json" ? "json" : "links";
+  const requestedPlatform = url.searchParams.get("p");
+  const validPlatform = requestedPlatform === "android" || requestedPlatform === "windows";
+  const proxyPreference = chatIdParam && validPlatform
+    ? await getProxyPreference(cfg, chatIdParam, requestedPlatform)
+    : null;
+  let httpProxyEndpoint = null;
+  if (proxyPreference?.mode === "on") {
+    if (!isKnownHttpProxyEndpoint(proxyPreference.endpoint)) {
+      return new Response("Saved proxy selection is invalid. Select a proxy again in the bot.", {
+        status: 503,
+        headers: { "Content-Type": "text/plain;charset=utf-8", "Cache-Control": "no-store" },
+      });
+    }
+    httpProxyEndpoint = proxyPreference.endpoint;
+  }
+
+  // An explicit platform profile with a selected proxy is returned as Happ JSON
+  // so Xray can chain the VPN-node connection through the chosen HTTP proxy.
+  // Other profiles preserve their saved format.
+  const format = httpProxyEndpoint ? "json" : (selected?.format === "json" ? "json" : "links");
   if (format === "json") {
-    const result = buildHappJsonSubscription(content);
+    const result = buildHappJsonSubscription(content, httpProxyEndpoint);
     headers["Content-Type"] = "application/json;charset=utf-8";
     headers["Content-Disposition"] = 'inline; filename="subscription.json"';
+    if (httpProxyEndpoint) headers["X-Oceania-Proxy-Mode"] = "HTTP-CONNECT";
     if (result.unsupported.length) headers["X-Subscription-Unsupported-Configs"] = String(result.unsupported.length);
     if (result.errors.length) headers["X-Subscription-Invalid-Configs"] = String(result.errors.length);
     if (result.unsupported.length || result.errors.length) {
       const skipped = result.unsupported.length + result.errors.length;
-      headers["Announce"] = base64HeaderText(`${headers["Profile-Title"] || "Подписка"}: ${skipped} конфигураций не удалось представить в Happ JSON и они пропущены.`);
+      headers["Announce"] = base64HeaderText(`${headers["Profile-Title"] || "Подписка"}: ${skipped} конфигураций не удалось представить в Happ JSON и они пропущены.${httpProxyEndpoint ? " HTTP-прокси работает только для TCP; UDP-зависимые узлы могут не работать." : ""}`);
     }
     if (!result.configs.length) {
       return new Response(JSON.stringify({ error: "No supported servers for Happ JSON subscription", unsupported: result.unsupported.map((item) => item.protocol) }), {
@@ -379,7 +424,12 @@ async function runManualUpdate(env, reportChatId) {
   };
 
   try {
-    const { uris: uniqueUris } = await fetchAndMergeSources(AUTO_UPDATE_CONFIG.sources, cfg.happClient);
+    const { uris: uniqueUris } = await fetchAndMergeSources(AUTO_UPDATE_CONFIG.sources, {
+        apiToken: env.SUBSCRIPTION_API_SECRET || "",
+        apiOrigin: env.WORKER_ORIGIN || "",
+        upstreamSecret: env.SUBSCRIPTION_UPSTREAM_SECRET || "",
+        upstreamOrigin: env.SUBSCRIPTION_UPSTREAM_ORIGIN || "",
+      });
     if (uniqueUris.length > 0) {
       const finalUris = AUTO_UPDATE_CONFIG.doRename ? applyRename(uniqueUris) : uniqueUris;
       const profileMetadata = {
@@ -405,7 +455,10 @@ async function runManualUpdate(env, reportChatId) {
   }
 
   try {
-    const result2 = await decodeSubscription(SECONDARY_CONFIG.targetUrl, true, false, cfg.happClient);
+    const result2 = await decodeSubscription(SECONDARY_CONFIG.targetUrl, true, false, {
+      upstreamSecret: env.SUBSCRIPTION_UPSTREAM_SECRET || "",
+      upstreamOrigin: env.SUBSCRIPTION_UPSTREAM_ORIGIN || new URL(SECONDARY_CONFIG.targetUrl).origin,
+    });
     if (result2.ok && result2.uris && result2.uris.length > 0) {
       const finalUris2 = SECONDARY_CONFIG.doRename ? applyRename(result2.uris) : result2.uris;
       const profileMetadata2 = {
@@ -595,7 +648,12 @@ export default {
 
     // 1. Обновление основного whitelist.txt (4 источника)
     try {
-      const { uris: uniqueUris, stats } = await fetchAndMergeSources(AUTO_UPDATE_CONFIG.sources, cfg.happClient);
+      const { uris: uniqueUris, stats } = await fetchAndMergeSources(AUTO_UPDATE_CONFIG.sources, {
+        apiToken: env.SUBSCRIPTION_API_SECRET || "",
+        apiOrigin: env.WORKER_ORIGIN || "",
+        upstreamSecret: env.SUBSCRIPTION_UPSTREAM_SECRET || "",
+        upstreamOrigin: env.SUBSCRIPTION_UPSTREAM_ORIGIN || "",
+      });
       if (uniqueUris.length > 0) {
         let finalUris = AUTO_UPDATE_CONFIG.doRename ? applyRename(uniqueUris) : uniqueUris;
         const profileMetadata = {
@@ -620,10 +678,12 @@ export default {
     // 2. Обновление второго конфига (okeania_auto.txt)
     try {
       console.log("[Cron] Decoding secondary source: " + SECONDARY_CONFIG.targetUrl);
-      // trusted=true — это наш собственный VPN-воркер (OceaniaVPN), запрос идёт
-      // с X-Bot-Secret, минуя проверку "только Happ" на его стороне. БЕЗ этого
-      // флага крон получал бы такую же заглушку, что и обычные пользователи.
-      const result2 = await decodeSubscription(SECONDARY_CONFIG.targetUrl, true, false, cfg.happClient);
+      // Service-to-service auth is sent only to the configured upstream origin.
+      // The upstream must validate X-Bot-Secret; do not rely on a spoofed client UA.
+      const result2 = await decodeSubscription(SECONDARY_CONFIG.targetUrl, true, false, {
+      upstreamSecret: env.SUBSCRIPTION_UPSTREAM_SECRET || "",
+      upstreamOrigin: env.SUBSCRIPTION_UPSTREAM_ORIGIN || new URL(SECONDARY_CONFIG.targetUrl).origin,
+    });
 
       if (result2.ok && result2.uris && result2.uris.length > 0) {
         let finalUris2 = SECONDARY_CONFIG.doRename ? applyRename(result2.uris) : result2.uris;

@@ -211,7 +211,7 @@ function outboundFromUri(uri) {
   return { unsupported: scheme };
 }
 
-export function buildHappJsonSubscription(content) {
+export function buildHappJsonSubscription(content, httpProxyEndpoint = null) {
   const lines = String(content || "").split(/\r?\n/);
   const metadata = {};
   const uris = [];
@@ -238,11 +238,34 @@ export function buildHappJsonSubscription(content) {
       }
       const hashAt = uri.lastIndexOf("#");
       const remarks = hashAt >= 0 ? safeDecode(uri.slice(hashAt + 1)) : new URL(uri).hostname;
+      const outbounds = [parsed.outbound];
+      if (httpProxyEndpoint) {
+        const match = String(httpProxyEndpoint).match(/^((?:\d{1,3}\.){3}\d{1,3}):(\d{1,5})$/);
+        if (!match) throw new Error("Invalid HTTP proxy endpoint");
+        const octets = match[1].split(".").map(Number);
+        const port = Number(match[2]);
+        if (octets.some((octet) => octet < 0 || octet > 255) || port < 1 || port > 65535) {
+          throw new Error("Invalid HTTP proxy endpoint");
+        }
+        // Xray uses this outbound only as the TCP dialer for the VPN node.
+        // The HTTP proxy itself does not carry UDP; unsupported UDP-dependent nodes can fail.
+        parsed.outbound.streamSettings = parsed.outbound.streamSettings || {};
+        parsed.outbound.streamSettings.sockopt = {
+          ...(parsed.outbound.streamSettings.sockopt || {}),
+          dialerProxy: "oceania-http-proxy",
+        };
+        outbounds.push({
+          tag: "oceania-http-proxy",
+          protocol: "http",
+          settings: { address: match[1], port },
+        });
+      }
+      outbounds.push({ tag: "direct", protocol: "freedom" });
       configs.push({
         remarks: String(remarks || "VPN server").slice(0, 100),
         dns: { servers: ["1.1.1.1", "1.0.0.1"], queryStrategy: "UseIP" },
         inbounds: [],
-        outbounds: [parsed.outbound, { tag: "direct", protocol: "freedom" }],
+        outbounds,
         routing: {},
         burstObservatory: {},
       });
