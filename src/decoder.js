@@ -11,8 +11,6 @@ import {
 import { connect } from "cloudflare:sockets";
 
 const BLOCKED_DOMAINS = [
-  "okeaniavpn.dimastekolnikov1.workers.dev",
-  "okeaniavpn.dimastekolnikov13.workers.dev",
   "sub.chkav-vpn.workers.dev"
 ];
 
