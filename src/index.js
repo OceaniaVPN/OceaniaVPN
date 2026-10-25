@@ -157,6 +157,25 @@ function hasValidSubscriptionApiToken(request, configuredSecret) {
 
 async function serveSubscription(request, cfg) {
   const url = new URL(request.url);
+
+  // Compact client diagnostics. Cloudflare's connecting IP is the peer seen at
+  // the edge; when a VPN/proxy is active this is usually the proxy exit IP,
+  // not the device's original/public IP. Never log subscription tokens or HWIDs.
+  const userAgent = request.headers.get("user-agent") || "";
+  const appMatch = userAgent.match(/(Happ|Hiddify|v2rayNG|v2rayTun|v2rayN|V2Box)[\/ ]([^\/ ]+)/i);
+  const clientIp = request.headers.get("cf-connecting-ip") || "unknown";
+  console.log("[ClientLog] " + JSON.stringify({
+    path: url.pathname,
+    client: appMatch ? appMatch[1] : (userAgent.split("/")[0] || "unknown"),
+    appVersion: request.headers.get("x-app-version") || (appMatch ? appMatch[2] : "unknown"),
+    os: request.headers.get("x-device-os") || (userAgent.split("/")[2] || "unknown"),
+    osVersion: request.headers.get("x-ver-os") || "unknown",
+    device: request.headers.get("x-device-model") || "unknown",
+    country: request.headers.get("cf-ipcountry") || "unknown",
+    ip: clientIp,
+    ipMeaning: "Cloudflare peer IP; may be VPN/proxy exit IP"
+  }));
+
   const chatIdParam = url.searchParams.get("u");
   const subscriptionId = url.searchParams.get("s");
   const filenameParam = url.searchParams.get("f");
