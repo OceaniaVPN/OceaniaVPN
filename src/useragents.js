@@ -1,4 +1,6 @@
 export const TARGET_USER_AGENTS = [
+  // Real app-level User-Agent format observed in the supplied Happ 4.5.4 Windows log.
+  "Happ/4.5.4/Windows/2610141139602",
   "Happ/4.7.1/Android/88513504853466813075",
   "Happ/4.3.0 (Windows 11; x64)",
   "Happ/6.0.0 (iOS 19.2; iPhone 16)",

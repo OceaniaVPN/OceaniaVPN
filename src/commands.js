@@ -7,7 +7,7 @@ import { buildFile } from "./build.js";
 import { escapeHtml } from "./config.js";
 import { COUNTRIES, matchesCountryKey, detectCountryFromText } from "./contries.js";
 import { cmdProxy, addProxyLink } from "./proxy.js";
-import { listSubscriptions, getActiveSubscription, getActiveFilename, createSubscription, setActiveSubscription, deleteSubscriptionRecord } from "./subscriptions.js";
+import { listSubscriptions, getActiveSubscription, getActiveFilename, createSubscription, setActiveSubscription, deleteSubscriptionRecord, updateSubscriptionSettings, makeSubscriptionDeviceKey } from "./subscriptions.js";
 import { listScheduledChanges, addScheduledChange, cancelScheduledChange } from "./scheduler.js";
 
 function splitSubscriptionFile(content) {
@@ -371,13 +371,84 @@ export async function cmdSwitchSubscription(cfg, chatId, id) {
 }
 
 export async function cmdMy(cfg, chatId) {
-  const content = await getFileContent(cfg, await getActiveFilename(cfg, chatId));
+  const active = await getActiveSubscription(cfg, chatId);
+  const content = active ? await getFileContent(cfg, active.filename) : null;
   if (!content) return sendMessage(cfg.telegramToken, chatId, `📭 <b>Подписка ещё не создана</b>\n\nСоздай профиль или импортируй URL.`, { inline_keyboard: [[{ text: "🚀 Создать", callback_data: "create" }, { text: "🔍 Декодировать", callback_data: "decode" }], [{ text: "🏠 Меню", callback_data: "menu" }]] });
   const { headers, links } = splitSubscriptionFile(content);
-  const { pageUrl } = await userUrls(cfg, chatId);
-  const msg = `📋 <b>МОЙ ПРОФИЛЬ</b>\n\n🟢 Статус: <b>АКТИВЕН</b>\n📡 Серверов: <code>${links.length}</code>\n\n<b>Параметры</b>\n<pre>${escapeHtml(headers.join("\n"))}</pre>`;
-  await sendMessage(cfg.telegramToken, chatId, msg, { inline_keyboard: [[{ text: "🎨 Страница", url: pageUrl }, { text: "🖼 Тема", callback_data: "theme_pick" }], [{ text: "📡 Серверы", callback_data: "list" }, { text: "📤 Экспорт", callback_data: "export" }],
+  const { pageUrl, subUrl } = await userUrls(cfg, chatId);
+  const limit = Number.isInteger(active.deviceLimit) ? active.deviceLimit : 3;
+  let registeredDevices = 0;
+  try {
+    if (cfg.db?.countSubscriptionDevices) registeredDevices = await cfg.db.countSubscriptionDevices(makeSubscriptionDeviceKey(chatId, active.id));
+  } catch (error) {
+    console.error("[Command] device count lookup failed:", error?.message || error);
+  }
+  const limitLabel = limit === 0 ? "без лимита" : `${registeredDevices}/${limit}`;
+  const formatLabel = active.format === "json" ? "Happ JSON" : "VLESS/URI список";
+  const msg = `📋 <b>МОЙ ПРОФИЛЬ</b>\n\n🟢 Статус: <b>АКТИВЕН</b>\n🏷 Подписка: <b>${escapeHtml(active.title || "Моя подписка")}</b>\n📡 Серверов: <code>${links.length}</code>\n🧾 Формат: <b>${formatLabel}</b>\n📱 Устройства: <code>${limitLabel}</code>\n\n<b>Параметры профиля</b>\n<pre>${escapeHtml(headers.join("\n"))}</pre>`;
+  await sendMessage(cfg.telegramToken, chatId, msg, { inline_keyboard: [[{ text: "🧾 Формат подписки", callback_data: `sub_format_menu_${active.id}` }, { text: "📱 Устройства", callback_data: `dev_manage_${active.id}` }], [{ text: "🔗 Открыть подписку", url: subUrl }], [{ text: "🎨 Страница", url: pageUrl }, { text: "🖼 Тема", callback_data: "theme_pick" }], [{ text: "📡 Серверы", callback_data: "list" }, { text: "📤 Экспорт", callback_data: "export" }],
     [{ text: "🔀 Все подписки", callback_data: "subs" }], [{ text: "⚡ Проверка", callback_data: "check" }, { text: "📊 Аналитика", callback_data: "analytics" }], [{ text: "🗑 Удалить", callback_data: "delete" }], [{ text: "🏠 Меню", callback_data: "menu" }]] });
+}
+
+async function cmdSubscriptionFormatMenu(cfg, chatId, subscriptionId) {
+  const item = (await listSubscriptions(cfg, chatId)).find((entry) => entry.id === subscriptionId);
+  if (!item) return sendMessage(cfg.telegramToken, chatId, "❌ Подписка не найдена.", { inline_keyboard: [[{ text: "📋 Моя подписка", callback_data: "my" }]] });
+  const isJson = item.format === "json";
+  await sendMessage(cfg.telegramToken, chatId,
+    `🧾 <b>ФОРМАТ ПОДПИСКИ</b>\n\nПодписка: <b>${escapeHtml(item.title || "Моя подписка")}</b>\nТекущий формат: <b>${isJson ? "Happ JSON" : "VLESS/URI список"}</b>\n\nВыбери один формат. Ответ никогда не будет содержать вперемешку JSON и ссылки.\n\n<i>В JSON-режиме преобразуются VLESS, VMess, Trojan и Shadowsocks. Протоколы, несовместимые с Xray JSON, не могут быть добавлены в этот формат.</i>`,
+    { inline_keyboard: [[{ text: `${!isJson ? "✅ " : ""}VLESS / URI`, callback_data: `sub_fmt_${item.id}_links` }, { text: `${isJson ? "✅ " : ""}Happ JSON`, callback_data: `sub_fmt_${item.id}_json` }], [{ text: "↩️ Моя подписка", callback_data: "my" }]] });
+}
+
+async function cmdSetSubscriptionFormat(cfg, chatId, subscriptionId, format) {
+  const item = await updateSubscriptionSettings(cfg, chatId, subscriptionId, { format });
+  if (!item) return sendMessage(cfg.telegramToken, chatId, "❌ Подписка не найдена.");
+  await sendMessage(cfg.telegramToken, chatId, `✅ Формат подписки изменён на <b>${format === "json" ? "Happ JSON" : "VLESS/URI список"}</b>.\nСсылка остаётся прежней; при следующем обновлении Happ получит выбранный формат.`, { inline_keyboard: [[{ text: "📋 Моя подписка", callback_data: "my" }, { text: "🧾 Формат", callback_data: `sub_format_menu_${item.id}` }]] });
+}
+
+async function cmdDeviceSettings(cfg, chatId, subscriptionId) {
+  const item = (await listSubscriptions(cfg, chatId)).find((entry) => entry.id === subscriptionId);
+  if (!item) return sendMessage(cfg.telegramToken, chatId, "❌ Подписка не найдена.", { inline_keyboard: [[{ text: "📋 Моя подписка", callback_data: "my" }]] });
+  if (!cfg.db?.listSubscriptionDevices) return sendMessage(cfg.telegramToken, chatId, "⚠️ Учёт устройств недоступен: нужна D1 Database.");
+
+  const deviceKey = makeSubscriptionDeviceKey(chatId, item.id);
+  const devices = await cfg.db.listSubscriptionDevices(deviceKey);
+  const limit = Number.isInteger(item.deviceLimit) ? item.deviceLimit : 3;
+  let text = `📱 <b>УСТРОЙСТВА ПОДПИСКИ</b>\n\nПодписка: <b>${escapeHtml(item.title || "Моя подписка")}</b>\nЗарегистрировано: <code>${devices.length}</code>\nЛимит: <code>${limit === 0 ? "без лимита" : limit}</code>\n\n`;
+  const rows = [];
+  if (!devices.length) text += "Пока нет зарегистрированных устройств. Они появятся после первого запроса подписки из Happ или другого клиента с HWID.\n";
+  devices.slice(0, 12).forEach((device, index) => {
+    const label = [device.device_model, device.device_os].filter(Boolean).join(" · ") || `Устройство ${index + 1}`;
+    const seen = device.last_seen ? new Date(device.last_seen).toLocaleString("ru-RU", { timeZone: "Europe/Belgrade", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) : "неизвестно";
+    text += `\n<b>${index + 1}. ${escapeHtml(label)}</b>\nHWID: <code>…${escapeHtml(String(device.hwid || "").slice(-8))}</code>\nПоследний запрос: <code>${escapeHtml(seen)}</code>\n`;
+    rows.push([{ text: `🗑 Удалить: ${label.slice(0, 22)}`, callback_data: `dev_rm_${item.id}_${device.device_ref}` }]);
+  });
+  rows.push([{ text: "Лимит: 1", callback_data: `dev_limit_${item.id}_1` }, { text: "2", callback_data: `dev_limit_${item.id}_2` }, { text: "3", callback_data: `dev_limit_${item.id}_3` }]);
+  rows.push([{ text: "5", callback_data: `dev_limit_${item.id}_5` }, { text: "10", callback_data: `dev_limit_${item.id}_10` }, { text: "∞ Без лимита", callback_data: `dev_limit_${item.id}_0` }]);
+  rows.push([{ text: "↻ Обновить", callback_data: `dev_manage_${item.id}` }, { text: "📋 Моя подписка", callback_data: "my" }]);
+  await sendMessage(cfg.telegramToken, chatId, text, { inline_keyboard: rows });
+}
+
+async function cmdSetDeviceLimit(cfg, chatId, subscriptionId, limitValue) {
+  const limit = Number.parseInt(limitValue, 10);
+  if (![0, 1, 2, 3, 5, 10].includes(limit)) return;
+  const item = await updateSubscriptionSettings(cfg, chatId, subscriptionId, { deviceLimit: limit });
+  if (!item) return sendMessage(cfg.telegramToken, chatId, "❌ Подписка не найдена.");
+  const count = cfg.db?.countSubscriptionDevices
+    ? await cfg.db.countSubscriptionDevices(makeSubscriptionDeviceKey(chatId, item.id))
+    : 0;
+  if (limit > 0 && count > limit && cfg.db?.trimSubscriptionDevices) {
+    await cfg.db.trimSubscriptionDevices(makeSubscriptionDeviceKey(chatId, item.id), limit);
+  }
+  await sendMessage(cfg.telegramToken, chatId, `✅ Лимит устройств: <b>${limit === 0 ? "без лимита" : limit}</b>.`, { inline_keyboard: [[{ text: "📱 Устройства", callback_data: `dev_manage_${item.id}` }, { text: "📋 Моя подписка", callback_data: "my" }]] });
+  return cmdDeviceSettings(cfg, chatId, item.id);
+}
+
+async function cmdRemoveDevice(cfg, chatId, subscriptionId, deviceRef) {
+  const item = (await listSubscriptions(cfg, chatId)).find((entry) => entry.id === subscriptionId);
+  if (!item || !cfg.db?.removeSubscriptionDevice) return sendMessage(cfg.telegramToken, chatId, "❌ Не удалось найти устройство или база недоступна.");
+  const removed = await cfg.db.removeSubscriptionDevice(makeSubscriptionDeviceKey(chatId, item.id), deviceRef);
+  await sendMessage(cfg.telegramToken, chatId, removed ? "✅ Устройство удалено. Один слот освобождён." : "⚠️ Устройство уже удалено или не найдено.");
+  return cmdDeviceSettings(cfg, chatId, item.id);
 }
 
 export async function cmdList(cfg, chatId, page = 0) {
@@ -637,6 +708,24 @@ export async function handleCallback(cfg, cb, options = {}) {
     const id = data.substring("schedule_cancel_".length);
     const item = await cancelScheduledChange(cfg, chatId, id);
     await sendMessage(cfg.telegramToken, chatId, item ? `✅ Черновик <code>${escapeHtml(id)}</code> отменён.` : `❌ Черновик не найден.`, { inline_keyboard: [[{ text: "📝 Черновики", callback_data: "schedule" }], [{ text: "🏠 Меню", callback_data: "menu" }]] });
+  }
+  else if (data.startsWith("sub_format_menu_")) await cmdSubscriptionFormatMenu(cfg, chatId, data.substring("sub_format_menu_".length));
+  else if (data.startsWith("sub_fmt_") && /_json$/.test(data)) {
+    const id = data.slice("sub_fmt_".length, -"_json".length);
+    await cmdSetSubscriptionFormat(cfg, chatId, id, "json");
+  }
+  else if (data.startsWith("sub_fmt_") && /_links$/.test(data)) {
+    const id = data.slice("sub_fmt_".length, -"_links".length);
+    await cmdSetSubscriptionFormat(cfg, chatId, id, "links");
+  }
+  else if (data.startsWith("dev_manage_")) await cmdDeviceSettings(cfg, chatId, data.substring("dev_manage_".length));
+  else if (data.startsWith("dev_limit_")) {
+    const match = data.match(/^dev_limit_(.+)_(0|1|2|3|5|10)$/);
+    if (match) await cmdSetDeviceLimit(cfg, chatId, match[1], match[2]);
+  }
+  else if (data.startsWith("dev_rm_")) {
+    const match = data.match(/^dev_rm_(.+)_([a-f0-9]{8,16})$/i);
+    if (match) await cmdRemoveDevice(cfg, chatId, match[1], match[2]);
   }
   else if (data.startsWith("sub_switch_")) await cmdSwitchSubscription(cfg, chatId, data.substring("sub_switch_".length));
   else if (data === "list") await cmdList(cfg, chatId, 0);

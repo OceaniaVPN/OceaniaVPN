@@ -6,10 +6,24 @@ const ACTIVE_PREFIX = "active_subscription_";
 function indexKey(chatId) { return `${INDEX_PREFIX}${chatId}`; }
 function activeKey(chatId) { return `${ACTIVE_PREFIX}${chatId}`; }
 
+function normalizeItem(item) {
+  const limit = Number.parseInt(item?.deviceLimit, 10);
+  return {
+    ...item,
+    format: item?.format === "json" ? "json" : "links",
+    // Existing subscriptions get a safe, editable default of three devices.
+    deviceLimit: Number.isInteger(limit) && limit >= 0 ? limit : 3,
+  };
+}
+
+export function makeSubscriptionDeviceKey(chatId, subscriptionId) {
+  return `subscription:${String(chatId)}:${String(subscriptionId)}`;
+}
+
 async function readIndex(cfg, chatId) {
   if (!cfg.store) return [];
   const value = await cfg.store.get(indexKey(chatId), "json");
-  return Array.isArray(value) ? value : [];
+  return Array.isArray(value) ? value.map(normalizeItem) : [];
 }
 
 async function writeIndex(cfg, chatId, items) {
@@ -25,12 +39,14 @@ export async function ensureSubscriptionIndex(cfg, chatId) {
   const legacy = await getFileContent(cfg, legacyFilename);
   if (!legacy) return [];
 
-  const item = {
+  const item = normalizeItem({
     id: "default",
     filename: legacyFilename,
     title: "Моя подписка",
     createdAt: Date.now(),
-  };
+    format: "links",
+    deviceLimit: 3,
+  });
   items = [item];
   await writeIndex(cfg, chatId, items);
   await cfg.store.put(activeKey(chatId), item.id);
@@ -63,15 +79,33 @@ export async function createSubscription(cfg, chatId, { title = "Моя подп
   if (!cfg.store) throw new Error("D1 storage is required for multiple subscriptions");
   const items = await ensureSubscriptionIndex(cfg, chatId);
   const id = crypto.randomUUID().replace(/[^a-zA-Z0-9-]/g, "").slice(0, 32);
-  const item = {
+  const item = normalizeItem({
     id,
     filename: `user_${chatId}_${id}.txt`,
     title: String(title || "Моя подписка").slice(0, 80),
     createdAt: Date.now(),
-  };
+    format: "links",
+    deviceLimit: 3,
+  });
   items.push(item);
   await writeIndex(cfg, chatId, items);
   await cfg.store.put(activeKey(chatId), item.id);
+  return item;
+}
+
+export async function updateSubscriptionSettings(cfg, chatId, id, updates = {}) {
+  const items = await ensureSubscriptionIndex(cfg, chatId);
+  const index = items.findIndex((entry) => entry.id === id);
+  if (index < 0) return null;
+
+  const item = { ...normalizeItem(items[index]) };
+  if (updates.format === "json" || updates.format === "links") item.format = updates.format;
+  if (updates.deviceLimit !== undefined) {
+    const limit = Number.parseInt(updates.deviceLimit, 10);
+    if ([0, 1, 2, 3, 5, 10].includes(limit)) item.deviceLimit = limit;
+  }
+  items[index] = item;
+  await writeIndex(cfg, chatId, items);
   return item;
 }
 

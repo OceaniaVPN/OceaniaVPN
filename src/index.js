@@ -5,7 +5,8 @@ import { buildFile } from "./build.js";
 import { createOrUpdateFile, getFileContent } from "./github.js";
 import { sendMessage, answerCallback } from "./telegram.js";
 import { COUNTRIES, detectCountryFromText } from "./contries.js";
-import { listSubscriptions, getActiveSubscription } from "./subscriptions.js";
+import { listSubscriptions, getActiveSubscription, makeSubscriptionDeviceKey } from "./subscriptions.js";
+import { buildHappJsonSubscription } from "./json-subscription.js";
 import { migrateLegacyKvToD1 } from "./migrate.js";
 import { processScheduledChanges } from "./scheduler.js";
 
@@ -132,6 +133,13 @@ function isVpnClientUA(ua) {
   return VPN_CLIENT_UA_MARKERS.some((m) => lower.includes(m));
 }
 
+function base64HeaderText(value) {
+  const bytes = new TextEncoder().encode(String(value || ""));
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return `base64:${btoa(binary)}`;
+}
+
 async function serveSubscription(request, cfg) {
   const url = new URL(request.url);
   const chatIdParam = url.searchParams.get("u");
@@ -139,9 +147,10 @@ async function serveSubscription(request, cfg) {
   const filenameParam = url.searchParams.get("f");
 
   let filename = filenameParam;
+  let selected = null;
   if (chatIdParam) {
     const subscriptions = await listSubscriptions(cfg, chatIdParam);
-    const selected = subscriptionId
+    selected = subscriptionId
       ? subscriptions.find((item) => item.id === subscriptionId)
       : await getActiveSubscription(cfg, chatIdParam);
     if (!selected) return new Response("Subscription not found", { status: 404 });
@@ -154,36 +163,102 @@ async function serveSubscription(request, cfg) {
   if (!content) return new Response("Subscription not found", { status: 404 });
 
   const userAgent = request.headers.get("user-agent") || "";
-
-
-  // 🔒 ГЛАВНЫЙ ФИКС: одна и та же ссылка /sub?u=... — Happ (и другие VPN-клиенты)
-  // получают реальные конфиги, браузер на ТОЙ ЖЕ ссылке получает тематическую
-  // HTML-страницу со статусом подписки вместо конфигов. Конфиги не палятся
-  // тому, кто просто открыл ссылку в браузере.
   if (!isVpnClientUA(userAgent)) {
     return renderThemedPage(request, cfg, content);
   }
 
-  // 🔧 ФИКС РАССИНХРОНА ДНЕЙ: VPN-клиент (Happ/v2rayNG/Hiddify) читает срок
-  // действия НЕ из текстового комментария #subscription-userinfo внутри тела
-  // файла, а из настоящего HTTP-заголовка Subscription-Userinfo на самом
-  // ответе. Раньше этот заголовок вообще не выставлялся — клиент либо не
-  // показывал срок, либо показывал что-то своё, а страница считала дни
-  // отдельно из тела файла. Теперь оба берут значение из ОДНОЙ и той же строки
-  // файла — расхождения быть не может.
   const headers = {
-    "Content-Type": "text/plain;charset=utf-8",
     "Cache-Control": "no-store",
+    "X-Content-Type-Options": "nosniff",
   };
   const userinfoMatch = content.match(/^#subscription-userinfo:\s*(.+)$/im);
   if (userinfoMatch) headers["Subscription-Userinfo"] = userinfoMatch[1].trim();
   const titleMatch = content.match(/^#profile-title:\s*(.+)$/im);
-  if (titleMatch) headers["Profile-Title"] = titleMatch[1].trim();
+  if (titleMatch) {
+    const title = titleMatch[1].trim();
+    headers["Profile-Title"] = /[^\x20-\x7e]/.test(title) ? base64HeaderText(title) : title;
+  }
   const intervalMatch = content.match(/^#profile-update-interval:\s*(.+)$/im);
   if (intervalMatch) headers["Profile-Update-Interval"] = intervalMatch[1].trim();
   const webpageMatch = content.match(/^#profile-web-page-url:\s*(.+)$/im);
   if (webpageMatch) headers["Profile-Web-Page-Url"] = webpageMatch[1].trim();
 
+  // Track HWIDs only on user-owned subscription URLs (?u=...).
+  // The same HWID remains one device when its IP changes.
+  const deviceLimit = selected ? Math.max(0, Number.parseInt(selected.deviceLimit, 10) || 0) : 0;
+  if (selected) {
+    const hwid = (request.headers.get("x-hwid") || "").trim();
+    const validHwid = /^[a-zA-Z0-9=-]{10,64}$/.test(hwid);
+    if (deviceLimit > 0) {
+      headers["X-Hwid-Active"] = "true";
+      headers["subscription-always-hwid-enable"] = "1";
+      headers["X-Hwid-Device-Limit"] = String(deviceLimit);
+      if (!validHwid) {
+        headers["X-Hwid-Not-Supported"] = "true";
+        headers["Content-Type"] = "text/plain;charset=utf-8";
+        headers["Announce"] = base64HeaderText("Устройство не передало корректный HWID. Включите HWID в настройках Happ.");
+        return new Response("Device ID is required for this subscription. Enable HWID in Happ settings.", { status: 403, headers });
+      }
+    }
+
+    // Track HWIDs even when the owner chooses an unlimited count. Tracking must not
+    // become a reason to deny access when limits are disabled.
+    if (validHwid && cfg.db && typeof cfg.db.registerSubscriptionDevice === "function") {
+      try {
+        const registration = await cfg.db.registerSubscriptionDevice({
+          subscriptionKey: makeSubscriptionDeviceKey(chatIdParam, selected.id),
+          hwid,
+          deviceRef: crypto.randomUUID().replace(/-/g, "").slice(0, 12),
+          deviceOs: request.headers.get("x-device-os") || "",
+          deviceModel: request.headers.get("x-device-model") || "",
+          userAgent,
+          ip: request.headers.get("cf-connecting-ip") || request.headers.get("x-real-ip") || "",
+          limit: deviceLimit,
+        });
+        if (deviceLimit > 0) headers["X-Hwid-Device-Count"] = String(registration.count);
+        if (!registration.allowed && deviceLimit > 0) {
+          headers["X-Hwid-Max-Devices-Reached"] = "true";
+          headers["X-Hwid-Limit"] = "true";
+          headers["Content-Type"] = "text/plain;charset=utf-8";
+          headers["Announce"] = base64HeaderText(`Достигнут лимит устройств: ${registration.count}/${deviceLimit}. Удалите старое устройство в меню подписки.`);
+          return new Response(`Device limit reached (${registration.count}/${deviceLimit}). Remove a device in the subscription settings.`, { status: 403, headers });
+        }
+      } catch (error) {
+        console.error("[Subscription] HWID registration failed:", error?.message || error);
+        if (deviceLimit > 0) {
+          headers["Content-Type"] = "text/plain;charset=utf-8";
+          headers["Announce"] = base64HeaderText("Не удалось проверить устройства. Попробуйте позже.");
+          return new Response("Device-limit check failed", { status: 503, headers });
+        }
+      }
+    } else if (deviceLimit > 0) {
+      headers["Content-Type"] = "text/plain;charset=utf-8";
+      headers["Announce"] = base64HeaderText("Временная ошибка проверки устройств. Попробуйте позже.");
+      return new Response("Device-limit storage is unavailable", { status: 503, headers });
+    }
+  }
+
+  const format = selected?.format === "json" ? "json" : "links";
+  if (format === "json") {
+    const result = buildHappJsonSubscription(content);
+    headers["Content-Type"] = "application/json;charset=utf-8";
+    headers["Content-Disposition"] = 'inline; filename="subscription.json"';
+    if (result.unsupported.length) headers["X-Subscription-Unsupported-Configs"] = String(result.unsupported.length);
+    if (result.errors.length) headers["X-Subscription-Invalid-Configs"] = String(result.errors.length);
+    if (result.unsupported.length || result.errors.length) {
+      const skipped = result.unsupported.length + result.errors.length;
+      headers["Announce"] = base64HeaderText(`${headers["Profile-Title"] || "Подписка"}: ${skipped} конфигураций не удалось представить в Happ JSON и они пропущены.`);
+    }
+    if (!result.configs.length) {
+      return new Response(JSON.stringify({ error: "No supported servers for Happ JSON subscription", unsupported: result.unsupported.map((item) => item.protocol) }), {
+        status: 422,
+        headers,
+      });
+    }
+    return new Response(result.body, { headers });
+  }
+
+  headers["Content-Type"] = "text/plain;charset=utf-8";
   return new Response(content, { headers });
 }
 
