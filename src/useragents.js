@@ -61,17 +61,20 @@ function profileUserAgent(platform, version, deviceId) {
 /**
  * Build a deterministic attempt order. Android is tried first by default,
  * then Windows. Set HAPP_PLATFORM=Windows to reverse that order.
- * HAPP_VERSION, if set, overrides the version for these two configurable
- * profiles; an empty value uses each platform's default version.
+ * HAPP_VERSION normally overrides the version for both configurable profiles.
+ * With happVersionScope="selected", it changes only the preferred profile;
+ * the fallback profile retains its platform default version.
  */
 export function getHappUserAgents(options = {}) {
   const preferred = normalizeHappPlatform(options.happPlatform ?? options.platform);
   const versionOverride = String(options.happVersion ?? options.version ?? "").trim();
+  const selectedOnly = options.happVersionScope === "selected";
   const sharedId = options.happDeviceId ?? options.deviceId ?? "";
   const order = [preferred, preferred === "Android" ? "Windows" : "Android"];
   const configured = order.map((platform) => {
     const defaults = DEFAULTS[platform];
-    const version = safeVersion(versionOverride, defaults.version);
+    const applyOverride = !selectedOnly || platform === preferred;
+    const version = applyOverride ? safeVersion(versionOverride, defaults.version) : defaults.version;
     const id = safeDeviceId(sharedId, defaults.deviceId);
     return profileUserAgent(platform, version, id);
   });

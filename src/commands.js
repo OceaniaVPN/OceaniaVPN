@@ -206,7 +206,7 @@ export async function cmdStart(cfg, chatId) {
 export async function cmdHelp(cfg, chatId) {
   await sendMessage(cfg.telegramToken, chatId,
     `ℹ️ <b>OCEANIA VPN · Справка</b>\n\n` +
-    `<b>Основное</b>\n/start · главное меню\n/create · создать подписку\n/my · активная подписка\n/subs · все подписки и переключение\n/schedule · черновики: запланировать добавление/удаление сервера\n/list · серверы + проверка\n/add · добавить сервер/подписку\n/replace N · заменить сервер\n/delete N · удалить сервер\n/export · ссылки\n/decode URL · декодировать\n/proxy · прокси-подписки\n\n` +
+    `<b>Основное</b>\n/start · главное меню\n/create · создать подписку\n/my · активная подписка\n/subs · все подписки и переключение\n/schedule · черновики: запланировать добавление/удаление сервера\n/list · серверы + проверка\n/add · добавить сервер/подписку\n/replace N · заменить сервер\n/delete N · удалить сервер\n/export · ссылки\n/decode · выбрать Android/Windows, версию и URL\n/proxy · прокси-подписки\n\n` +
     `<b>Полезные функции</b>\n/check · проверить серверы\n/best · найти самый быстрый сервер\n/clean · удалить дубли\n/analytics · аналитика профиля\n/share · поделиться подпиской\n/cancel · отменить операцию\n\n` +
     `<b>Для разработчика</b>\n/users · пользователи\n/stats · статистика\n/dev · DEV Control Center\n\n` +
     `<b>Декодер</b>\nYAML · JSON · Base64 · URI · Happ/INCY/V2RayTun redirect · вложенные ссылки\n\n` +
@@ -228,17 +228,112 @@ export async function cmdCancel(cfg, chatId) {
 export async function cmdDecode(cfg, chatId, url) {
   const inputUrl = String(url || "").trim();
   if (isTelegramProxyLink(inputUrl)) return addProxyLink(cfg, chatId, inputUrl);
+
+  let normalizedUrl = "";
+  if (inputUrl) {
+    let parsedUrl;
+    try { parsedUrl = new URL(inputUrl); } catch { parsedUrl = null; }
+    if (!parsedUrl || !["http:", "https:"].includes(parsedUrl.protocol)) {
+      return sendMessage(cfg.telegramToken, chatId, `❌ <b>Нужна корректная HTTP(S)-ссылка</b>\n\nИспользуй <code>/decode</code>, затем выбери Android или Windows.`);
+    }
+    normalizedUrl = parsedUrl.toString();
+  }
+
+  await setState(cfg, chatId, { step: "decode_platform", decodeUrl: normalizedUrl });
+  return sendMessage(cfg.telegramToken, chatId,
+    `🔍 <b>Настройка декодирования</b>\n\nСначала выбери профиль Happ, который попробовать первым. Второй профиль будет запасным.`,
+    { inline_keyboard: [
+      [{ text: "🤖 Android", callback_data: "decode_platform_android" }, { text: "🪟 Windows", callback_data: "decode_platform_windows" }],
+      [{ text: "❌ Отмена", callback_data: "decode_cancel" }]
+    ] });
+}
+
+function decodeVersionKeyboard() {
+  return { inline_keyboard: [
+    [{ text: "Оставить версию по умолчанию", callback_data: "decode_version_default" }],
+    [{ text: "❌ Отмена", callback_data: "decode_cancel" }]
+  ] };
+}
+
+async function promptDecodeVersion(cfg, chatId, state) {
+  const platform = state.decodePlatform === "Windows" ? "Windows" : "Android";
+  await setState(cfg, chatId, { ...state, step: "decode_version", decodePlatform: platform });
+  return sendMessage(cfg.telegramToken, chatId,
+    `🛠 <b>Версия Happ</b>\n\nПрофиль первым: <b>${platform}</b>.\nОтправь версию, например <code>4.8.0</code>, или нажми «Оставить версию по умолчанию».\n\nПри значении по умолчанию Android использует 4.8.0, Windows — 4.5.4.`,
+    decodeVersionKeyboard());
+}
+
+async function promptDecodeUrl(cfg, chatId, state) {
+  await setState(cfg, chatId, { ...state, step: "decode_url" });
+  return sendMessage(cfg.telegramToken, chatId,
+    `🔗 <b>Ссылка подписки</b>\n\nТеперь отправь HTTP(S)-ссылку подписки для декодирования.`,
+    { inline_keyboard: [[{ text: "❌ Отмена", callback_data: "decode_cancel" }]] });
+}
+
+async function continueDecodeWizard(cfg, chatId, state) {
+  const version = String(state.decodeVersion || "").trim();
+  const clientOverrides = {
+    happPlatform: state.decodePlatform === "Windows" ? "Windows" : "Android",
+    happVersion: version,
+    // A custom version belongs to the selected platform; fallback keeps its own default.
+    happVersionScope: "selected",
+  };
+  if (state.decodeUrl) {
+    await clearState(cfg, chatId);
+    return runDecodeWithProfile(cfg, chatId, state.decodeUrl, clientOverrides);
+  }
+  return promptDecodeUrl(cfg, chatId, { ...state, ...clientOverrides, decodeVersion: version });
+}
+
+async function handleDecodeFlowText(cfg, chatId, text, state) {
+  const value = String(text || "").trim();
+  if (state.step === "decode_platform") {
+    if (/^https?:\/\//i.test(value)) {
+      await setState(cfg, chatId, { ...state, decodeUrl: value });
+      return sendMessage(cfg.telegramToken, chatId,
+        `Выбери профиль Happ, который попробовать первым:`,
+        { inline_keyboard: [
+          [{ text: "🤖 Android", callback_data: "decode_platform_android" }, { text: "🪟 Windows", callback_data: "decode_platform_windows" }],
+          [{ text: "❌ Отмена", callback_data: "decode_cancel" }]
+        ] });
+    }
+    return sendMessage(cfg.telegramToken, chatId, `Сначала выбери Android или Windows кнопкой ниже.`, { inline_keyboard: [[{ text: "🤖 Android", callback_data: "decode_platform_android" }, { text: "🪟 Windows", callback_data: "decode_platform_windows" }], [{ text: "❌ Отмена", callback_data: "decode_cancel" }]] });
+  }
+  if (state.step === "decode_version") {
+    if (/^(?:default|keep|оставить|по умолчанию|как есть)$/i.test(value)) {
+      return continueDecodeWizard(cfg, chatId, { ...state, decodeVersion: "" });
+    }
+    if (!/^\d{1,3}(?:\.\d{1,3}){0,3}$/.test(value)) {
+      return sendMessage(cfg.telegramToken, chatId, `❌ Версия должна выглядеть как <code>4.8.0</code>. Введи версию или нажми кнопку ниже, чтобы оставить её по умолчанию.`, decodeVersionKeyboard());
+    }
+    return continueDecodeWizard(cfg, chatId, { ...state, decodeVersion: value });
+  }
+  if (state.step === "decode_url") {
+    let parsedUrl;
+    try { parsedUrl = new URL(value); } catch { parsedUrl = null; }
+    if (isTelegramProxyLink(value)) {
+      await clearState(cfg, chatId);
+      return addProxyLink(cfg, chatId, value);
+    }
+    if (!parsedUrl || !["http:", "https:"].includes(parsedUrl.protocol)) {
+      return sendMessage(cfg.telegramToken, chatId, `❌ Нужна HTTP(S)-ссылка подписки. Отправь URL ещё раз или нажми «Отмена».`, { inline_keyboard: [[{ text: "❌ Отмена", callback_data: "decode_cancel" }]] });
+    }
+    return continueDecodeWizard(cfg, chatId, { ...state, decodeUrl: parsedUrl.toString() });
+  }
+}
+
+async function runDecodeWithProfile(cfg, chatId, url, clientOverrides = {}) {
   let parsedUrl;
-  try { parsedUrl = new URL(inputUrl); } catch { parsedUrl = null; }
+  try { parsedUrl = new URL(String(url || "").trim()); } catch { parsedUrl = null; }
   if (!parsedUrl || !["http:", "https:"].includes(parsedUrl.protocol)) {
-    return sendMessage(cfg.telegramToken, chatId, `❌ <b>Нужна корректная HTTP(S)-ссылка</b>\n\n<code>/decode https://example.com/sub</code>\n\nИли отправь URL отдельным сообщением.`);
+    return sendMessage(cfg.telegramToken, chatId, `❌ <b>Нужна корректная HTTP(S)-ссылка</b>`);
   }
   url = parsedUrl.toString();
   let loadingMsgId = null;
   try {
     const loadingMsg = await sendMessage(cfg.telegramToken, chatId, `⏳ <b>Декодирую подписку</b>\n\n🌐 Источник: <code>${escapeHtml(parsedUrl.hostname)}</code>\n🥷 Happ-compatible\n🔍 Формат → извлечение → сохранение...`);
     if (loadingMsg?.result?.message_id) loadingMsgId = loadingMsg.result.message_id;
-    const result = await decodeSubscription(url, false, false, cfg.happClient || {});
+    const result = await decodeSubscription(url, false, false, { ...(cfg.happClient || {}), ...(clientOverrides || {}) });
     if (!result.ok) {
       const errorMsg = `❌ <b>Не удалось расшифровать</b>\n\n${escapeHtml(result.error || "Неизвестная ошибка")}`;
       if (loadingMsgId) await editMessage(cfg.telegramToken, chatId, loadingMsgId, errorMsg); else await sendMessage(cfg.telegramToken, chatId, errorMsg);
@@ -689,7 +784,24 @@ export async function handleCallback(cfg, cb, options = {}) {
   else if (data === "dev_diag") await cmdDevDiag(cfg, chatId, userId);
   else if (data === "dev_metrics") await cmdDevMetrics(cfg, chatId, userId);
   else if (data === "create") { await setState(cfg, chatId, { step: "title" }); await sendMessage(cfg.telegramToken, chatId, STEP_MSG.title); }
-  else if (data === "decode") await sendMessage(cfg.telegramToken, chatId, `🔍 <b>Декодер</b>\n\nОтправь URL подписки или используй:\n<code>/decode https://...</code>\n\nПоддержка: YAML · JSON · Base64 · URI · Happ/INCY/V2RayTun`, { inline_keyboard: [[{ text: "🏠 Меню", callback_data: "menu" }]] });
+  else if (data === "decode") await cmdDecode(cfg, chatId, "");
+  else if (data === "decode_platform_android" || data === "decode_platform_windows") {
+    const saved = await getState(cfg, chatId);
+    const platform = data.endsWith("windows") ? "Windows" : "Android";
+    await promptDecodeVersion(cfg, chatId, { ...(saved || {}), decodePlatform: platform, decodeUrl: String(saved?.decodeUrl || "") });
+  }
+  else if (data === "decode_version_default") {
+    const saved = await getState(cfg, chatId);
+    if (!saved || !String(saved.step || "").startsWith("decode_")) {
+      await sendMessage(cfg.telegramToken, chatId, `Настройка декодера устарела. Запусти /decode заново.`);
+    } else {
+      await continueDecodeWizard(cfg, chatId, { ...saved, decodeVersion: "" });
+    }
+  }
+  else if (data === "decode_cancel") {
+    await clearState(cfg, chatId);
+    await sendMessage(cfg.telegramToken, chatId, `❌ Настройка декодера отменена.`, { inline_keyboard: [[{ text: "🔍 Декодировать", callback_data: "decode" }], [{ text: "🏠 Меню", callback_data: "menu" }]] });
+  }
   else if (data === "my") await cmdMy(cfg, chatId);
   else if (data === "subs") await cmdSubscriptions(cfg, chatId);
   else if (data === "schedule") await cmdScheduledList(cfg, chatId);
@@ -803,8 +915,14 @@ export async function handleMessage(cfg, msg) {
 
   if (!trimmed) return;
 
-  // Subscription URLs can be decoded without reading D1 first.
-  if (/^https?:\/\//.test(trimmed)) {
+  // A URL sent during the decoder wizard is the answer to its current step;
+  // otherwise, a bare URL starts the normal decoder setup flow.
+  if (/^https?:\/\//i.test(trimmed)) {
+    let pendingState = null;
+    try { pendingState = await getState(cfg, chatId); } catch {}
+    if (pendingState?.step && String(pendingState.step).startsWith("decode_")) {
+      return handleDecodeFlowText(cfg, chatId, trimmed, pendingState);
+    }
     return cmdDecode(cfg, chatId, trimmed);
   }
 
@@ -836,6 +954,10 @@ export async function handleMessage(cfg, msg) {
 
   if (state?.step === "schedule_date" || state?.step === "schedule_uri") {
     return handleScheduleStep(cfg, chatId, trimmed, state);
+  }
+
+  if (state?.step && String(state.step).startsWith("decode_")) {
+    return handleDecodeFlowText(cfg, chatId, trimmed, state);
   }
 
   if (state?.step) {
