@@ -231,12 +231,15 @@ export async function cmdDecode(cfg, chatId, url) {
 
   let normalizedUrl = "";
   if (inputUrl) {
-    let parsedUrl;
-    try { parsedUrl = new URL(inputUrl); } catch { parsedUrl = null; }
-    if (!parsedUrl || !["http:", "https:"].includes(parsedUrl.protocol)) {
-      return sendMessage(cfg.telegramToken, chatId, `❌ <b>Нужна корректная HTTP(S)-ссылка</b>\n\nИспользуй <code>/decode</code>, затем выбери Android или Windows.`);
+    if (/^happ:\/\/crypt5\//i.test(inputUrl)) normalizedUrl = inputUrl;
+    else {
+      let parsedUrl;
+      try { parsedUrl = new URL(inputUrl); } catch { parsedUrl = null; }
+      if (!parsedUrl || !["http:", "https:"].includes(parsedUrl.protocol)) {
+        return sendMessage(cfg.telegramToken, chatId, `❌ <b>Нужна HTTP(S)-ссылка или happ://crypt5/</b>\n\nИспользуй <code>/decode</code>, затем выбери Android или Windows.`);
+      }
+      normalizedUrl = parsedUrl.toString();
     }
-    normalizedUrl = parsedUrl.toString();
   }
 
   await setState(cfg, chatId, { step: "decode_platform", decodeUrl: normalizedUrl });
@@ -266,7 +269,7 @@ async function promptDecodeVersion(cfg, chatId, state) {
 async function promptDecodeUrl(cfg, chatId, state) {
   await setState(cfg, chatId, { ...state, step: "decode_url" });
   return sendMessage(cfg.telegramToken, chatId,
-    `🔗 <b>Ссылка подписки</b>\n\nТеперь отправь HTTP(S)-ссылку подписки для декодирования.`,
+    `🔗 <b>Ссылка подписки</b>\n\nОтправь HTTP(S)-ссылку подписки или прямую ссылку <code>happ://crypt5/...</code> для декодирования.`,
     { inline_keyboard: [[{ text: "❌ Отмена", callback_data: "decode_cancel" }]] });
 }
 
@@ -288,7 +291,7 @@ async function continueDecodeWizard(cfg, chatId, state) {
 async function handleDecodeFlowText(cfg, chatId, text, state) {
   const value = String(text || "").trim();
   if (state.step === "decode_platform") {
-    if (/^https?:\/\//i.test(value)) {
+    if (/^(?:https?:\/\/|happ:\/\/crypt5\/)/i.test(value)) {
       await setState(cfg, chatId, { ...state, decodeUrl: value });
       return sendMessage(cfg.telegramToken, chatId,
         `Выбери профиль Happ, который попробовать первым:`,
@@ -309,29 +312,32 @@ async function handleDecodeFlowText(cfg, chatId, text, state) {
     return continueDecodeWizard(cfg, chatId, { ...state, decodeVersion: value });
   }
   if (state.step === "decode_url") {
+    const directCrypt5 = /^happ:\/\/crypt5\//i.test(value);
     let parsedUrl;
     try { parsedUrl = new URL(value); } catch { parsedUrl = null; }
     if (isTelegramProxyLink(value)) {
       await clearState(cfg, chatId);
       return addProxyLink(cfg, chatId, value);
     }
-    if (!parsedUrl || !["http:", "https:"].includes(parsedUrl.protocol)) {
-      return sendMessage(cfg.telegramToken, chatId, `❌ Нужна HTTP(S)-ссылка подписки. Отправь URL ещё раз или нажми «Отмена».`, { inline_keyboard: [[{ text: "❌ Отмена", callback_data: "decode_cancel" }]] });
+    if (!directCrypt5 && (!parsedUrl || !["http:", "https:"].includes(parsedUrl.protocol))) {
+      return sendMessage(cfg.telegramToken, chatId, `❌ Нужна HTTP(S)-ссылка или happ://crypt5/. Отправь URL ещё раз или нажми «Отмена».`, { inline_keyboard: [[{ text: "❌ Отмена", callback_data: "decode_cancel" }]] });
     }
-    return continueDecodeWizard(cfg, chatId, { ...state, decodeUrl: parsedUrl.toString() });
+    return continueDecodeWizard(cfg, chatId, { ...state, decodeUrl: directCrypt5 ? value : parsedUrl.toString() });
   }
 }
 
 async function runDecodeWithProfile(cfg, chatId, url, clientOverrides = {}) {
+  const rawUrl = String(url || "").trim();
+  const directCrypt5 = /^happ:\/\/crypt5\//i.test(rawUrl);
   let parsedUrl;
-  try { parsedUrl = new URL(String(url || "").trim()); } catch { parsedUrl = null; }
-  if (!parsedUrl || !["http:", "https:"].includes(parsedUrl.protocol)) {
-    return sendMessage(cfg.telegramToken, chatId, `❌ <b>Нужна корректная HTTP(S)-ссылка</b>`);
+  try { parsedUrl = new URL(rawUrl); } catch { parsedUrl = null; }
+  if (!directCrypt5 && (!parsedUrl || !["http:", "https:"].includes(parsedUrl.protocol))) {
+    return sendMessage(cfg.telegramToken, chatId, `❌ <b>Нужна HTTP(S)-ссылка или happ://crypt5/</b>`);
   }
-  url = parsedUrl.toString();
+  url = directCrypt5 ? rawUrl : parsedUrl.toString();
   let loadingMsgId = null;
   try {
-    const loadingMsg = await sendMessage(cfg.telegramToken, chatId, `⏳ <b>Декодирую подписку</b>\n\n🌐 Источник: <code>${escapeHtml(parsedUrl.hostname)}</code>\n🥷 Happ-compatible\n🔍 Формат → извлечение → сохранение...`);
+    const loadingMsg = await sendMessage(cfg.telegramToken, chatId, `⏳ <b>Декодирую подписку</b>\n\n🌐 Источник: <code>${escapeHtml(directCrypt5 ? "happ://crypt5" : parsedUrl.hostname)}</code>\n🥷 Happ-compatible\n🔍 Формат → извлечение → сохранение...`);
     if (loadingMsg?.result?.message_id) loadingMsgId = loadingMsg.result.message_id;
     const result = await decodeSubscription(url, false, false, { ...(cfg.happClient || {}), ...(clientOverrides || {}) });
     if (!result.ok) {
@@ -344,7 +350,7 @@ async function runDecodeWithProfile(cfg, chatId, url, clientOverrides = {}) {
     const timestamp = Date.now().toString(36);
     const filename = `decoded_${chatId}_${timestamp}.txt`;
     const meta = result.metadata || {};
-    const hostname = parsedUrl.hostname || "subscription";
+    const hostname = directCrypt5 ? "crypt5" : (parsedUrl.hostname || "subscription");
     const content = buildFile({ title: meta["profile-title"] || `Decoded • ${hostname}`, interval: meta["profile-update-interval"] || 4, webpage: meta["profile-web-page-url"] || url, announce: meta.announce || null }, uris);
     const res = await createOrUpdateFile(cfg, filename, content, `Decode from ${hostname}`);
     if (!(res.content || res.sha)) {

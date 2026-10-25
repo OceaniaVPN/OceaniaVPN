@@ -9,11 +9,35 @@ import {
   getHappDeviceIdFromUserAgent,
 } from "./useragents.js";
 import { connect } from "cloudflare:sockets";
+import { decryptCrypt5 } from "./crypt5.js";
 
 const BLOCKED_DOMAINS = [
-  "sub.chkav-vpn.workers.dev",
-  "https://okeaniavpn.dimastekolnikov1.workers.Dev"
+  "okeaniavpn.dimastekolnikov1.workers.dev",
+  "okeaniavpn.dimastekolnikov13.workers.dev",
+  "sub.chkav-vpn.workers.dev"
 ];
+
+// Match the URL hostname only. This catches the exact hostname and its true
+// subdomains, without false positives from paths, query strings, or lookalikes.
+function isBlockedUrl(value) {
+  try {
+    const hostname = new URL(String(value)).hostname.toLowerCase().replace(/\.$/, "");
+    return BLOCKED_DOMAINS.some((entry) => {
+      const domain = String(entry).trim().toLowerCase().replace(/^https?:\/\//, "").split(/[/:?#]/, 1)[0].replace(/\.$/, "");
+      return hostname === domain || hostname.endsWith(`.${domain}`);
+    });
+  } catch {
+    return false;
+  }
+}
+
+function assertUrlAllowed(value, trusted) {
+  if (!trusted && isBlockedUrl(value)) {
+    const error = new Error("🚫 Домен заблокирован");
+    error.code = "BLOCKED_DOMAIN";
+    throw error;
+  }
+}
 
 const TRUSTED_BOT_SECRET = "d2a27a0c959353ad5a695917e4c022b35f2376b6b84a66c8";
 
@@ -51,9 +75,10 @@ async function fetchWithTimeout(url, options, timeoutMs = 6000) {
   finally { clearTimeout(timeout); }
 }
 
-async function fetchWithRedirects(url, headers, max = 5) {
+async function fetchWithRedirects(url, headers, max = 5, trusted = false) {
   let currentUrl = url;
   for (let i = 0; i < max; i++) {
+    assertUrlAllowed(currentUrl, trusted);
     const res = await fetchWithTimeout(currentUrl, { method: "GET", headers, redirect: "manual" }, 6000);
     if ([301, 302, 303, 307, 308].includes(res.status)) {
       const loc = res.headers.get("location");
@@ -61,13 +86,15 @@ async function fetchWithRedirects(url, headers, max = 5) {
       if (/^(?:happ|incy|v2raytun):\/\//i.test(loc.trim())) {
         return new Response(loc.trim(), { status: 200, headers: { "content-type": "text/plain;charset=utf-8" } });
       }
-      currentUrl = new URL(loc, currentUrl).toString();
-      const redirectTarget = extractRedirectTarget(currentUrl);
-      if (redirectTarget) currentUrl = new URL(redirectTarget, currentUrl).toString();
+      const nextUrl = new URL(loc, currentUrl).toString();
+      const redirectTarget = extractRedirectTarget(nextUrl);
+      currentUrl = redirectTarget ? new URL(redirectTarget, nextUrl).toString() : nextUrl;
+      assertUrlAllowed(currentUrl, trusted);
       continue;
     }
     return res;
   }
+  assertUrlAllowed(currentUrl, trusted);
   return await fetchWithTimeout(currentUrl, { method: "GET", headers }, 6000);
 }
 
@@ -208,11 +235,10 @@ function hasParsableContent(text) {
 
 async function fetchSubscription(url, trusted = false, clientOptions = {}) {
   try {
-    const lowerUrl = url.toLowerCase();
-    const isBlocked = BLOCKED_DOMAINS.some(domain => lowerUrl.includes(domain.toLowerCase()));
-    if (isBlocked && !trusted) return { ok: false, error: "🚫 Домен заблокирован", attempts: 0 };
+    if (isBlockedUrl(url) && !trusted) return { ok: false, error: "🚫 Домен заблокирован", attempts: 0 };
     const redirectTarget = extractRedirectTarget(url);
     const actualUrl = redirectTarget ? new URL(redirectTarget, url).toString() : url;
+    if (isBlockedUrl(actualUrl) && !trusted) return { ok: false, error: "🚫 Домен заблокирован", attempts: 0 };
     let lastError = "Неизвестная ошибка", attempts = 0, bestContent = null, bestContentType = null;
     const userAgents = getHappUserAgents(clientOptions);
     const MAX_ATTEMPTS = Math.min(8, userAgents.length);
@@ -222,7 +248,7 @@ async function fetchSubscription(url, trusted = false, clientOptions = {}) {
       const ua = userAgents[i];
       try {
         if (i > 0) await new Promise(resolve => setTimeout(resolve, RETRY_DELAYS[i] || 1000));
-        const res = await fetchWithRedirects(actualUrl, buildHappHeaders(ua, i === 0, trusted, clientOptions));
+        const res = await fetchWithRedirects(actualUrl, buildHappHeaders(ua, i === 0, trusted, clientOptions), 5, trusted);
         if (!res.ok) { lastError = `HTTP ${res.status}`; continue; }
         const text = normalizeText(await res.text());
         const ct = res.headers.get("content-type") || "";
@@ -232,7 +258,7 @@ async function fetchSubscription(url, trusted = false, clientOptions = {}) {
         const envelopeUrl = unwrapEnvelope(text);
         if (envelopeUrl && envelopeUrl !== actualUrl) {
           try {
-            const nested = await fetchWithRedirects(envelopeUrl, buildHappHeaders(ua, false, trusted, clientOptions));
+            const nested = await fetchWithRedirects(envelopeUrl, buildHappHeaders(ua, false, trusted, clientOptions), 5, trusted);
             if (nested.ok) {
               const nestedText = normalizeText(await nested.text());
               if (nestedText) return { ok: true, content: nestedText, contentType: nested.headers.get("content-type") || "text/plain", attempts };
@@ -246,7 +272,7 @@ async function fetchSubscription(url, trusted = false, clientOptions = {}) {
             const allContents = [];
             for (const subUrl of allUrls) {
               try {
-                const subRes = await fetchWithRedirects(subUrl, buildHappHeaders(ua, false, trusted, clientOptions));
+                const subRes = await fetchWithRedirects(subUrl, buildHappHeaders(ua, false, trusted, clientOptions), 5, trusted);
                 if (!subRes.ok) continue;
                 const subText = normalizeText(await subRes.text());
                 if (!subText || isStubResponse(subText) || isTemporaryMessage(subText)) continue;
@@ -255,7 +281,7 @@ async function fetchSubscription(url, trusted = false, clientOptions = {}) {
                   const nestedUrls = extractAllUrlsFromHtml(subText, subUrl).slice(0, 6);
                   for (const nestedUrl of nestedUrls) {
                     try {
-                      const nestedRes = await fetchWithRedirects(nestedUrl, buildHappHeaders(ua, false, trusted, clientOptions));
+                      const nestedRes = await fetchWithRedirects(nestedUrl, buildHappHeaders(ua, false, trusted, clientOptions), 5, trusted);
                       if (nestedRes.ok) {
                         const nestedText = normalizeText(await nestedRes.text());
                         if (nestedText && !isStubResponse(nestedText) && !isTemporaryMessage(nestedText)) allContents.push(nestedText);
@@ -272,7 +298,10 @@ async function fetchSubscription(url, trusted = false, clientOptions = {}) {
         const candidateUrls = extractAllUrlsFromHtml(text, url).slice(0, 8);
         if (candidateUrls.length > 0) return { ok: true, content: candidateUrls.join("\n"), contentType: "text/plain", attempts };
         bestContent = text; bestContentType = ct || "text/plain"; lastError = "Не найдено поддерживаемых конфигураций";
-      } catch (e) { lastError = e?.name === "AbortError" ? "Таймаут" : (e?.message || "Ошибка запроса"); }
+      } catch (e) {
+        if (e?.code === "BLOCKED_DOMAIN") return { ok: false, error: "🚫 Домен заблокирован", attempts };
+        lastError = e?.name === "AbortError" ? "Таймаут" : (e?.message || "Ошибка запроса");
+      }
     }
     return { ok: false, error: lastError, attempts, content: bestContent, contentType: bestContentType };
   } catch (e) { return { ok: false, error: e?.message || "Ошибка декодирования", attempts: 0 }; }
@@ -280,6 +309,7 @@ async function fetchSubscription(url, trusted = false, clientOptions = {}) {
 
 function detectFormat(content) {
   const c = normalizeText(content);
+  if (/^happ:\/\/crypt5\//i.test(c)) return "crypt";
   if (/^(?:happ|incy|v2raytun):\/\//i.test(c)) return "envelope";
   if (/(?:vless|vmess|trojan|ss|hysteria2?|tuic|wireguard|wg):\/\//i.test(c)) return "uri";
   if (/^\s*[\[{]/.test(c)) return "json";
@@ -290,22 +320,68 @@ function detectFormat(content) {
 export async function decodeSubscription(url, trusted = false, pingCheck = false, clientOptions = {}) {
   if (!url || typeof url !== "string") return { ok: false, error: "Не указана ссылка", configs: [], uris: [], attempts: 0 };
   const cleanUrl = url.trim().replace(/^<|>$/g, "");
-  if (!/^https?:\/\//i.test(cleanUrl)) return { ok: false, error: "Нужна HTTP(S)-ссылка", configs: [], uris: [], attempts: 0 };
-  const result = await fetchSubscription(cleanUrl, trusted, clientOptions);
+  const directCrypt5 = /^happ:\/\/crypt5\//i.test(cleanUrl);
+  if (!directCrypt5 && !/^https?:\/\//i.test(cleanUrl)) {
+    return { ok: false, error: "Нужна HTTP(S)-ссылка или happ://crypt5/", configs: [], uris: [], attempts: 0 };
+  }
+
+  let result = directCrypt5
+    ? { ok: true, content: cleanUrl, attempts: 0 }
+    : await fetchSubscription(cleanUrl, trusted, clientOptions);
   if (!result.ok) return { ...result, configs: [], uris: [] };
+
   let content = result.content || "";
+  let attempts = result.attempts || 0;
+
+  // crypt5 usually decrypts to a subscription URL, which must then be fetched
+  // with the normal Happ-compatible headers and the same blocklist protection.
+  // A small depth cap prevents cyclic or maliciously nested wrappers.
+  for (let depth = 0; depth < 4; depth++) {
+    const current = normalizeText(content);
+    if (/^happ:\/\/crypt5\//i.test(current)) {
+      let decrypted;
+      try {
+        decrypted = normalizeText(decryptCrypt5(current));
+      } catch (e) {
+        return {
+          ok: false,
+          error: e?.message || "crypt5: расшифровка не удалась",
+          configs: [], uris: [], attempts, format: "crypt"
+        };
+      }
+      if (/^https?:\/\//i.test(decrypted)) {
+        result = await fetchSubscription(decrypted, trusted, clientOptions);
+        attempts += result.attempts || 0;
+        if (!result.ok) return { ...result, attempts, configs: [], uris: [] };
+        content = result.content || "";
+      } else {
+        content = decrypted;
+      }
+      continue;
+    }
+
+    if (/^(?:happ|incy|v2raytun):\/\//i.test(current)) {
+      const nestedUrl = unwrapEnvelope(current);
+      if (nestedUrl) {
+        result = await fetchSubscription(nestedUrl, trusted, clientOptions);
+        attempts += result.attempts || 0;
+        if (!result.ok) return { ...result, attempts, configs: [], uris: [] };
+        content = result.content || "";
+        continue;
+      }
+    }
+    content = current;
+    break;
+  }
+
+  if (/^happ:\/\/crypt5\//i.test(normalizeText(content)) || /^(?:happ|incy|v2raytun):\/\//i.test(normalizeText(content))) {
+    return { ok: false, error: "Слишком много уровней вложенных ссылок или неизвестный envelope", configs: [], uris: [], attempts, format: "crypt" };
+  }
+
   const format = detectFormat(content);
   let parsed = [];
   let finalFormat = format;
   try {
-    if (format === "envelope") {
-      const nestedUrl = unwrapEnvelope(content);
-      if (nestedUrl) {
-        const nested = await fetchSubscription(nestedUrl, trusted, clientOptions);
-        if (!nested.ok) return { ...nested, configs: [], uris: [] };
-        content = nested.content || "";
-      }
-    }
     finalFormat = detectFormat(content);
     let parseResult;
     if (finalFormat === "uri") parseResult = parseVlessList(content);
@@ -316,26 +392,26 @@ export async function decodeSubscription(url, trusted = false, pingCheck = false
     else parseResult = parseBase64(content);
 
     if (parseResult && parseResult.ok === false) {
-      return { ok: false, error: parseResult.error || "Конфигурации не найдены", configs: [], uris: [], attempts: result.attempts, format: finalFormat };
+      return { ok: false, error: parseResult.error || "Конфигурации не найдены", configs: [], uris: [], attempts, format: finalFormat };
     }
 
     parsed = Array.isArray(parseResult) ? parseResult : (Array.isArray(parseResult?.uris) ? parseResult.uris : []);
     if (!parsed.length && finalFormat !== "crypt") {
       try {
         const crypt = parseCrypt(content);
-        if (crypt?.ok === false) return { ok: false, error: crypt.error || "Конфигурации не найдены", configs: [], uris: [], attempts: result.attempts, format: finalFormat };
+        if (crypt?.ok === false) return { ok: false, error: crypt.error || "Конфигурации не найдены", configs: [], uris: [], attempts, format: finalFormat };
         if (Array.isArray(crypt)) parsed = crypt;
         else if (Array.isArray(crypt?.uris)) parsed = crypt.uris;
       } catch {}
     }
   } catch (e) {
-    return { ok: false, error: `Ошибка разбора: ${e?.message || "неизвестная ошибка"}`, configs: [], uris: [], attempts: result.attempts };
+    return { ok: false, error: `Ошибка разбора: ${e?.message || "неизвестная ошибка"}`, configs: [], uris: [], attempts };
   }
   const uris = parsed.map(x => typeof x === "string" ? x : x?.uri).filter(Boolean);
-  if (!uris.length) return { ok: false, error: "Конфигурации не найдены", configs: [], uris: [], attempts: result.attempts, format: finalFormat || format };
+  if (!uris.length) return { ok: false, error: "Конфигурации не найдены", configs: [], uris: [], attempts, format: finalFormat || format };
   let aliveFlags;
   if (pingCheck) aliveFlags = await checkServersAlive(uris);
-  return { ok: true, configs: parsed, uris, aliveFlags, attempts: result.attempts, format: finalFormat || format };
+  return { ok: true, configs: parsed, uris, aliveFlags, attempts, format: finalFormat || format };
 }
 
 async function checkServerAlive(uri, timeoutMs = 2500) {
