@@ -2,6 +2,7 @@ import { sendMessage, editMessage, answerCallback } from "./telegram.js";
 import { createOrUpdateFile, deleteFile, getFileContent, listAllUsers } from "./github.js";
 import { getState, setState, clearState, STEPS, STEP_MSG } from "./state.js";
 import { decodeSubscription, checkServersAlive } from "./decoder.js";
+import { probeHttpProxyTarget } from "./subscription-http.js";
 import { decryptCrypt5 } from "./crypt5.js";
 import { pingServers, cmdDev, cmdDevPing, cmdDevDiag, cmdDevMetrics } from "./devtools.js";
 import { buildFile } from "./build.js";
@@ -332,10 +333,10 @@ async function showDecodeProxyCountry(cfg, chatId, platform, index) {
     return sendMessage(cfg.telegramToken, chatId, "⚠️ Шаг выбора прокси устарел. Запусти /decode заново.");
   }
   await setState(cfg, chatId, { ...state, step: "decode_proxy_country", countryIndex: index, checkedProxyEndpoints: [] });
-  const rows = country.servers.map((endpoint, i) => [{
-    text: `🧪 Проверить сервер ${i + 1}`,
-    callback_data: `decode_check_one_${platform}_${index}_${i}`,
-  }]);
+  const rows = country.servers.map((endpoint, i) => [
+    { text: `🧪 Проверить сервер ${i + 1}`, callback_data: `decode_check_one_${platform}_${index}_${i}` },
+    { text: `🔬 Диагностика ${i + 1}`, callback_data: `decode_probe_${platform}_${index}_${i}` },
+  ]);
   // The country-wide check is intentionally at the bottom, as requested.
   rows.push([{ text: "🧪 Проверить все серверы страны", callback_data: `decode_check_all_${platform}_${index}` }]);
   rows.push([{ text: "⬅️ К списку стран", callback_data: `decode_proxy_on_${platform}` }]);
@@ -391,6 +392,104 @@ async function checkDecodeProxyServers(cfg, chatId, platform, countryIndex, only
     `<i>Это проверка HTTP CONNECT к example.com:443 с Cloudflare. Она подтверждает ответ прокси, но не гарантирует доступ к каждому VPN-узлу с твоего устройства.</i>` +
     (passed.length ? `\n\nВыбери один из проверенных серверов ниже.` : `\n\nРабочих ответов не найдено. Попробуй повторить проверку или выбрать другую страну.`);
   return sendMessage(cfg.telegramToken, chatId, summary, { inline_keyboard: rows });
+}
+
+async function runDecodeProxyDiagnostic(cfg, chatId, platform, countryIndex, serverIndex) {
+  const state = await decodeStateOrRestart(cfg, chatId);
+  if (!state) return;
+  const country = HTTP_PROXY_COUNTRIES[countryIndex];
+  const endpoint = country?.servers?.[serverIndex];
+  if (!country || !endpoint || !isKnownHttpProxyEndpoint(endpoint) ||
+      state.platform !== platform ||
+      !["decode_proxy_country", "decode_proxy_select"].includes(state.step) ||
+      (state.countryIndex !== undefined && state.countryIndex !== countryIndex)) {
+    return sendMessage(cfg.telegramToken, chatId, "⚠️ Диагностика устарела. Вернись к списку стран и выбери страну заново.");
+  }
+
+  let targetUrl = String(state.decodeUrl || "").trim();
+  if (/^happ:\/\/crypt5\//i.test(targetUrl)) {
+    targetUrl = String(decryptCrypt5(targetUrl) || "").trim();
+  }
+  let target;
+  try { target = new URL(targetUrl); } catch { target = null; }
+  if (!target || !["http:", "https:"].includes(target.protocol)) {
+    return sendMessage(cfg.telegramToken, chatId, "❌ Не удалось получить HTTP(S)-адрес из ссылки. Для Crypt5 сначала проверь, что ссылка расшифровывается.");
+  }
+
+  await sendMessage(cfg.telegramToken, chatId,
+    `⏳ <b>Диагностика через прокси</b>\n\n🌐 Прокси: <code>${escapeHtml(endpoint)}</code>\n🎯 Хост подписки: <code>${escapeHtml(target.hostname)}</code>\n\nПроверяю контрольный адрес и подписку с двумя наборами заголовков. Тело подписки не загружается в отчёт.`);
+
+  const common = {
+    proxyEndpoint: endpoint,
+    timeoutMs: 6000,
+    apiToken: cfg.subscriptionApiSecret || "",
+    apiOrigin: cfg.workerOrigin || "",
+    upstreamSecret: cfg.subscriptionUpstreamSecret || "",
+    upstreamOrigin: cfg.subscriptionUpstreamOrigin || "",
+  };
+  const happHeaders = platform === "android" ? {
+    "User-Agent": "Happ/4.8.0/Android",
+    "X-App-Version": "4.8.0",
+    "X-Device-Locale": "ru",
+    "X-Device-Os": "Android",
+    "X-Device-Model": "2311DRK48G",
+    "X-Ver-Os": "16",
+  } : {
+    "User-Agent": `Happ/4.5.4/Windows${cfg.happWindowsSessionId ? `/${cfg.happWindowsSessionId}` : ""}`,
+    ...(cfg.happWindowsHwid ? { "X-HWID": cfg.happWindowsHwid } : {}),
+    "X-App-Version": "4.5.4",
+    "X-Device-Locale": "RU",
+    "X-Device-Os": "Windows",
+    "X-Device-Model": "DESKTOP-AMMPFKL_x86_64",
+    "X-Ver-Os": "10_10.0.19045",
+  };
+  const genericHeaders = { "User-Agent": "OceaniaVPN-Decoder/1.0", "Accept": "*/*" };
+
+  const [control, happ, generic] = await Promise.all([
+    probeHttpProxyTarget("https://www.gstatic.com/generate_204", {
+      proxyEndpoint: endpoint, timeoutMs: 6000, headers: genericHeaders,
+    }),
+    probeHttpProxyTarget(target.toString(), { ...common, headers: happHeaders }),
+    probeHttpProxyTarget(target.toString(), { ...common, headers: genericHeaders }),
+  ]);
+
+  const render = (label, result, expectedStatus = null) => {
+    if (result.status === null || result.status === undefined) {
+      return `🔴 <b>${label}:</b> HTTP-ответа нет · ${escapeHtml(result.error || "неизвестная ошибка")} · ${result.ms} мс`;
+    }
+    const expected = expectedStatus !== null ? result.status === expectedStatus : result.status >= 200 && result.status < 300;
+    return `${expected ? "🟢" : "🟠"} <b>${label}:</b> HTTP ${result.status} · ${result.ms} мс` +
+      (expectedStatus !== null && result.status !== expectedStatus ? ` (ожидался ${expectedStatus})` : "");
+  };
+
+  let conclusion;
+  if (control.status !== 204) {
+    conclusion = "Контрольный адрес не вернул 204. Сначала нужно разбираться с доступом к HTTPS-узлу через этот прокси.";
+  } else if (happ.status === null && generic.status === null) {
+    conclusion = "Контрольный адрес доступен, но хост подписки не возвращает HTTP-заголовки через этот прокси. Возможны ограничения прокси по домену/маршруту или проблема TLS на стороне целевого хоста.";
+  } else if (happ.status === null && generic.status !== null) {
+    conclusion = "С обычными заголовками ответ есть, а с заголовками Happ — нет. Это указывает на возможную реакцию целевого сервера или промежуточного узла на заголовки Happ.";
+  } else if (happ.status !== null && generic.status === null) {
+    conclusion = "С заголовками Happ ответ есть, а с обычными — нет. Вероятно, сервер ожидает специальные заголовки.";
+  } else if (happ.status >= 400 || generic.status >= 400) {
+    conclusion = "HTTP-сервер ответил, значит соединение до HTTP-уровня доходит. Код 401/403/4xx нужно рассматривать отдельно от ошибки закрытия соединения.";
+  } else {
+    conclusion = "Оба запроса к подписке получили HTTP-ответ. Если декодирование всё ещё падает, причина может быть в формате/содержимом ответа, а не в установлении соединения.";
+  }
+
+  const report = `🔬 <b>Результат диагностики</b>\n\n` +
+    `🌐 Прокси: <code>${escapeHtml(endpoint)}</code>\n🎯 Хост подписки: <code>${escapeHtml(target.hostname)}</code>\n\n` +
+    `${render("generate_204 (ожидается 204)", control, 204)}\n` +
+    `${render("Подписка · заголовки Happ", happ)}\n` +
+    `${render("Подписка · стандартные заголовки", generic)}\n\n` +
+    `<b>Вывод:</b> ${escapeHtml(conclusion)}\n\n<i>Проверка выполняется из Cloudflare через выбранный прокси. Содержимое подписки и URL с параметрами в отчёт не выводятся.</i>`;
+  return sendMessage(cfg.telegramToken, chatId, report, {
+    inline_keyboard: [
+      [{ text: "🔁 Повторить диагностику", callback_data: `decode_probe_${platform}_${countryIndex}_${serverIndex}` }],
+      [{ text: "⬅️ К серверам страны", callback_data: `decode_country_${platform}_${countryIndex}` }],
+      [{ text: "❌ Отмена", callback_data: "decode_cancel" }],
+    ],
+  });
 }
 
 async function runDecodeWithProfile(cfg, chatId, url, selection) {
@@ -1147,6 +1246,10 @@ export async function handleCallback(cfg, cb, options = {}) {
   {
     const match = data.match(/^decode_check_one_(android|windows)_(\d+)_(\d+)$/);
     if (match) return checkDecodeProxyServers(cfg, chatId, match[1], Number(match[2]), Number(match[3]));
+  }
+  {
+    const match = data.match(/^decode_probe_(android|windows)_(\d+)_(\d+)$/);
+    if (match) return runDecodeProxyDiagnostic(cfg, chatId, match[1], Number(match[2]), Number(match[3]));
   }
   {
     const match = data.match(/^decode_use_(android|windows)_(\d+)_(\d+)$/);
