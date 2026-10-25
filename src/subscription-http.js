@@ -36,6 +36,7 @@ export async function fetchWithTimeout(url, options = {}, timeoutMs = 8000) {
  */
 
 async function fetchViaHttpProxy(url, options, proxyEndpoint, timeoutMs) {
+  const { probeOnly = false } = options || {};
   const target = new URL(url);
   const proxy = parseHttpProxyEndpoint(proxyEndpoint);
   if (!proxy) throw new Error("Некорректный HTTP-прокси");
@@ -153,6 +154,7 @@ async function fetchViaHttpProxy(url, options, proxyEndpoint, timeoutMs) {
           chunked = /\r\ntransfer-encoding:\s*[^\r\n]*chunked/i.test(headerText);
         }
       }
+      if (headerEnd >= 0 && probeOnly) break;
       if (headerEnd >= 0) {
         const bodyLength = raw.length - headerEnd;
         if (expectedLength !== null && bodyLength >= expectedLength) break;
@@ -173,6 +175,9 @@ async function fetchViaHttpProxy(url, options, proxyEndpoint, timeoutMs) {
       const index = line.indexOf(":");
       if (index > 0) responseHeaders.append(line.slice(0, index).trim(), line.slice(index + 1).trim());
     }
+    // Diagnostic probes only need the HTTP status and headers; do not read or
+    // return subscription contents (which may contain credentials/configs).
+    if (probeOnly) return new Response(null, { status, headers: responseHeaders });
     let body = raw.slice(headerEnd);
     if (expectedLength !== null) body = body.slice(0, expectedLength);
     if (chunked) {
@@ -219,6 +224,7 @@ export async function fetchWithRedirects(initialUrl, options = {}) {
     upstreamOrigin = "",
     extractRedirectTarget = () => null,
     proxyEndpoint = "",
+    probeOnly = false,
   } = options;
 
   let currentUrl = new URL(initialUrl).toString();
@@ -237,7 +243,7 @@ export async function fetchWithRedirects(initialUrl, options = {}) {
     }
 
     const response = proxyEndpoint
-      ? await fetchViaHttpProxy(currentUrl, { headers: requestHeaders }, proxyEndpoint, timeoutMs)
+      ? await fetchViaHttpProxy(currentUrl, { headers: requestHeaders, probeOnly }, proxyEndpoint, timeoutMs)
       : await fetchWithTimeout(currentUrl, {
           method: "GET",
           headers: requestHeaders,
@@ -262,4 +268,29 @@ export async function fetchWithRedirects(initialUrl, options = {}) {
   }
 
   throw new Error(`Превышен лимит перенаправлений (${maxRedirects})`);
+}
+
+/**
+ * Probe only the HTTP status/headers through the selected proxy. Never returns
+ * response bodies because subscription responses may include private configs.
+ */
+export async function probeHttpProxyTarget(url, options = {}) {
+  const started = Date.now();
+  if (!options.proxyEndpoint) {
+    return { status: null, ms: Date.now() - started, error: "Не выбран HTTP-прокси" };
+  }
+  try {
+    const response = await fetchWithRedirects(url, {
+      ...options,
+      probeOnly: true,
+      timeoutMs: Number(options.timeoutMs) || 6000,
+      maxRedirects: Number.isInteger(options.maxRedirects) ? options.maxRedirects : 5,
+    });
+    return { status: response.status, ms: Date.now() - started, error: null };
+  } catch (error) {
+    const message = String(error?.message || "Ошибка запроса")
+      .replace(/https?:\/\/[^\s"'<>]+/gi, "[URL]")
+      .slice(0, 180);
+    return { status: null, ms: Date.now() - started, error: message };
+  }
 }
