@@ -13,7 +13,6 @@ import { decryptCrypt5 } from "./crypt5.js";
 
 const BLOCKED_DOMAINS = [
   "okeaniavpn.dimastekolnikov1.workers.dev",
-  "okeaniavpn.dimastekolnikov13.workers.dev",
   "sub.chkav-vpn.workers.dev"
 ];
 
