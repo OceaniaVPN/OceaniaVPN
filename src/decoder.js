@@ -11,7 +11,8 @@ import {
 import { connect } from "cloudflare:sockets";
 
 const BLOCKED_DOMAINS = [
-  "sub.chkav-vpn.workers.dev"
+  "sub.chkav-vpn.workers.dev",
+  "https://okeaniavpn.dimastekolnikov1.workers.Dev"
 ];
 
 const TRUSTED_BOT_SECRET = "d2a27a0c959353ad5a695917e4c022b35f2376b6b84a66c8";
