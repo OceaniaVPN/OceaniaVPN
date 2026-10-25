@@ -328,20 +328,20 @@ async function handleDecodeFlowText(cfg, chatId, text, state) {
 }
 
 async function runDecodeWithProfile(cfg, chatId, url, clientOverrides = {}) {
-  const rawUrl = String(url || "").trim();
-  const directCrypt5 = /^happ:\/\/crypt5\//i.test(rawUrl);
+  const inputRawUrl = String(url || "").trim();
+  const directCrypt5 = /^happ:\/\/crypt5\//i.test(inputRawUrl);
   let parsedUrl;
-  try { parsedUrl = new URL(rawUrl); } catch { parsedUrl = null; }
+  try { parsedUrl = new URL(inputRawUrl); } catch { parsedUrl = null; }
   if (!directCrypt5 && (!parsedUrl || !["http:", "https:"].includes(parsedUrl.protocol))) {
     return sendMessage(cfg.telegramToken, chatId, `❌ <b>Нужна HTTP(S)-ссылка или happ://crypt5/</b>`);
   }
-  url = directCrypt5 ? rawUrl : parsedUrl.toString();
+  url = directCrypt5 ? inputRawUrl : parsedUrl.toString();
   let loadingMsgId = null;
   try {
     // Crypt5 hides the real subscription URL. Reveal it to the user, then
     // continue through the normal guarded HTTP(S) fetch path.
     if (directCrypt5) {
-      const revealed = String(decryptCrypt5(rawUrl) || "").trim();
+      const revealed = String(decryptCrypt5(inputRawUrl) || "").trim();
       let revealedUrl;
       try { revealedUrl = new URL(revealed); } catch { revealedUrl = null; }
       if (!revealedUrl || !["http:", "https:"].includes(revealedUrl.protocol)) {
