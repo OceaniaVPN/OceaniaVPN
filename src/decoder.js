@@ -51,7 +51,6 @@ function extractRedirectTarget(url) {
 function buildDecoderHeaders(requestOptions = {}) {
   return {
     "User-Agent": requestOptions.deviceHeaders?.["User-Agent"] || DECODER_USER_AGENT,
-    "Accept": "*/*",
     ...(requestOptions.deviceHeaders || {}),
   };
 }

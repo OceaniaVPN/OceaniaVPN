@@ -418,7 +418,7 @@ async function runDecodeWithProfile(cfg, chatId, url, selection) {
     deviceLocale: platform === "android" ? "ru" : "RU",
     osVersion: platform === "android" ? "16" : "10_10.0.19045",
     appVersion: platform === "android" ? "4.8.0" : "4.5.4",
-    userAgent: platform === "android" ? "Happ/4.8.0/Android" : "Happ/4.5.4/Windows",
+    userAgent: platform === "android" ? "Happ/4.8.0/Android" : `Happ/4.5.4/Windows${cfg.happWindowsSessionId ? `/${cfg.happWindowsSessionId}` : ""}`,
     proxyAddress: mode === "on" ? selection.endpoint.split(":")[0] : null,
     proxyPort: mode === "on" ? Number(selection.endpoint.split(":")[1]) : null,
     proxyEndpoint: mode === "on" ? selection.endpoint : null,
@@ -460,7 +460,8 @@ async function runDecodeWithProfile(cfg, chatId, url, selection) {
         "X-Device-Model": "2311DRK48G",
         "X-Ver-Os": "16",
       } : {
-        "User-Agent": "Happ/4.5.4/Windows",
+        "User-Agent": `Happ/4.5.4/Windows${cfg.happWindowsSessionId ? `/${cfg.happWindowsSessionId}` : ""}`,
+        ...(cfg.happWindowsHwid ? { "X-HWID": cfg.happWindowsHwid } : {}),
         "X-App-Version": "4.5.4",
         "X-Device-Locale": "RU",
         "X-Device-Os": "Windows",

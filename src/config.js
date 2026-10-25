@@ -27,6 +27,9 @@ export function getConfig(env) {
     subscriptionApiSecret: env.SUBSCRIPTION_API_SECRET || "",
     subscriptionUpstreamSecret: env.SUBSCRIPTION_UPSTREAM_SECRET || "",
     subscriptionUpstreamOrigin: (env.SUBSCRIPTION_UPSTREAM_ORIGIN || "").replace(/\/$/, ""),
+    // Optional decoder identity values; configure from an authorized real client log.
+    happWindowsHwid: (env.HAPP_WINDOWS_HWID || "").trim(),
+    happWindowsSessionId: (env.HAPP_WINDOWS_SESSION_ID || "").trim(),
   };
 }
 
