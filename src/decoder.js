@@ -48,10 +48,11 @@ function extractRedirectTarget(url) {
   } catch { return null; }
 }
 
-function buildDecoderHeaders() {
+function buildDecoderHeaders(requestOptions = {}) {
   return {
-    "User-Agent": DECODER_USER_AGENT,
+    "User-Agent": requestOptions.deviceHeaders?.["User-Agent"] || DECODER_USER_AGENT,
     "Accept": "*/*",
+    ...(requestOptions.deviceHeaders || {}),
   };
 }
 
@@ -156,7 +157,7 @@ async function fetchSubscription(url, trusted = false, requestOptions = {}) {
     let lastError = "Неизвестная ошибка", attempts = 0, bestContent = null, bestContentType = null;
     const MAX_ATTEMPTS = 3;
     const RETRY_DELAYS = [0, 400, 1000];
-    const headers = buildDecoderHeaders();
+    const headers = buildDecoderHeaders(requestOptions);
     const httpOptions = {
       ...requestOptions,
       headers,

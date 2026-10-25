@@ -410,6 +410,21 @@ async function runDecodeWithProfile(cfg, chatId, url, selection) {
     return sendMessage(cfg.telegramToken, chatId, `❌ <b>Нужна HTTP(S)-ссылка или happ://crypt5/</b>`);
   }
   url = directCrypt5 ? inputRawUrl : parsedUrl.toString();
+  console.log(JSON.stringify({
+    event: "decode",
+    platform,
+    deviceOs: platform === "android" ? "Android" : "Windows",
+    deviceModel: platform === "android" ? "2311DRK48G" : "DESKTOP-AMMPFKL_x86_64",
+    deviceLocale: platform === "android" ? "ru" : "RU",
+    osVersion: platform === "android" ? "16" : "10_10.0.19045",
+    appVersion: "4.8.0",
+    userAgent: platform === "android" ? "Happ/4.8.0/Android" : "Happ/4.8.0/Windows",
+    proxyIp: mode === "on" ? selection.endpoint.split(":")[0] : null,
+    proxyPort: mode === "on" ? Number(selection.endpoint.split(":")[1]) : null,
+    proxyEndpoint: mode === "on" ? selection.endpoint : null,
+    proxyEnabled: mode === "on",
+    sourceHost: directCrypt5 ? "crypt5" : parsedUrl.hostname,
+  }));
   await clearState(cfg, chatId).catch(() => {});
   let loadingMsgId = null;
   try {
@@ -436,6 +451,22 @@ async function runDecodeWithProfile(cfg, chatId, url, selection) {
       apiOrigin: cfg.workerOrigin || "",
       upstreamSecret: cfg.subscriptionUpstreamSecret || "",
       upstreamOrigin: cfg.subscriptionUpstreamOrigin || "",
+      proxyEndpoint: mode === "on" ? selection.endpoint : "",
+      deviceHeaders: platform === "android" ? {
+        "User-Agent": "Happ/4.8.0/Android",
+        "X-App-Version": "4.8.0",
+        "X-Device-Locale": "ru",
+        "X-Device-Os": "Android",
+        "X-Device-Model": "2311DRK48G",
+        "X-Ver-Os": "16",
+      } : {
+        "User-Agent": "Happ/4.8.0/Windows",
+        "X-App-Version": "4.8.0",
+        "X-Device-Locale": "RU",
+        "X-Device-Os": "Windows",
+        "X-Device-Model": "DESKTOP-AMMPFKL_x86_64",
+        "X-Ver-Os": "10_10.0.19045",
+      },
     });
     if (!result.ok) {
       const errorMsg = `❌ <b>Не удалось расшифровать</b>\n\n${escapeHtml(result.error || "Неизвестная ошибка")}`;
