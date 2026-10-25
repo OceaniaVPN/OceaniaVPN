@@ -77,50 +77,43 @@ function extractRedirectTarget(url) {
   } catch { return null; }
 }
 
-// Synthetic, stable identity for this server-side decoder. It is intentionally
-// not copied from a real client log; changing it every request would look like
-// a new device to subscription systems that track X-Hwid.
-const DECODER_HAPP_HWID = "f0d222bc-e959-4a81-919d-9d605f2f5edd";
-
 function buildHappHeaders(ua, isFirstRequest = false, trusted = false) {
-  // Mirror the application-level headers visible in the supplied real Happ
-  // Windows request. Cloudflare's outbound fetch controls transport headers
-  // (Host, Connection, compression and TLS fingerprint), so they are not forged.
-  const appVersion = ua.match(/^Happ\/(\d+(?:\.\d+)+)/i)?.[1] || "4.5.4";
-  const isWindows = /(?:\/Windows\/|\(Windows\b)/i.test(ua);
-  const isIOS = /(?:\biOS\b|iPhone|iPad)/i.test(ua);
-  const isAndroid = /Android/i.test(ua);
-  const deviceOs = isWindows ? "Windows" : isIOS ? "iOS" : isAndroid ? "Android" : "Windows";
-
-  let deviceModel = "DESKTOP-AMMPFKL_x86_64";
-  let verOs = "10_10.0.19045";
-  if (isWindows && !/\/Windows\/2610141139602$/i.test(ua)) {
-    const winMatch = ua.match(/Windows\s+([^;,)]+)(?:;\s*([^;)]+))?/i);
-    deviceModel = winMatch ? `DESKTOP-WIN_${(winMatch[2] || "x86_64").replace(/[^a-z0-9_-]/gi, "")}` : "DESKTOP-WIN_x86_64";
-    verOs = /Windows\s+11/i.test(ua) ? "11_10.0.22631" : "10_10.0.19045";
-  } else if (isAndroid) {
-    const androidMatch = ua.match(/\((Android\s+[^;)]+);\s*([^;)]+)/i);
-    deviceModel = androidMatch ? androidMatch[2].trim().replace(/[^a-z0-9 _-]/gi, "") : "Android_Device";
-    verOs = androidMatch ? androidMatch[1].replace(/\s+/g, "_") : "Android";
-  } else if (isIOS) {
-    const iosMatch = ua.match(/\((iOS\s+[^;)]+);\s*([^;)]+)/i);
-    deviceModel = iosMatch ? iosMatch[2].trim().replace(/[^a-z0-9 ()_-]/gi, "") : "Apple_Device";
-    verOs = iosMatch ? iosMatch[1].replace(/\s+/g, "_") : "iOS";
-  }
-
-  const headers = {
-    "User-Agent": ua,
-    "Accept-Language": "ru-RU,en,*",
-    "X-App-Version": appVersion,
-    "X-Device-Locale": "RU",
-    "X-Device-Os": deviceOs,
-    "X-Device-Model": deviceModel,
-    "X-Hwid": DECODER_HAPP_HWID,
-    "X-Ver-Os": verOs,
+  // Header shape captured from a real Happ Android 4.8.0 request.
+  // Never hardcode a real user's HWID from logs; generate a synthetic identifier.
+  const randomHex = (length = 16) => {
+    const bytes = new Uint8Array(Math.ceil(length / 2));
+    crypto.getRandomValues(bytes);
+    return Array.from(bytes, b => b.toString(16).padStart(2, "0")).join("").slice(0, length);
   };
-
-  // Required only for this project's trusted server-to-server cron fetches;
-  // normal client-compatible requests do not include this private header.
+  const hwid = randomHex(16);
+  const requestId = crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).substring(7)}`;
+  const isAndroidHapp = /happ\//i.test(ua) && /android/i.test(ua);
+  const headers = {
+    "User-Agent": ua, "Accept": "*/*", "Accept-Language": "ru", "Accept-Encoding": "gzip, deflate, br", "Connection": "keep-alive",
+    "X-Request-ID": requestId, "X-App-Name": "Happ",
+    ...(isFirstRequest && { "X-First-Launch": "true", "X-Install-Time": String(Date.now() - 86400000 * (Math.floor(Math.random() * 30) + 1)) }),
+  };
+  if (isAndroidHapp) {
+    // Observed real Android header names: X-Hwid, X-Device-Os, X-Device-Model,
+    // X-Device-Locale and X-Ver-Os. Values below are synthetic/generic, not copied
+    // from a particular user's device identifier.
+    headers["X-Hwid"] = hwid;
+    headers["X-Device-Locale"] = "ru";
+    headers["X-Device-Os"] = "Android";
+    headers["X-Device-Model"] = "Android Device";
+    headers["X-Ver-Os"] = "16";
+    headers["X-Happ-HWID"] = hwid;
+    headers["X-Device-ID"] = hwid;
+    headers["X-Happ-App"] = "Happ";
+    headers["X-Happ-Platform"] = "android";
+  } else if (ua.includes("Happ")) {
+    headers["X-Happ-HWID"] = hwid;
+    headers["X-Device-ID"] = hwid;
+    headers["X-Happ-App"] = "Happ";
+    headers["X-Happ-Platform"] = ua.includes("iOS") ? "ios" : "android";
+  }
+  if (ua.includes("V2raytun")) { headers["X-V2Ray-Version"] = "5.25.81"; headers["X-App-Type"] = "v2ray"; }
+  if (ua.includes("INCY")) headers["X-INCY-Version"] = "3.4.2";
   if (trusted) headers["X-Bot-Secret"] = TRUSTED_BOT_SECRET;
   return headers;
 }
