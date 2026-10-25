@@ -2,6 +2,7 @@ import { sendMessage, editMessage, answerCallback } from "./telegram.js";
 import { createOrUpdateFile, deleteFile, getFileContent, listAllUsers } from "./github.js";
 import { getState, setState, clearState, STEPS, STEP_MSG } from "./state.js";
 import { decodeSubscription, checkServersAlive } from "./decoder.js";
+import { decryptCrypt5 } from "./crypt5.js";
 import { pingServers, cmdDev, cmdDevPing, cmdDevDiag, cmdDevMetrics } from "./devtools.js";
 import { buildFile } from "./build.js";
 import { escapeHtml } from "./config.js";
@@ -337,7 +338,21 @@ async function runDecodeWithProfile(cfg, chatId, url, clientOverrides = {}) {
   url = directCrypt5 ? rawUrl : parsedUrl.toString();
   let loadingMsgId = null;
   try {
-    const loadingMsg = await sendMessage(cfg.telegramToken, chatId, `⏳ <b>Декодирую подписку</b>\n\n🌐 Источник: <code>${escapeHtml(directCrypt5 ? "happ://crypt5" : parsedUrl.hostname)}</code>\n🥷 Happ-compatible\n🔍 Формат → извлечение → сохранение...`);
+    // Crypt5 hides the real subscription URL. Reveal it to the user, then
+    // continue through the normal guarded HTTP(S) fetch path.
+    if (directCrypt5) {
+      const revealed = String(decryptCrypt5(rawUrl) || "").trim();
+      let revealedUrl;
+      try { revealedUrl = new URL(revealed); } catch { revealedUrl = null; }
+      if (!revealedUrl || !["http:", "https:"].includes(revealedUrl.protocol)) {
+        throw new Error("crypt5 расшифровался, но результат не является HTTP(S)-ссылкой");
+      }
+      url = revealedUrl.toString();
+      parsedUrl = revealedUrl;
+      await sendMessage(cfg.telegramToken, chatId,
+        `🔓 <b>Crypt5-ссылка раскрыта</b>\n\n<code>${escapeHtml(url)}</code>\n\n⏭️ <b>Продолжаю по расшифрованной ссылке…</b>`);
+    }
+    const loadingMsg = await sendMessage(cfg.telegramToken, chatId, `⏳ <b>Декодирую подписку</b>\n\n🌐 Источник: <code>${escapeHtml(directCrypt5 ? "crypt5 → " + (parsedUrl?.hostname || "subscription") : parsedUrl.hostname)}</code>\n🥷 Happ-compatible\n🔍 Формат → извлечение → сохранение...`);
     if (loadingMsg?.result?.message_id) loadingMsgId = loadingMsg.result.message_id;
     const result = await decodeSubscription(url, false, false, { ...(cfg.happClient || {}), ...(clientOverrides || {}) });
     if (!result.ok) {
