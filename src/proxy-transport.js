@@ -1,43 +1,30 @@
-import net from "node:net";
-import { connect as tlsConnect } from "node:tls";
-import { Readable, Writable } from "node:stream";
+import { connect } from "cloudflare:sockets";
 
 /**
- * Node's Workers-compatible net/tls sockets allow TLS to be layered over an
- * already-established tunnel (required for HTTPS subscriptions via an HTTPS proxy).
- * The project's compatibility date (2026-08-16) includes Node net/tls support.
+ * Cloudflare Workers native TCP socket adapter.
+ * Use cloudflare:sockets rather than node:net/node:tls: Workers do not expose
+ * arbitrary Node TCP sockets as a reliable outbound transport.
  */
-function wrapSocket(raw, opened) {
+function wrapSocket(raw) {
   return {
     raw,
-    readable: Readable.toWeb(raw),
-    writable: Writable.toWeb(raw),
-    opened,
+    readable: raw.readable,
+    writable: raw.writable,
+    opened: raw.opened,
     async close() {
-      try { raw.destroy(); } catch {}
+      try { await raw.close(); } catch {}
     },
   };
 }
 
 export function connectTcpSocket(hostname, port) {
-  const raw = net.connect({ host: hostname, port });
-  const opened = new Promise((resolve, reject) => {
-    raw.once("connect", resolve);
-    raw.once("error", reject);
-  });
-  return wrapSocket(raw, opened);
+  const raw = connect({ hostname, port }, { secureTransport: "off", allowHalfOpen: false });
+  return wrapSocket(raw);
 }
 
 export function upgradeSocketToTls(socket, hostname) {
-  const options = { socket: socket.raw, host: hostname };
-  // SNI is a DNS name; omit it for an IP literal.
-  if (!/^\d{1,3}(?:\.\d{1,3}){3}$/.test(hostname) && !hostname.includes(":")) {
-    options.servername = hostname;
-  }
-  const raw = tlsConnect(options);
-  const opened = new Promise((resolve, reject) => {
-    raw.once("secureConnect", resolve);
-    raw.once("error", reject);
-  });
-  return wrapSocket(raw, opened);
+  // startTls upgrades an already-connected Cloudflare socket (including a
+  // socket after HTTP CONNECT / SOCKS5 negotiation). It returns a new socket.
+  const raw = socket.raw.startTls({ expectedServerHostname: hostname });
+  return wrapSocket(raw);
 }
