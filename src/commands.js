@@ -590,7 +590,11 @@ async function runDecodeWithProfile(cfg, chatId, url, selection) {
     const filename = `decoded_${chatId}_${timestamp}.txt`;
     const meta = result.metadata || {};
     const hostname = directCrypt5 ? "crypt5" : (parsedUrl.hostname || "subscription");
-    const content = buildFile({ title: meta["profile-title"] || `Decoded • ${hostname}`, interval: meta["profile-update-interval"] || 4, webpage: meta["profile-web-page-url"] || url, announce: meta.announce || null }, uris);
+    // Keep the provider payload byte-for-byte at the text level. Parsing above is
+    // only for diagnostics; do not rebuild URI/JSON/YAML or rewrite server names.
+    const content = typeof result.rawContent === "string"
+      ? result.rawContent
+      : buildFile({ title: meta["profile-title"] || `Decoded • ${hostname}`, interval: meta["profile-update-interval"] || 4, webpage: meta["profile-web-page-url"] || url, announce: meta.announce || null }, uris);
     const res = await createOrUpdateFile(cfg, filename, content, `Decode from ${hostname}`);
     if (!(res.content || res.sha)) {
       const errorMsg = `❌ <b>Ошибка сохранения</b>\n\n${escapeHtml(res.message || "неизвестно")}`;
@@ -612,13 +616,25 @@ async function runDecodeWithProfile(cfg, chatId, url, selection) {
     const profileUrl = `${cfg.workerOrigin}/sub?u=${encodeURIComponent(chatId)}&f=${encodeURIComponent(filename)}&p=${encodeURIComponent(platform)}&scope=decode`;
     const stats = { vless: 0, vmess: 0, trojan: 0, ss: 0, hysteria: 0, other: 0 };
     for (const uri of uris) {
-      if (uri.startsWith("vless://")) stats.vless++;
-      else if (uri.startsWith("vmess://")) stats.vmess++;
-      else if (uri.startsWith("trojan://")) stats.trojan++;
-      else if (uri.startsWith("ss://")) stats.ss++;
-      else if (uri.startsWith("hysteria")) stats.hysteria++;
+      const protocol = (String(uri).match(/^([a-z0-9+.-]+):\/\//i)?.[1] || "").toLowerCase();
+      if (protocol === "vless") stats.vless++;
+      else if (protocol === "vmess") stats.vmess++;
+      else if (protocol === "trojan") stats.trojan++;
+      else if (protocol === "ss" || protocol === "shadowsocks") stats.ss++;
+      else if (protocol === "hysteria" || protocol === "hysteria2") stats.hysteria++;
       else stats.other++;
     }
+    const serverLabels = uris.slice(0, 12).map((uri, i) => {
+      let label = "";
+      const hashAt = String(uri).lastIndexOf("#");
+      if (hashAt >= 0) {
+        try { label = decodeURIComponent(String(uri).slice(hashAt + 1)); } catch { label = String(uri).slice(hashAt + 1); }
+      }
+      if (!label) {
+        try { label = new URL(String(uri)).hostname; } catch { label = "сервер без имени"; }
+      }
+      return `${i + 1}. ${escapeHtml(label.slice(0, 100))}`;
+    });
     const platformLabel = platform === "android" ? "Android" : "Windows";
     const proxyLabel = mode === "on" ? `${selection.country} · ${selection.endpoint}` : "Без прокси";
     const kb = { inline_keyboard: [
@@ -631,7 +647,8 @@ async function runDecodeWithProfile(cfg, chatId, url, selection) {
       `🔌 VLESS <b>${stats.vless}</b> · VMess <b>${stats.vmess}</b>\n` +
       `🔌 Trojan <b>${stats.trojan}</b> · SS <b>${stats.ss}</b>\n` +
       `🔌 Hysteria <b>${stats.hysteria}</b> · Other <b>${stats.other}</b>\n━━━━━━━━━━━━━━━━━━━━\n\n` +
-      `🖥 <b>Платформа:</b> ${platformLabel}\n🌐 <b>Прокси:</b> ${escapeHtml(proxyLabel)}\n\n` +
+      `<b>Проверенные имена (первые ${Math.min(12, uris.length)}):</b>\n${serverLabels.join("\n") || "Список имён недоступен"}\n\n` +
+      `🖥 <b>Платформа:</b> ${platformLabel}\n🌐 <b>Прокси для получения:</b> ${escapeHtml(proxyLabel)}\n\n` +
       `🔗 <b>Ссылка с выбранными настройками:</b>\n<code>${escapeHtml(profileUrl)}</code>\n\n` +
       `В результат включены только настройки, выбранные в этом запуске /decode. Старый прокси с другой попытки не применяется.`;
     if (loadingMsgId) await editMessage(cfg.telegramToken, chatId, loadingMsgId, successMsg, kb); else await sendMessage(cfg.telegramToken, chatId, successMsg, kb);
