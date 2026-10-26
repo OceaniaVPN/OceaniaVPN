@@ -41,6 +41,13 @@ async function fetchViaHttpProxy(url, options, proxyEndpoint, timeoutMs) {
   const proxy = parseHttpProxyEndpoint(proxyEndpoint);
   if (!proxy) throw new Error("Некорректный прокси или прокси отсутствует в списке");
 
+  // Cloudflare Sockets permits one startTls() upgrade per TCP socket.
+  // HTTPS proxy -> HTTPS origin needs nested TLS, which this transport cannot
+  // provide. Fail explicitly instead of returning a misleading closed-stream error.
+  if (proxy.protocol === "https" && target.protocol === "https:") {
+    throw new Error("Связка HTTPS-прокси → HTTPS-подписка требует вложенный TLS, который не поддерживается Cloudflare Sockets. Выбери SOCKS5 или обычный HTTP-прокси для HTTPS-ссылки.");
+  }
+
   let socket = connectTcpSocket(proxy.hostname, proxy.port);
   let timeoutId;
   let reader;
@@ -159,8 +166,15 @@ const readerBuffers = new WeakMap();
     }
 
     const targetPort = target.port ? Number(target.port) : target.protocol === "https:" ? 443 : 80;
-    if (proxy.protocol === "socks5") await establishSocks5(target.hostname, targetPort);
-    else await establishHttpConnect(target.hostname, targetPort);
+    if (proxy.protocol === "socks5") {
+      // SOCKS5 always establishes a TCP tunnel; HTTP is sent through it.
+      await establishSocks5(target.hostname, targetPort);
+    } else if (target.protocol === "https:") {
+      // HTTPS over an HTTP(S) proxy requires CONNECT before origin TLS.
+      await establishHttpConnect(target.hostname, targetPort);
+    }
+    // For an http:// origin behind an HTTP(S) proxy, skip CONNECT and use
+    // absolute-form in the HTTP request below, as required for forward proxies.
 
     if (target.protocol === "https:") {
       phase = proxy.protocol === "https" ? "вложенный TLS через HTTPS-прокси" : "TLS через туннель";
@@ -174,10 +188,15 @@ const readerBuffers = new WeakMap();
     requestHeaders.set("Connection", "close");
     requestHeaders.set("Accept-Encoding", "identity");
     const path = `${target.pathname || "/"}${target.search}`;
-    const requestText = `GET ${path} HTTP/1.1\r\n` +
+    const requestTarget = target.protocol === "http:" && proxy.protocol !== "socks5"
+      ? target.toString()
+      : path;
+    phase = "отправка HTTP-запроса целевому серверу";
+    const requestText = `GET ${requestTarget} HTTP/1.1\r\n` +
       [...requestHeaders.entries()].map(([k, v]) => `${k}: ${v}\r\n`).join("") + "\r\n";
 
     await write(requestText);
+    phase = "ожидание HTTP-ответа целевого сервера";
     reader = socket.readable.getReader();
     const chunks = [];
     let total = 0;
@@ -215,8 +234,8 @@ const readerBuffers = new WeakMap();
     if (headerEnd < 0) {
       const receivedBytes = raw.length;
       throw new Error(receivedBytes
-        ? `Соединение закрыто до получения HTTP-заголовков (этап: ${phase}, получено байт: ${receivedBytes})`
-        : `Прокси/сервер закрыл соединение без HTTP-ответа (этап: ${phase}). Проверьте доступность и совместимость прокси`);
+        ? `Соединение закрыто до получения HTTP-заголовков от ${target.hostname} (этап: ${phase}, получено байт: ${receivedBytes})`
+        : `Туннель через прокси установлен, но ${target.hostname} закрыл соединение без HTTP-ответа (этап: ${phase}). Проверь адрес подписки и ограничения прокси по целевому хосту`);
     }
     const headerText = new TextDecoder().decode(raw.slice(0, headerEnd));
     const lines = headerText.split("\r\n");
