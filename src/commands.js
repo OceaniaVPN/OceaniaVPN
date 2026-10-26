@@ -427,14 +427,7 @@ async function runDecodeProxyDiagnostic(cfg, chatId, platform, countryIndex, ser
     upstreamSecret: cfg.subscriptionUpstreamSecret || "",
     upstreamOrigin: cfg.subscriptionUpstreamOrigin || "",
   };
-  const happHeaders = platform === "android" ? {
-    "User-Agent": "Happ/4.8.0/Android",
-    "X-App-Version": "4.8.0",
-    "X-Device-Locale": "ru",
-    "X-Device-Os": "Android",
-    "X-Device-Model": "2311DRK48G",
-    "X-Ver-Os": "16",
-  } : buildWindowsHappHeaders(cfg);
+  const happHeaders = platform === "android" ? buildAndroidHappHeaders(cfg) : buildWindowsHappHeaders(cfg);
   const genericHeaders = {
     "User-Agent": "OceaniaVPN-Decoder/1.0",
     "Accept": "text/plain, application/json;q=0.9",
@@ -487,15 +480,31 @@ async function runDecodeProxyDiagnostic(cfg, chatId, platform, countryIndex, ser
   });
 }
 
+function buildAndroidHappHeaders(cfg = {}) {
+  const sessionId = String(cfg.happAndroidSessionId || "").trim();
+  const hwid = String(cfg.happAndroidHwid || "").trim();
+  return {
+    "User-Agent": `Happ/4.8.0/Android${sessionId ? `/${sessionId}` : ""}`,
+    "Accept": "text/plain, application/json;q=0.9",
+    "Accept-Language": "ru-RU,en,*",
+    ...(hwid ? { "X-HWID": hwid } : {}),
+    "X-App-Version": "4.8.0",
+    "X-Device-Locale": "ru",
+    "X-Device-Os": "Android",
+    "X-Device-Model": "2311DRK48G",
+    "X-Ver-Os": "16",
+  };
+}
+
 function buildWindowsHappHeaders(cfg = {}) {
   const sessionId = String(cfg.happWindowsSessionId || Date.now());
   const hwid = String(cfg.happWindowsHwid || "").trim();
   return {
-    "User-Agent": `Happ/4.5.4/Windows/${sessionId}`,
+    "User-Agent": `Happ/4.8.0/Windows/${sessionId}`,
     "Accept": "text/plain, application/json;q=0.9",
     "Accept-Language": "ru-RU,en,*",
     ...(hwid ? { "X-HWID": hwid } : {}),
-    "X-App-Version": "4.5.4",
+    "X-App-Version": "4.8.0",
     "X-Device-Locale": "RU",
     "X-Device-Os": "Windows",
     "X-Device-Model": "DESKTOP-AMMPFKL_x86_64",
