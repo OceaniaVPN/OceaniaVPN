@@ -98,13 +98,21 @@ function parseVless(uri) {
   const params = url.searchParams;
   const id = safeDecode(url.username);
   if (!id || !url.hostname || !url.port) throw new Error("VLESS URI has no UUID, host or port");
-  const user = { id, encryption: params.get("encryption") || "none" };
+
+  // Use the current simplified Xray VLESS outbound schema instead of legacy settings.vnext.
+  const settings = {
+    address: url.hostname,
+    port: Number(url.port),
+    id,
+    encryption: params.get("encryption") || "none",
+  };
   const flow = params.get("flow");
-  if (flow) user.flow = flow;
+  if (flow) settings.flow = flow;
+
   const outbound = {
     tag: "proxy",
     protocol: "vless",
-    settings: { vnext: [{ address: url.hostname, port: Number(url.port), users: [user] }] },
+    settings,
     streamSettings: {
       ...transportSettings(params.get("type") || "tcp", params, params.get("host") || ""),
       ...tlsSettings(params, url.hostname),
