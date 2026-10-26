@@ -90,6 +90,19 @@ function withTimeout(promise, ms = TIMEOUT_MS) {
   ]).finally(() => clearTimeout(timer));
 }
 
+async function readWithTimeout(reader, ms = TIMEOUT_MS) {
+  try {
+    return await withTimeout(reader.read(), ms);
+  } catch (error) {
+    // Promise.race does not cancel the pending reader.read() when its timer wins.
+    // Cancel the stream read first so finally blocks can safely release the lock.
+    if (error?.message === "timeout") {
+      try { await reader.cancel(error); } catch {}
+    }
+    throw error;
+  }
+}
+
 async function writeBytes(socket, bytes) {
   const writer = socket.writable.getWriter();
   try { await writer.write(bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes)); }
@@ -101,7 +114,7 @@ const readerBuffers = new WeakMap();
 async function readExact(reader, length) {
   let pending = readerBuffers.get(reader) || new Uint8Array(0);
   while (pending.length < length) {
-    const part = await withTimeout(reader.read());
+    const part = await readWithTimeout(reader);
     if (part.done) throw new Error("Соединение закрыто во время согласования протокола");
     const joined = new Uint8Array(pending.length + part.value.length);
     joined.set(pending, 0);
@@ -153,7 +166,7 @@ async function httpConnectTunnel(socket, hostname, port) {
   try {
     let response = "";
     while (!response.includes("\r\n\r\n") && response.length < 8192) {
-      const part = await withTimeout(reader.read());
+      const part = await readWithTimeout(reader);
       if (part.done) break;
       response += new TextDecoder().decode(part.value, { stream: true });
     }
