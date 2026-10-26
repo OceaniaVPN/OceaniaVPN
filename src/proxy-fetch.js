@@ -10,11 +10,19 @@ import { connect } from "cloudflare:sockets";
  */
 export async function fetchThroughProxy(url, proxyUrl, options = {}) {
   const timeoutMs = Math.max(1000, Number(options.timeoutMs) || 8000);
+  const requestUrl = new URL(url);
+  // A workers.dev subscription endpoint supports HTTP/2. When routed through
+  // the explicit proxy tunnel, offer only h2 for that destination so ALPN
+  // cannot silently settle on HTTP/1.1. Other origins keep normal negotiation.
+  const requireHttp2 = requestUrl.protocol === "https:" &&
+    requestUrl.hostname.toLowerCase().endsWith(".workers.dev");
+
   const client = new Client({
     connect,
     proxy: proxyUrl,
     forceTunnel: true,
     http2: true,
+    ...(requireHttp2 ? { tls: { alpn: ["h2"] } } : {}),
     timeouts: {
       connectMs: timeoutMs,
       handshakeMs: timeoutMs,
@@ -30,6 +38,18 @@ export async function fetchThroughProxy(url, proxyUrl, options = {}) {
       headers: options.headers || {},
       redirect: "manual",
     });
+
+    const transport = response.tunnelfetch || {};
+    console.log(JSON.stringify({
+      event: "proxy_fetch_transport",
+      host: requestUrl.hostname,
+      httpVersion: transport.httpVersion || null,
+      tlsMetadataAvailable: Boolean(transport.tls),
+      http2Required: requireHttp2,
+    }));
+    if (requireHttp2 && transport.httpVersion && String(transport.httpVersion) !== "2") {
+      throw new Error(`HTTP/2 was required for workers.dev but negotiated HTTP/${transport.httpVersion}`);
+    }
 
     if (options.probeOnly) {
       return new Response(null, {
