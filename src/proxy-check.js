@@ -21,7 +21,7 @@ function parseEndpointShape(endpoint) {
   }
   const protocol = url.protocol.toLowerCase().replace(":", "");
   if (!["http", "https", "socks5"].includes(protocol)) return null;
-  if (url.username || url.password || url.pathname !== "/" || url.search || url.hash) return null;
+  if (url.username || url.password || (url.pathname && url.pathname !== "/") || url.search || url.hash) return null;
   const hostname = url.hostname;
   const port = Number(url.port);
   if (!hostname || !Number.isInteger(port) || port < 1 || port > 65535) return null;
