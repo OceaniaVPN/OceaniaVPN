@@ -22,7 +22,7 @@ const AUTO_UPDATE_CONFIG = {
   webpage: "https://t.me/free_vpn123456",
   announce: "Steklo vpn besplatno",
   userinfo: "upload=0; download=12884901888; total=536870912000; expire=0",
-  doRename: true,
+  doRename: false,
   sources: [
     "https://accargame.cfd/sub/wQu5TeYdOD9YMcp2",
     "https://gitlab.com/igareck/vpn-configs-for-russia/-/raw/main/Vless-Reality-White-Lists-Rus-Mobile.txt?ref_type=heads",
@@ -44,7 +44,7 @@ const SECONDARY_CONFIG = {
   webpage: "https://t.me/free_vpn123456",
   announce: "OkeaniaVPN Auto Update",
   userinfo: "upload=0; download=0; total=536870912000; expire=0",
-  doRename: true
+  doRename: false
 };
 
 // ==========================================
@@ -318,7 +318,11 @@ async function serveSubscription(request, cfg) {
   // An explicit platform profile with a selected proxy is returned as Happ JSON
   // so Xray can chain the VPN-node connection through the chosen HTTP proxy.
   // Other profiles preserve their saved format.
-  const format = httpProxyEndpoint ? "json" : (selected?.format === "json" ? "json" : "links");
+  // Decoded profiles are immutable source payloads. A selected fetch proxy must
+  // not trigger URI→JSON conversion or silently drop protocols (e.g. Hysteria).
+  const format = isOwnedDecodedProfile
+    ? "links"
+    : (httpProxyEndpoint ? "json" : (selected?.format === "json" ? "json" : "links"));
   if (format === "json") {
     const result = buildHappJsonSubscription(content, httpProxyEndpoint);
     headers["Content-Type"] = "application/json;charset=utf-8";
@@ -504,7 +508,10 @@ async function runManualUpdate(env, reportChatId) {
         announce: SECONDARY_CONFIG.announce,
         userinfo: SECONDARY_CONFIG.userinfo
       };
-      const content2 = buildFile(profileMetadata2, finalUris2);
+      // Secondary subscription is a single source: preserve its original body.
+      const content2 = typeof result2.rawContent === "string" && result2.rawContent.length
+        ? result2.rawContent
+        : buildFile(profileMetadata2, finalUris2);
       const res2 = await createOrUpdateFile(cfg, SECONDARY_CONFIG.targetFilename, content2, "Manual secondary update: " + finalUris2.length + " nodes");
       if (res2.content || res2.sha) {
         await sendReport(`✅ <b>Okeania конфиг обновлен!</b>\n\n📡 Серверов: <code>${finalUris2.length}</code>`);
