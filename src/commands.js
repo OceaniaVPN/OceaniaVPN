@@ -389,7 +389,7 @@ async function checkDecodeProxyServers(cfg, chatId, platform, countryIndex, only
   rows.push([{ text: "❌ Отмена", callback_data: "decode_cancel" }]);
   const summary = `📋 <b>Результат проверки: ${escapeHtml(country.name)}</b>\n\n` +
     `Работают: <b>${passedNow.length}/${results.length}</b> в этой проверке.\n\n${lines.join("\n\n")}\n\n` +
-    `<i>Проверка устанавливает туннель к example.com:443 через выбранный протокол. Она выполняется из Cloudflare и не гарантирует доступность каждого адреса с твоего устройства.</i>` +
+    `<i>Проверка проходит TCP, согласование прокси, TLS и получает HTTP-ответ от example.com. Она выполняется из Cloudflare и не гарантирует доступность каждого адреса с твоего устройства.</i>` +
     (passed.length ? `\n\nВыбери один из проверенных серверов ниже.` : `\n\nРабочих ответов не найдено. Попробуй повторить проверку или выбрать другую страну.`);
   return sendMessage(cfg.telegramToken, chatId, summary, { inline_keyboard: rows });
 }
