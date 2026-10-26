@@ -213,7 +213,8 @@ export async function checkProxyTcp(endpoint) {
   const hostname = proxy.hostname.includes(":") && !proxy.hostname.startsWith("[")
     ? `[${proxy.hostname}]`
     : proxy.hostname;
-  const proxyUrl = `${proxy.protocol}://${hostname}:${proxy.port}`;
+  const proxyScheme = proxy.protocol === "socks5" ? "socks5h" : proxy.protocol;
+  const proxyUrl = `${proxyScheme}://${hostname}:${proxy.port}`;
 
   try {
     const response = await fetchThroughProxy("https://example.com/", proxyUrl, {
