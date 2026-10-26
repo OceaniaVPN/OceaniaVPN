@@ -62,7 +62,8 @@ function transportSettings(network, params, hostFallback = "") {
     kcpSettings.header = { type: headerType };
     return { network: "kcp", kcpSettings };
   }
-  return { network: "tcp", tcpSettings: { header: { type: "none" } } };
+  const headerType = params.get("headerType") || params.get("header-type") || "none";
+  return { network: "tcp", tcpSettings: { header: { type: headerType } } };
 }
 
 function tlsSettings(params, host, forced = "") {
