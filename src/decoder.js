@@ -20,6 +20,20 @@ function normalizeText(text) {
     .trim();
 }
 
+function stripLeadingSubscriptionHeaders(text) {
+  const lines = String(text || "").replace(/^\uFEFF/, "").split(/\r?\n/);
+  let firstConfigLine = 0;
+  while (firstConfigLine < lines.length) {
+    const line = lines[firstConfigLine].trim();
+    if (!line || line.startsWith("#")) {
+      firstConfigLine++;
+      continue;
+    }
+    break;
+  }
+  return lines.slice(firstConfigLine).join("\n").trim();
+}
+
 function isStubResponse(text) {
   const trimmed = normalizeText(text);
   if (!trimmed) return true;
@@ -239,7 +253,10 @@ export async function decodeSubscription(url, trusted = false, pingCheck = false
   if (!/^https?:\/\//i.test(cleanUrl)) return { ok: false, error: "Нужна HTTP(S)-ссылка", configs: [], uris: [], attempts: 0 };
   const result = await fetchSubscription(cleanUrl, trusted, requestOptions);
   if (!result.ok) return { ...result, configs: [], uris: [] };
-  let content = result.content || "";
+  // Subscription providers often prepend metadata comments (#name: ..., descriptions).
+  // Strip only leading comment/blank lines before format detection; keep inline URI fragments
+  // such as #Germany intact, and never modify the actual JSON/YAML/URI payload.
+  let content = stripLeadingSubscriptionHeaders(result.content || "");
   const format = detectFormat(content);
   let parsed = [];
   let finalFormat = format;
