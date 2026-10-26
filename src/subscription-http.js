@@ -1,5 +1,5 @@
-import { connect } from "cloudflare:sockets";
 import { parseHttpProxyEndpoint } from "./proxy-check.js";
+import { connectTcpSocket, upgradeSocketToTls } from "./proxy-transport.js";
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 const APP_SCHEME_PATTERN = /^(?:happ|incy|v2raytun):\/\//i;
 
