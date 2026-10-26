@@ -434,16 +434,11 @@ async function runDecodeProxyDiagnostic(cfg, chatId, platform, countryIndex, ser
     "X-Device-Os": "Android",
     "X-Device-Model": "2311DRK48G",
     "X-Ver-Os": "16",
-  } : {
-    "User-Agent": `Happ/4.5.4/Windows${cfg.happWindowsSessionId ? `/${cfg.happWindowsSessionId}` : ""}`,
-    ...(cfg.happWindowsHwid ? { "X-HWID": cfg.happWindowsHwid } : {}),
-    "X-App-Version": "4.5.4",
-    "X-Device-Locale": "RU",
-    "X-Device-Os": "Windows",
-    "X-Device-Model": "DESKTOP-AMMPFKL_x86_64",
-    "X-Ver-Os": "10_10.0.19045",
+  } : buildWindowsHappHeaders(cfg);
+  const genericHeaders = {
+    "User-Agent": "OceaniaVPN-Decoder/1.0",
+    "Accept": "text/plain, application/json;q=0.9",
   };
-  const genericHeaders = { "User-Agent": "OceaniaVPN-Decoder/1.0", "Accept": "*/*" };
 
   const [control, happ, generic] = await Promise.all([
     probeHttpProxyTarget("https://www.gstatic.com/generate_204", {
@@ -490,6 +485,21 @@ async function runDecodeProxyDiagnostic(cfg, chatId, platform, countryIndex, ser
       [{ text: "❌ Отмена", callback_data: "decode_cancel" }],
     ],
   });
+}
+
+function buildWindowsHappHeaders(cfg = {}) {
+  const sessionId = String(cfg.happWindowsSessionId || Date.now());
+  const hwid = String(cfg.happWindowsHwid || "").trim();
+  return {
+    "User-Agent": `Happ/4.5.4/Windows/${sessionId}`,
+    "Accept": "text/plain, application/json;q=0.9",
+    ...(hwid ? { "X-HWID": hwid } : {}),
+    "X-App-Version": "4.5.4",
+    "X-Device-Locale": "RU",
+    "X-Device-Os": "Windows",
+    "X-Device-Model": "DESKTOP-AMMPFKL_x86_64",
+    "X-Ver-Os": "10_10.0.19045",
+  };
 }
 
 async function runDecodeWithProfile(cfg, chatId, url, selection) {
@@ -560,15 +570,7 @@ async function runDecodeWithProfile(cfg, chatId, url, selection) {
         "X-Device-Os": "Android",
         "X-Device-Model": "2311DRK48G",
         "X-Ver-Os": "16",
-      } : {
-        "User-Agent": `Happ/4.5.4/Windows${cfg.happWindowsSessionId ? `/${cfg.happWindowsSessionId}` : ""}`,
-        ...(cfg.happWindowsHwid ? { "X-HWID": cfg.happWindowsHwid } : {}),
-        "X-App-Version": "4.5.4",
-        "X-Device-Locale": "RU",
-        "X-Device-Os": "Windows",
-        "X-Device-Model": "DESKTOP-AMMPFKL_x86_64",
-        "X-Ver-Os": "10_10.0.19045",
-      },
+      } : buildWindowsHappHeaders(cfg),
     });
     if (!result.ok) {
       const errorMsg = `❌ <b>Не удалось расшифровать</b>\n\n${escapeHtml(result.error || "Неизвестная ошибка")}`;
