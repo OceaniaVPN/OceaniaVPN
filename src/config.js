@@ -11,7 +11,7 @@ export function getConfig(env) {
     botRepoName: env.BOT_REPO_NAME || env.CONFIG_REPO_OWNER || "OceaniaVPN",
     configsFolder: env.CONFIGS_FOLDER || "configs",
     branch: env.BRANCH || "main",
-    proxyListUrl: (env.PROXY_LIST_URL || "https://raw.githubusercontent.com/OceaniaVPN/OceaniaVPN/main/src/proxy-list.txt").trim(),
+    proxyListUrl: (env.PROXY_LIST_URL || "https://api.github.com/repos/OceaniaVPN/OceaniaVPN/contents/src/proxy-list.txt?ref=main").trim(),
     db: d1,
     // D1 is the primary state store. BOT_STATE remains available only during
     // the one-time KV -> D1 migration window.
