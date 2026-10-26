@@ -141,13 +141,22 @@ export function xrayToUri(ob) {
     if (ss.realitySettings) {
       params.set("security", "reality");
       if (ss.realitySettings.serverName) params.set("sni", ss.realitySettings.serverName);
-      if (ss.realitySettings.publicKey) params.set("pbk", ss.realitySettings.publicKey);
+      const realityPublicKey = ss.realitySettings.publicKey || ss.realitySettings.password;
+      if (realityPublicKey) params.set("pbk", realityPublicKey);
       if (ss.realitySettings.shortId) params.set("sid", ss.realitySettings.shortId);
       if (ss.realitySettings.fingerprint) params.set("fp", ss.realitySettings.fingerprint);
       if (ss.realitySettings.spiderX) params.set("spx", ss.realitySettings.spiderX);
     }
+    if (ss.network === "tcp" || ss.network === "raw") {
+      const headerType = ss.tcpSettings?.header?.type;
+      if (headerType && headerType !== "none") params.set("headerType", headerType);
+    }
     if (ss.tlsSettings?.serverName) params.set("sni", ss.tlsSettings.serverName);
     if (ss.tlsSettings?.fingerprint) params.set("fp", ss.tlsSettings.fingerprint);
+    if (ss.tlsSettings?.allowInsecure) params.set("allowInsecure", "1");
+    if (Array.isArray(ss.tlsSettings?.alpn) && ss.tlsSettings.alpn.length) {
+      params.set("alpn", ss.tlsSettings.alpn.join(","));
+    }
     const flow = usr.flow || settings.flow;
     if (flow) params.set("flow", flow);
     const q = params.toString();
