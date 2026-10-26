@@ -303,67 +303,120 @@ export function parseYaml(content) {
   }
 }
 
+function isNonServerOutbound(ob) {
+  const protocol = String(ob?.type || ob?.protocol || "").toLowerCase();
+  const tag = String(ob?.tag || ob?.name || "").trim().toLowerCase();
+  const nonServerProtocols = new Set([
+    "direct", "freedom", "block", "blackhole", "dns", "selector",
+    "urltest", "fallback", "balancer", "loopback", "dns-out",
+  ]);
+  if (nonServerProtocols.has(protocol)) return true;
+  if (/^(?:direct|block|dns|selector|urltest|fallback|balancer|load[-_ ]?balance)(?:[-_ ]|$)/i.test(tag)) return true;
+  if (/(?:балансировщик|балансер|balancer|load[-_ ]?balanc|urltest|selector|fallback)/i.test(tag)) return true;
+  // These are internal labels used by our own generated subscription JSON,
+  // not standalone user-facing nodes.
+  if (/^proxy-\d+$/i.test(tag)) return true;
+  return false;
+}
+
+function canonicalUriKey(uri) {
+  const value = String(uri || "").trim();
+  if (/^vmess:\/\//i.test(value)) {
+    try {
+      const payload = value.slice(value.indexOf("://") + 3).split("#")[0];
+      const normalized = payload.replace(/-/g, "+").replace(/_/g, "/");
+      const decoded = atob(normalized + "=".repeat((4 - normalized.length % 4) % 4));
+      const data = JSON.parse(decoded);
+      delete data.ps;
+      delete data.remark;
+      delete data.name;
+      return "vmess://" + JSON.stringify(data);
+    } catch {}
+  }
+  try {
+    const url = new URL(value);
+    url.hash = "";
+    url.hostname = url.hostname.toLowerCase();
+    url.searchParams.sort();
+    return url.toString();
+  } catch {
+    return value.replace(/#.*$/, "");
+  }
+}
+
 export function parseJson(content) {
   try {
     const data = JSON.parse(content);
     const uris = [];
 
     const tryConvert = (ob) => {
+      if (isNonServerOutbound(ob)) return null;
       let uri = singboxToUri(ob);
       if (!uri) uri = xrayToUri(ob);
       if (!uri) uri = proxyToUri(ob);
       return uri;
     };
 
-    // 1. { outbounds: [...] } — Одиночный Xray / Sing-box конфиг
-    if (Array.isArray(data?.outbounds)) {
-      const skip = ["direct", "block", "dns", "selector", "urltest", "fallback"];
-      for (const ob of data.outbounds) {
-        if (skip.includes(ob?.type) || skip.includes(ob?.protocol)) continue;
+    const collectOutbounds = (outbounds) => {
+      for (const ob of outbounds) {
+        if (isNonServerOutbound(ob)) continue;
         const uri = tryConvert(ob);
         if (uri) uris.push(uri);
       }
-    }
+    };
+
+    // 1. { outbounds: [...] } — одиночный Xray / Sing-box конфиг.
+    if (Array.isArray(data?.outbounds)) collectOutbounds(data.outbounds);
 
     // 2. Hiddify: { configs: [{ url }] }
     if (Array.isArray(data?.configs)) {
       for (const c of data.configs) {
-        if (typeof c === "string") uris.push(c);
-        else if (c?.url) uris.push(c.url);
-        else if (c?.config) uris.push(c.config);
+        if (typeof c === "string" && c.includes("://")) uris.push(c.trim());
+        else if (typeof c?.url === "string" && c.url.includes("://")) uris.push(c.url.trim());
+        else if (typeof c?.config === "string" && c.config.includes("://")) uris.push(c.config.trim());
+        else if (Array.isArray(c?.outbounds)) collectOutbounds(c.outbounds);
       }
     }
 
-    // 3. Массив строк или объектов (включая массив полных конфигов Hiddify/Xray)
+    // 3. Массив строк или объектов (включая массив полных конфигов Xray/Sing-box).
     if (Array.isArray(data)) {
       for (const item of data) {
         if (typeof item === "string" && item.includes("://")) {
-          uris.push(item);
-        } else if (item?.type) {
+          uris.push(item.trim());
+        } else if (item?.type || item?.protocol) {
           const uri = tryConvert(item);
           if (uri) uris.push(uri);
         } else if (Array.isArray(item?.outbounds)) {
-          const skip = ["direct", "block", "dns", "selector", "urltest", "fallback"];
-          for (const ob of item.outbounds) {
-            if (skip.includes(ob?.type) || skip.includes(ob?.protocol)) continue;
-            const uri = tryConvert(ob);
+          collectOutbounds(item.outbounds);
+        } else if (Array.isArray(item?.proxies)) {
+          for (const proxy of item.proxies) {
+            const uri = proxyToUri(proxy);
             if (uri) uris.push(uri);
           }
         }
       }
     }
 
-    // 4. Один объект (без outbounds на верхнем уровне, но с type)
-    if (data?.type && !Array.isArray(data)) {
+    // 4. Один объект без outbounds, но с type/protocol.
+    if ((data?.type || data?.protocol) && !Array.isArray(data)) {
       const uri = tryConvert(data);
       if (uri) uris.push(uri);
     }
 
-    if (uris.length === 0) {
-      return { ok: false, error: "JSON не содержит распознаваемых конфигов" };
+    // Deduplicate by connection parameters, not display remark. JSON arrays often
+    // repeat the same node with different tags/names; keep the first readable name.
+    const seen = new Set();
+    const uniqueUris = uris.filter((uri) => {
+      const key = canonicalUriKey(uri);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+
+    if (uniqueUris.length === 0) {
+      return { ok: false, error: "JSON не содержит распознаваемых серверных конфигов после фильтрации балансировщиков и дублей" };
     }
 
-    const uniqueUris = [...new Set(uris)];
     return { ok: true, uris: uniqueUris, metadata: {} };
   } catch (e) {
     return { ok: false, error: `JSON: ${e.message}` };
