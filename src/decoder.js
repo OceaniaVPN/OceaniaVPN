@@ -36,33 +36,10 @@ function stripLeadingSubscriptionHeaders(text) {
   return lines.slice(firstConfigLine).join(newline);
 }
 
-function decodeBase64Text(text) {
-  const compact = String(text || "").replace(/\s/g, "").replace(/-/g, "+").replace(/_/g, "/");
-  if (compact.length < 20 || !/^[A-Za-z0-9+/]+={0,2}$/.test(compact)) return null;
-  const binary = safeBase64(compact);
-  if (binary === null) return null;
-  try {
-    const bytes = Uint8Array.from(binary, (ch) => ch.charCodeAt(0));
-    const decoded = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
-    if (!decoded || decoded.includes("\u0000")) return null;
-    let controls = 0;
-    for (const ch of decoded) {
-      const code = ch.charCodeAt(0);
-      if (code < 9 || (code > 13 && code < 32)) controls++;
-    }
-    if (controls > Math.max(1, Math.floor(decoded.length * 0.01))) return null;
-    return decoded;
-  } catch {
-    return null;
-  }
-}
-
-// Убираем только ведущие метаданные подписки. Само содержимое узлов не пересобирается.
 function cleanSubscriptionPayload(text) {
-  let payload = stripLeadingSubscriptionHeaders(text);
-  const decoded = decodeBase64Text(payload);
-  if (decoded !== null) payload = stripLeadingSubscriptionHeaders(decoded);
-  return payload;
+  // The source body is preserved verbatim except for leading metadata/comment lines.
+  // Do not decode base64 or rebuild formats here; Happ receives what remained after headers.
+  return stripLeadingSubscriptionHeaders(text);
 }
 function isStubResponse(text) {
   const trimmed = normalizeText(text);
