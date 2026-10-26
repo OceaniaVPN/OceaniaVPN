@@ -329,7 +329,9 @@ export async function decodeSubscription(url, trusted = false, pingCheck = false
       } catch {}
     }
   } catch (e) {
-    return { ok: false, error: `Ошибка разбора: ${e?.message || "неизвестная ошибка"}`, configs: [], uris: [], attempts: result.attempts };
+    // A parser failure must not discard an otherwise successful upstream body.
+    console.warn("[Decoder] Parser diagnostics skipped; raw payload will be preserved:", e?.message || e);
+    parsed = [];
   }
   const uris = parsed.map(x => typeof x === "string" ? x : x?.uri).filter(Boolean);
   // Даже если внутренний парсер не распознал формат, исходное тело остаётся полезным payload для Happ.
