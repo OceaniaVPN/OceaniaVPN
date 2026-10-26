@@ -14,7 +14,7 @@ export async function fetchThroughProxy(url, proxyUrl, options = {}) {
     connect,
     proxy: proxyUrl,
     forceTunnel: true,
-    http2: false,
+    http2: true,
     timeouts: {
       connectMs: timeoutMs,
       handshakeMs: timeoutMs,
