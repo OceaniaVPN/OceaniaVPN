@@ -29,7 +29,7 @@ export function connectTcpSocket(hostname, port) {
 }
 
 export function upgradeSocketToTls(socket, hostname) {
-  const options = { socket: socket.raw };
+  const options = { socket: socket.raw, host: hostname };
   // SNI is a DNS name; omit it for an IP literal.
   if (!/^\d{1,3}(?:\.\d{1,3}){3}$/.test(hostname) && !hostname.includes(":")) {
     options.servername = hostname;
