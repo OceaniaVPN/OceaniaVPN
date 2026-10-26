@@ -577,14 +577,7 @@ async function runDecodeWithProfile(cfg, chatId, url, selection) {
       upstreamSecret: cfg.subscriptionUpstreamSecret || "",
       upstreamOrigin: cfg.subscriptionUpstreamOrigin || "",
       proxyEndpoint: mode === "on" ? selection.endpoint : "",
-      deviceHeaders: platform === "android" ? {
-        "User-Agent": "Happ/4.8.0/Android",
-        "X-App-Version": "4.8.0",
-        "X-Device-Locale": "ru",
-        "X-Device-Os": "Android",
-        "X-Device-Model": "2311DRK48G",
-        "X-Ver-Os": "16",
-      } : buildWindowsHappHeaders(cfg),
+      deviceHeaders: platform === "android" ? buildAndroidHappHeaders(cfg) : buildWindowsHappHeaders(cfg),
     });
     if (!result.ok) {
       const errorMsg = `❌ <b>Не удалось расшифровать</b>\n\n${escapeHtml(result.error || "Неизвестная ошибка")}`;
