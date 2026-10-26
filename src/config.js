@@ -30,6 +30,8 @@ export function getConfig(env) {
     // Optional decoder identity values; configure from an authorized real client log.
     happWindowsHwid: (env.HAPP_WINDOWS_HWID || "").trim(),
     happWindowsSessionId: (env.HAPP_WINDOWS_SESSION_ID || "").trim(),
+    happAndroidHwid: (env.HAPP_ANDROID_HWID || "").trim(),
+    happAndroidSessionId: (env.HAPP_ANDROID_SESSION_ID || "").trim(),
   };
 }
 
