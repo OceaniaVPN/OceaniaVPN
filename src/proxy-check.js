@@ -1,5 +1,6 @@
 import proxyListText from "./proxy-list.txt";
 import { connectTcpSocket, upgradeSocketToTls } from "./proxy-transport.js";
+import { fetchThroughProxy } from "./proxy-fetch.js";
 
 const FLAG_BY_COUNTRY = Object.freeze({
   "США": "🇺🇸", "Франция": "🇫🇷", "Турция": "🇹🇷", "Польша": "🇵🇱",
@@ -207,52 +208,40 @@ async function probeHttpResponse(socket, hostname) {
 export async function checkProxyTcp(endpoint) {
   const proxy = parseHttpProxyEndpoint(endpoint);
   if (!proxy) return { ok: false, ms: null, reason: "Некорректный или отсутствующий в списке адрес" };
-  let socket;
-  let phase = "TCP-соединение с прокси";
+
   const started = Date.now();
+  const hostname = proxy.hostname.includes(":") && !proxy.hostname.startsWith("[")
+    ? `[${proxy.hostname}]`
+    : proxy.hostname;
+  const proxyUrl = `${proxy.protocol}://${hostname}:${proxy.port}`;
+
   try {
-    socket = connectTcpSocket(proxy.hostname, proxy.port);
-    await withTimeout(socket.opened);
-
-    if (proxy.protocol === "https") {
-      phase = "TLS до HTTPS-прокси";
-      socket = upgradeSocketToTls(socket, proxy.hostname);
-      await withTimeout(socket.opened);
-    }
-
-    phase = proxy.protocol === "socks5" ? "согласование SOCKS5 и CONNECT" : "HTTP CONNECT к целевому хосту";
-    if (proxy.protocol === "socks5") {
-      await socks5Tunnel(socket, "example.com", 443);
-    } else {
-      await httpConnectTunnel(socket, "example.com", 443);
-    }
-
-    if (proxy.protocol === "https") {
-      phase = "TLS до целевого хоста через HTTPS-прокси";
-      throw new Error("CONNECT-туннель создан, но вложенный TLS для HTTPS-прокси не поддерживается Cloudflare Sockets; для HTTPS-подписок используй SOCKS5 или обычный HTTP-прокси");
-    }
-
-    phase = "TLS до example.com через туннель";
-    socket = upgradeSocketToTls(socket, "example.com");
-    await withTimeout(socket.opened);
-
-    phase = "HTTP-запрос через TLS-туннель";
-    const status = await probeHttpResponse(socket, "example.com");
+    const response = await fetchThroughProxy("https://example.com/", proxyUrl, {
+      timeoutMs: TIMEOUT_MS,
+      probeOnly: true,
+      headers: {
+        "User-Agent": "OceaniaVPN-ProxyCheck/2.0",
+        "Accept": "*/*",
+      },
+    });
     const ms = Date.now() - started;
-    const label = proxy.protocol === "socks5" ? `SOCKS5 + TLS + HTTP ответил ${status}` :
-      `HTTP CONNECT + TLS + HTTP ответил ${status}`;
-    return { ok: true, ms, reason: label, protocol: proxy.protocol, httpStatus: status };
+    return {
+      ok: true,
+      ms,
+      reason: `${proxy.protocol.toUpperCase()} + TLS + HTTP ответил ${response.status}`,
+      protocol: proxy.protocol,
+      httpStatus: response.status,
+    };
   } catch (error) {
     const message = String(error?.message || error || "");
     return {
       ok: false,
-      ms: null,
-      reason: /timeout/i.test(message) ? `Тайм-аут ${TIMEOUT_MS} мс на этапе «${phase}»` :
-        `Этап «${phase}»: ${message || "Проверка прокси не удалась"}`.slice(0, 180),
+      ms: Date.now() - started,
+      reason: /timeout|deadline/i.test(message)
+        ? `Тайм-аут ${TIMEOUT_MS} мс при подключении через прокси`
+        : `HTTPS через прокси: ${message}`.slice(0, 180),
       protocol: proxy.protocol,
     };
-  } finally {
-    try { if (socket) await socket.close(); } catch {}
   }
 }
 
