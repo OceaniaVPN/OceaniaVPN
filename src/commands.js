@@ -418,7 +418,7 @@ async function runDecodeProxyDiagnostic(cfg, chatId, platform, countryIndex, ser
   }
 
   await sendMessage(cfg.telegramToken, chatId,
-    `⏳ <b>Диагностика через прокси</b>\n\n🌐 Прокси: <code>${escapeHtml(endpoint)}</code>\n🎯 Хост подписки: <code>${escapeHtml(target.hostname)}</code>\n\nПроверяю контрольный адрес и подписку с двумя наборами заголовков. Тело подписки не загружается в отчёт.`);
+    `⏳ <b>Диагностика через прокси</b>\n\n🌐 Прокси: <code>${escapeHtml(endpoint)}</code>\n🎯 Хост подписки: <code>${escapeHtml(target.hostname)}</code>\n\nПроверяю контрольный адрес и запрос с тем же User-Agent, что использует загрузчик OceaniaVPN. Тело подписки не попадает в отчёт.`);
 
   const common = {
     proxyEndpoint: endpoint,
@@ -428,18 +428,16 @@ async function runDecodeProxyDiagnostic(cfg, chatId, platform, countryIndex, ser
     upstreamSecret: cfg.subscriptionUpstreamSecret || "",
     upstreamOrigin: cfg.subscriptionUpstreamOrigin || "",
   };
-  const happHeaders = platform === "android" ? buildAndroidHappHeaders(cfg) : buildWindowsHappHeaders(cfg);
-  const genericHeaders = {
-    "User-Agent": "OceaniaVPN-Decoder/1.0",
+  const requestHeaders = {
+    "User-Agent": DECODER_USER_AGENT,
     "Accept": "text/plain, application/json;q=0.9",
   };
 
-  const [control, happ, generic] = await Promise.all([
+  const [control, subscription] = await Promise.all([
     probeHttpProxyTarget("https://www.gstatic.com/generate_204", {
-      proxyEndpoint: endpoint, timeoutMs: 6000, headers: genericHeaders,
+      proxyEndpoint: endpoint, timeoutMs: 6000, headers: requestHeaders,
     }),
-    probeHttpProxyTarget(target.toString(), { ...common, headers: happHeaders }),
-    probeHttpProxyTarget(target.toString(), { ...common, headers: genericHeaders }),
+    probeHttpProxyTarget(target.toString(), { ...common, headers: requestHeaders }),
   ]);
 
   const render = (label, result, expectedStatus = null) => {
@@ -453,17 +451,15 @@ async function runDecodeProxyDiagnostic(cfg, chatId, platform, countryIndex, ser
 
   let conclusion;
   if (control.status !== 204) {
-    conclusion = "Контрольный адрес не вернул 204. Сначала нужно разбираться с доступом к HTTPS-узлу через этот прокси.";
-  } else if (happ.status === null && generic.status === null) {
-    conclusion = "Контрольный адрес доступен, но хост подписки не возвращает HTTP-заголовки через этот прокси. Возможны ограничения прокси по домену/маршруту или проблема TLS на стороне целевого хоста.";
-  } else if (happ.status === null && generic.status !== null) {
-    conclusion = "С обычными заголовками ответ есть, а с заголовками Happ — нет. Это указывает на возможную реакцию целевого сервера или промежуточного узла на заголовки Happ.";
-  } else if (happ.status !== null && generic.status === null) {
-    conclusion = "С заголовками Happ ответ есть, а с обычными — нет. Вероятно, сервер ожидает специальные заголовки.";
-  } else if (happ.status >= 400 || generic.status >= 400) {
-    conclusion = "HTTP-сервер ответил, значит соединение до HTTP-уровня доходит. Код 401/403/4xx нужно рассматривать отдельно от ошибки закрытия соединения.";
+    conclusion = "Контрольный адрес не вернул 204. Сначала нужно проверить доступность выбранного прокси.";
+  } else if (subscription.status === null) {
+    conclusion = "Прокси подключается, но целевой хост не ответил по HTTP. Проверь сетевой маршрут и логи источника.";
+  } else if (subscription.status === 401 || subscription.status === 403) {
+    conclusion = "Источник отклонил запрос на HTTP-уровне. Нужен разрешённый API/service-auth путь; смена User-Agent не меняет TLS ClientHello.";
+  } else if (subscription.status >= 400) {
+    conclusion = "Источник вернул HTTP-ошибку. Соединение дошло до HTTP-уровня; причину отказа нужно смотреть на стороне источника.";
   } else {
-    conclusion = "Оба запроса к подписке получили HTTP-ответ. Если декодирование всё ещё падает, причина может быть в формате/содержимом ответа, а не в установлении соединения.";
+    conclusion = "Источник ответил по HTTP. Если импорт не проходит, проверь формат полученного тела и логи источника.";
   }
 
   const report = `🔬 <b>Результат диагностики</b>\n\n` +
@@ -519,7 +515,7 @@ async function runDecodeWithProfile(cfg, chatId, url, selection) {
     proxyEndpoint: mode === "on" ? selection.endpoint : null,
     proxyEnabled: mode === "on",
     sourceHost: directCrypt5 ? "crypt5" : parsedUrl.hostname,
-  }));;
+  }));
   await clearState(cfg, chatId).catch(() => {});
   let loadingMsgId = null;
   try {
