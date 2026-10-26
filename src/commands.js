@@ -465,8 +465,7 @@ async function runDecodeProxyDiagnostic(cfg, chatId, platform, countryIndex, ser
   const report = `🔬 <b>Результат диагностики</b>\n\n` +
     `🌐 Прокси: <code>${escapeHtml(endpoint)}</code>\n🎯 Хост подписки: <code>${escapeHtml(target.hostname)}</code>\n\n` +
     `${render("generate_204 (ожидается 204)", control, 204)}\n` +
-    `${render("Подписка · заголовки Happ", happ)}\n` +
-    `${render("Подписка · стандартные заголовки", generic)}\n\n` +
+    `${render("Подписка · OceaniaVPN-Decoder", subscription)}\n\n` +
     `<b>Вывод:</b> ${escapeHtml(conclusion)}\n\n<i>Проверка выполняется из Cloudflare через выбранный прокси. Содержимое подписки и URL с параметрами в отчёт не выводятся.</i>`;
   return sendMessage(cfg.telegramToken, chatId, report, {
     inline_keyboard: [
@@ -475,15 +474,6 @@ async function runDecodeProxyDiagnostic(cfg, chatId, platform, countryIndex, ser
       [{ text: "❌ Отмена", callback_data: "decode_cancel" }],
     ],
   });
-}
-
-function buildAndroidHappHeaders() {
-  // Kept for compatibility with diagnostics; this is the decoder service, not a Happ client.
-  return { "User-Agent": DECODER_USER_AGENT, "Accept": "text/plain, application/json;q=0.9" };
-}
-
-function buildWindowsHappHeaders() {
-  return buildAndroidHappHeaders();
 }
 
 async function runDecodeWithProfile(cfg, chatId, url, selection) {
