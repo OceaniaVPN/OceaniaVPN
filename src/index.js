@@ -37,8 +37,7 @@ const AUTO_UPDATE_CONFIG = {
 // ВТОРАЯ КОНФИГУРАЦИЯ (Только одна ссылка)
 // ==========================================
 const SECONDARY_CONFIG = {
-  targetUrl: "https://okeaniavpn.dimastekolnikov1.workers.dev/sub?token=0fe191f6-7ec7-44ec-aed7-cc6423745ca8",
-  targetFilename: "okeania_auto.txt", // Имя файла для этой подписки
+  targetUrl: "https://okeaniavpn.dimastekolnikov1.workers.dev/sub, // Имя файла для этой подписки
   title: "OkeaniaVPN Auto",
   interval: 1,
   webpage: "https://t.me/free_vpn123456",
@@ -46,22 +45,31 @@ const SECONDARY_CONFIG = {
   userinfo: "upload=0; download=0; total=536870912000; expire=0",
   doRename: false
 };
+function getSecondaryTargetUrl(env) {
+  const url = new URL(SECONDARY_CONFIG.targetUrl);
+  const token = String(env.SECONDARY_CONFIG_TOKEN || "").trim();
+  if (token) url.searchParams.set("token", token);
+  return url.toString();
+}
+
 
 // ==========================================
 // ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
 // ==========================================
 
 async function fetchAndMergeSources(sourcesUrls, requestOptions = {}) {
-  const allUris = [];
+  const allLines = [];
   const stats = {};
   for (const url of sourcesUrls) {
     try {
-      console.log("[Merge] Decoding source: " + url);
+      console.log("[Merge] Fetching source body: " + url);
       const result = await decodeSubscription(url, false, false, requestOptions);
-      if (result.ok && result.uris && result.uris.length > 0) {
-        allUris.push(...result.uris);
-        stats[url] = result.uris.length;
-        console.log("[Merge] Success: Found " + result.uris.length + " URIs");
+      const body = typeof result.rawContent === "string" ? result.rawContent : (result.content || "");
+      if (result.ok && body.trim()) {
+        const lines = body.split(/\r?\n/).filter((line) => line.trim().length > 0);
+        allLines.push(...lines);
+        stats[url] = lines.length;
+        console.log("[Merge] Success: preserved " + lines.length + " body lines");
       } else {
         stats[url] = 0;
         console.log("[Merge] Failed or empty: " + result.error);
@@ -71,9 +79,10 @@ async function fetchAndMergeSources(sourcesUrls, requestOptions = {}) {
       stats[url] = 0;
     }
   }
-  const uniqueUris = [...new Set(allUris)];
-  console.log("[Merge] Total URIs: " + allUris.length + ", After dedup: " + uniqueUris.length);
-  return { uris: uniqueUris, stats };
+  // Keep original entries; deduplicate only byte-identical lines from overlapping feeds.
+  const uniqueLines = [...new Set(allLines)];
+  console.log("[Merge] Body lines: " + allLines.length + ", exact-line dedup: " + uniqueLines.length);
+  return { uris: uniqueLines, stats };
 }
 
 function getSuperscript(n) {
@@ -155,6 +164,19 @@ function hasValidSubscriptionApiToken(request, configuredSecret) {
   return diff === 0;
 }
 
+function stripLeadingSubscriptionHeaders(text) {
+  const source = String(text || "").replace(/^\uFEFF/, "");
+  const newline = source.includes("\r\n") ? "\r\n" : "\n";
+  const lines = source.split(/\r?\n/);
+  let first = 0;
+  while (first < lines.length) {
+    const line = lines[first].trim();
+    if (!line || line.startsWith("#")) first++;
+    else break;
+  }
+  return lines.slice(first).join(newline);
+}
+
 async function serveSubscription(request, cfg) {
   const url = new URL(request.url);
 
@@ -214,28 +236,30 @@ async function serveSubscription(request, cfg) {
 
   if (!filename) return new Response("Missing ?u= or ?f= parameter", { status: 400 });
 
-  const content = await getFileContent(cfg, filename);
-  if (!content) return new Response("Subscription not found", { status: 404 });
+  const sourceContent = await getFileContent(cfg, filename);
+  if (!sourceContent) return new Response("Subscription not found", { status: 404 });
 
   const hasServiceAuth = hasValidSubscriptionApiToken(request, cfg.subscriptionApiSecret);
   if (!isVpnClientUA(userAgent) && !hasServiceAuth) {
-    return renderThemedPage(request, cfg, content);
+    return renderThemedPage(request, cfg, sourceContent);
   }
+  // Metadata is sent via response headers; the body receives only the payload.
+  const content = stripLeadingSubscriptionHeaders(sourceContent);
 
   const headers = {
     "Cache-Control": "no-store",
     "X-Content-Type-Options": "nosniff",
   };
-  const userinfoMatch = content.match(/^#subscription-userinfo:\s*(.+)$/im);
+  const userinfoMatch = sourceContent.match(/^#subscription-userinfo:\s*(.+)$/im);
   if (userinfoMatch) headers["Subscription-Userinfo"] = userinfoMatch[1].trim();
-  const titleMatch = content.match(/^#profile-title:\s*(.+)$/im);
+  const titleMatch = sourceContent.match(/^#profile-title:\s*(.+)$/im);
   if (titleMatch) {
     const title = titleMatch[1].trim();
     headers["Profile-Title"] = /[^\x20-\x7e]/.test(title) ? base64HeaderText(title) : title;
   }
-  const intervalMatch = content.match(/^#profile-update-interval:\s*(.+)$/im);
+  const intervalMatch = sourceContent.match(/^#profile-update-interval:\s*(.+)$/im);
   if (intervalMatch) headers["Profile-Update-Interval"] = intervalMatch[1].trim();
-  const webpageMatch = content.match(/^#profile-web-page-url:\s*(.+)$/im);
+  const webpageMatch = sourceContent.match(/^#profile-web-page-url:\s*(.+)$/im);
   if (webpageMatch) headers["Profile-Web-Page-Url"] = webpageMatch[1].trim();
 
   // Track HWIDs only on user-owned subscription URLs (?u=...).
@@ -464,30 +488,23 @@ async function runManualUpdate(env, reportChatId) {
   };
 
   try {
-    const { uris: uniqueUris } = await fetchAndMergeSources(AUTO_UPDATE_CONFIG.sources, {
-        apiToken: env.SUBSCRIPTION_API_SECRET || "",
-        apiOrigin: env.WORKER_ORIGIN || "",
-        upstreamSecret: env.SUBSCRIPTION_UPSTREAM_SECRET || "",
-        upstreamOrigin: env.SUBSCRIPTION_UPSTREAM_ORIGIN || "",
-      });
-    if (uniqueUris.length > 0) {
-      const finalUris = AUTO_UPDATE_CONFIG.doRename ? applyRename(uniqueUris) : uniqueUris;
-      const profileMetadata = {
-        title: AUTO_UPDATE_CONFIG.title,
-        interval: AUTO_UPDATE_CONFIG.interval,
-        webpage: AUTO_UPDATE_CONFIG.webpage,
-        announce: AUTO_UPDATE_CONFIG.announce,
-        userinfo: AUTO_UPDATE_CONFIG.userinfo
-      };
-      const content = buildFile(profileMetadata, finalUris);
-      const res = await createOrUpdateFile(cfg, AUTO_UPDATE_CONFIG.targetFilename, content, "Manual update: " + finalUris.length + " nodes");
+    const { uris: bodyLines } = await fetchAndMergeSources(AUTO_UPDATE_CONFIG.sources, {
+      apiToken: env.SUBSCRIPTION_API_SECRET || "",
+      apiOrigin: env.WORKER_ORIGIN || "",
+      upstreamSecret: env.SUBSCRIPTION_UPSTREAM_SECRET || "",
+      upstreamOrigin: env.SUBSCRIPTION_UPSTREAM_ORIGIN || "",
+    });
+    const content = bodyLines.join("\n");
+    if (content.trim()) {
+      const lineCount = bodyLines.length;
+      const res = await createOrUpdateFile(cfg, AUTO_UPDATE_CONFIG.targetFilename, content, "Manual update: " + lineCount + " body lines");
       if (res.content || res.sha) {
-        await sendReport(`✅ <b>Основной конфиг обновлен!</b>\n\n📡 Серверов: <code>${finalUris.length}</code>`);
+        await sendReport("✅ <b>Основной конфиг обновлен!</b>\n\n📄 Строк передано без пересборки: <code>" + lineCount + "</code>");
       } else {
         await sendReport("⚠️ <b>Основной конфиг:</b> источники получены, но файл не подтверждён как обновлённый.");
       }
     } else {
-      await sendReport("⚠️ <b>Основной конфиг:</b> не найдено ни одного сервера.");
+      await sendReport("⚠️ <b>Основной конфиг:</b> источники вернули пустое тело; старый файл оставлен без изменений.");
     }
   } catch (e) {
     console.error("[Manual Update] Main error:", e);
@@ -495,31 +512,21 @@ async function runManualUpdate(env, reportChatId) {
   }
 
   try {
-    const result2 = await decodeSubscription(SECONDARY_CONFIG.targetUrl, true, false, {
+    const result2 = await decodeSubscription(getSecondaryTargetUrl(env), true, false, {
       upstreamSecret: env.SUBSCRIPTION_UPSTREAM_SECRET || "",
       upstreamOrigin: env.SUBSCRIPTION_UPSTREAM_ORIGIN || new URL(SECONDARY_CONFIG.targetUrl).origin,
     });
-    if (result2.ok && result2.uris && result2.uris.length > 0) {
-      const finalUris2 = SECONDARY_CONFIG.doRename ? applyRename(result2.uris) : result2.uris;
-      const profileMetadata2 = {
-        title: SECONDARY_CONFIG.title,
-        interval: SECONDARY_CONFIG.interval,
-        webpage: SECONDARY_CONFIG.webpage,
-        announce: SECONDARY_CONFIG.announce,
-        userinfo: SECONDARY_CONFIG.userinfo
-      };
-      // Secondary subscription is a single source: preserve its original body.
-      const content2 = typeof result2.rawContent === "string" && result2.rawContent.length
-        ? result2.rawContent
-        : buildFile(profileMetadata2, finalUris2);
-      const res2 = await createOrUpdateFile(cfg, SECONDARY_CONFIG.targetFilename, content2, "Manual secondary update: " + finalUris2.length + " nodes");
+    const content2 = typeof result2.rawContent === "string" ? result2.rawContent : "";
+    if (result2.ok && content2.trim()) {
+      const lineCount2 = content2.split(/\r?\n/).filter((line) => line.trim()).length;
+      const res2 = await createOrUpdateFile(cfg, SECONDARY_CONFIG.targetFilename, content2, "Manual secondary update: " + lineCount2 + " body lines");
       if (res2.content || res2.sha) {
-        await sendReport(`✅ <b>Okeania конфиг обновлен!</b>\n\n📡 Серверов: <code>${finalUris2.length}</code>`);
+        await sendReport("✅ <b>Okeania конфиг обновлен!</b>\n\n📄 Строк передано без пересборки: <code>" + lineCount2 + "</code>");
       } else {
         await sendReport("⚠️ <b>Okeania:</b> файл не подтверждён как обновлённый.");
       }
     } else {
-      await sendReport("❌ <b>Okeania:</b> не удалось получить серверы." + (result2.error ? "\n<code>" + String(result2.error).replace(/[&<>]/g, "") + "</code>" : ""));
+      await sendReport("❌ <b>Okeania:</b> пустой или недоступный источник." + (result2.error ? "\n<code>" + String(result2.error).replace(/[&<>]/g, "") + "</code>" : ""));
     }
   } catch (e) {
     console.error("[Manual Update] Okeania error:", e);
@@ -691,28 +698,23 @@ export default {
 
     // 1. Обновление основного whitelist.txt (4 источника)
     try {
-      const { uris: uniqueUris, stats } = await fetchAndMergeSources(AUTO_UPDATE_CONFIG.sources, {
+      const { uris: bodyLines, stats } = await fetchAndMergeSources(AUTO_UPDATE_CONFIG.sources, {
         apiToken: env.SUBSCRIPTION_API_SECRET || "",
         apiOrigin: env.WORKER_ORIGIN || "",
         upstreamSecret: env.SUBSCRIPTION_UPSTREAM_SECRET || "",
         upstreamOrigin: env.SUBSCRIPTION_UPSTREAM_ORIGIN || "",
       });
-      if (uniqueUris.length > 0) {
-        let finalUris = AUTO_UPDATE_CONFIG.doRename ? applyRename(uniqueUris) : uniqueUris;
-        const profileMetadata = {
-          title: AUTO_UPDATE_CONFIG.title,
-          interval: AUTO_UPDATE_CONFIG.interval,
-          webpage: AUTO_UPDATE_CONFIG.webpage,
-          announce: AUTO_UPDATE_CONFIG.announce,
-          userinfo: AUTO_UPDATE_CONFIG.userinfo
-        };
-        const content = buildFile(profileMetadata, finalUris);
-        const res = await createOrUpdateFile(cfg, AUTO_UPDATE_CONFIG.targetFilename, content, "Auto update: " + finalUris.length + " nodes");
-
+      const content = bodyLines.join("\n");
+      if (content.trim()) {
+        const lineCount = bodyLines.length;
+        const res = await createOrUpdateFile(cfg, AUTO_UPDATE_CONFIG.targetFilename, content, "Auto update: " + lineCount + " body lines");
         if ((res.content || res.sha) && cfg.adminId && cfg.adminId > 0) {
-          const rawUrl = `https://raw.githubusercontent.com/${cfg.configRepoOwner}/${cfg.configRepoName}/${cfg.branch}/${cfg.configsFolder}/${AUTO_UPDATE_CONFIG.targetFilename}`;
-          await sendMessage(cfg.telegramToken, cfg.adminId, `✅ <b>Основной конфиг обновлен!</b>\n\n📡 Серверов: <code>${finalUris.length}</code>\n🔗 <a href="${rawUrl}">Открыть</a>`);
+          const rawUrl = "https://raw.githubusercontent.com/" + cfg.configRepoOwner + "/" + cfg.configRepoName + "/" + cfg.branch + "/" + cfg.configsFolder + "/" + AUTO_UPDATE_CONFIG.targetFilename;
+          await sendMessage(cfg.telegramToken, cfg.adminId, "✅ <b>Основной конфиг обновлен!</b>\n\n📄 Строк передано без пересборки: <code>" + lineCount + "</code>\n🔗 <a href=\"" + rawUrl + "\">Открыть</a>");
         }
+        console.log("[Cron] Main update success: " + lineCount + " body lines; sources: " + JSON.stringify(stats));
+      } else {
+        console.error("[Cron] Main update skipped: all source bodies were empty or unavailable.");
       }
     } catch (e) {
       console.error("[Cron] Main Update Error:", e);
@@ -723,30 +725,21 @@ export default {
       console.log("[Cron] Decoding secondary source: " + SECONDARY_CONFIG.targetUrl);
       // Service-to-service auth is sent only to the configured upstream origin.
       // The upstream must validate X-Bot-Secret; do not rely on a spoofed client UA.
-      const result2 = await decodeSubscription(SECONDARY_CONFIG.targetUrl, true, false, {
-      upstreamSecret: env.SUBSCRIPTION_UPSTREAM_SECRET || "",
-      upstreamOrigin: env.SUBSCRIPTION_UPSTREAM_ORIGIN || new URL(SECONDARY_CONFIG.targetUrl).origin,
-    });
-
-      if (result2.ok && result2.uris && result2.uris.length > 0) {
-        let finalUris2 = SECONDARY_CONFIG.doRename ? applyRename(result2.uris) : result2.uris;
-        const profileMetadata2 = {
-          title: SECONDARY_CONFIG.title,
-          interval: SECONDARY_CONFIG.interval,
-          webpage: SECONDARY_CONFIG.webpage,
-          announce: SECONDARY_CONFIG.announce,
-          userinfo: SECONDARY_CONFIG.userinfo
-        };
-        const content2 = buildFile(profileMetadata2, finalUris2);
-        const res2 = await createOrUpdateFile(cfg, SECONDARY_CONFIG.targetFilename, content2, "Secondary Auto update: " + finalUris2.length + " nodes");
-
+      const result2 = await decodeSubscription(getSecondaryTargetUrl(env), true, false, {
+        upstreamSecret: env.SUBSCRIPTION_UPSTREAM_SECRET || "",
+        upstreamOrigin: env.SUBSCRIPTION_UPSTREAM_ORIGIN || new URL(SECONDARY_CONFIG.targetUrl).origin,
+      });
+      const content2 = typeof result2.rawContent === "string" ? result2.rawContent : "";
+      if (result2.ok && content2.trim()) {
+        const lineCount2 = content2.split(/\r?\n/).filter((line) => line.trim()).length;
+        const res2 = await createOrUpdateFile(cfg, SECONDARY_CONFIG.targetFilename, content2, "Secondary Auto update: " + lineCount2 + " body lines");
         if ((res2.content || res2.sha) && cfg.adminId && cfg.adminId > 0) {
-          const rawUrl2 = `https://raw.githubusercontent.com/${cfg.configRepoOwner}/${cfg.configRepoName}/${cfg.branch}/${cfg.configsFolder}/${SECONDARY_CONFIG.targetFilename}`;
-          await sendMessage(cfg.telegramToken, cfg.adminId, `✅ <b>Второй конфиг (Okeania) обновлен!</b>\n\n📡 Серверов: <code>${finalUris2.length}</code>\n🔗 <a href="${rawUrl2}">Открыть</a>`);
+          const rawUrl2 = "https://raw.githubusercontent.com/" + cfg.configRepoOwner + "/" + cfg.configRepoName + "/" + cfg.branch + "/" + cfg.configsFolder + "/" + SECONDARY_CONFIG.targetFilename;
+          await sendMessage(cfg.telegramToken, cfg.adminId, "✅ <b>Второй конфиг (Okeania) обновлен!</b>\n\n📄 Строк передано без пересборки: <code>" + lineCount2 + "</code>\n🔗 <a href=\"" + rawUrl2 + "\">Открыть</a>");
         }
-        console.log("[Cron] Secondary Success: " + finalUris2.length + " servers saved");
+        console.log("[Cron] Secondary success: " + lineCount2 + " body lines saved");
       } else {
-        console.error("[Cron] Secondary Failed:", result2.error);
+        console.error("[Cron] Secondary Failed:", result2.error || "empty payload");
       }
     } catch (e) {
       console.error("[Cron] Secondary Update Error:", e);
