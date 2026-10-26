@@ -9,7 +9,7 @@ import { buildFile } from "./build.js";
 import { escapeHtml } from "./config.js";
 import { COUNTRIES, matchesCountryKey, detectCountryFromText } from "./contries.js";
 import { cmdProxy, addProxyLink } from "./proxy.js";
-import { HTTP_PROXY_COUNTRIES, checkCountryProxies, checkProxyTcp, isKnownHttpProxyEndpoint } from "./proxy-check.js";
+import { HTTP_PROXY_COUNTRIES, checkCountryProxies, checkProxyTcp, isKnownHttpProxyEndpoint, parseHttpProxyEndpoint } from "./proxy-check.js";
 import { getProxyPreference, getActiveProxyPreference, setProxyPreference, getLastDecodedProfile, setLastDecodedProfile, setDecodedProfileProxyPreference } from "./proxy-preferences.js";
 import { listSubscriptions, getActiveSubscription, getActiveFilename, createSubscription, setActiveSubscription, deleteSubscriptionRecord, updateSubscriptionSettings, makeSubscriptionDeviceKey } from "./subscriptions.js";
 import { listScheduledChanges, addScheduledChange, cancelScheduledChange } from "./scheduler.js";
@@ -345,7 +345,7 @@ async function showDecodeProxyCountry(cfg, chatId, platform, index) {
   return sendMessage(cfg.telegramToken, chatId,
     `${country.flag} <b>${escapeHtml(country.name)}</b>\n\n` +
     `Серверов: <b>${country.servers.length}</b>\n${addressList}\n\n` +
-    `Сначала запусти проверку. Выбрать можно будет только сервер, который ответил на HTTP CONNECT. Проверка выполняется из Cloudflare, не с устройства.`,
+    `Сначала запусти проверку. Выбрать можно будет только сервер, который успешно установил туннель по своему протоколу (HTTP CONNECT, HTTPS CONNECT или SOCKS5). Проверка выполняется из Cloudflare, не с устройства.`,
     { inline_keyboard: rows });
 }
 
@@ -374,7 +374,7 @@ async function checkDecodeProxyServers(cfg, chatId, platform, countryIndex, only
 
   const lines = results.map((item) => {
     const status = item.ok
-      ? `🟢 CONNECT работает · <b>${item.ms} мс</b>`
+      ? `🟢 ${escapeHtml(item.reason || "Туннель работает")} · <b>${item.ms} мс</b>`
       : `🔴 ${escapeHtml(item.reason)}${item.ms !== null ? ` · ${item.ms} мс` : ""}`;
     return `<code>${escapeHtml(item.endpoint)}</code> — ${status}`;
   });
@@ -389,7 +389,7 @@ async function checkDecodeProxyServers(cfg, chatId, platform, countryIndex, only
   rows.push([{ text: "❌ Отмена", callback_data: "decode_cancel" }]);
   const summary = `📋 <b>Результат проверки: ${escapeHtml(country.name)}</b>\n\n` +
     `Работают: <b>${passedNow.length}/${results.length}</b> в этой проверке.\n\n${lines.join("\n\n")}\n\n` +
-    `<i>Это проверка HTTP CONNECT к example.com:443 с Cloudflare. Она подтверждает ответ прокси, но не гарантирует доступ к каждому VPN-узлу с твоего устройства.</i>` +
+    `<i>Проверка устанавливает туннель к example.com:443 через выбранный протокол. Она выполняется из Cloudflare и не гарантирует доступность каждого адреса с твоего устройства.</i>` +
     (passed.length ? `\n\nВыбери один из проверенных серверов ниже.` : `\n\nРабочих ответов не найдено. Попробуй повторить проверку или выбрать другую страну.`);
   return sendMessage(cfg.telegramToken, chatId, summary, { inline_keyboard: rows });
 }
@@ -509,6 +509,7 @@ async function runDecodeWithProfile(cfg, chatId, url, selection) {
     return sendMessage(cfg.telegramToken, chatId, `❌ <b>Нужна HTTP(S)-ссылка или happ://crypt5/</b>`);
   }
   url = directCrypt5 ? inputRawUrl : parsedUrl.toString();
+  const proxyDetails = mode === "on" ? parseHttpProxyEndpoint(selection.endpoint) : null;
   console.log(JSON.stringify({
     event: "decode",
     platform,
@@ -518,8 +519,9 @@ async function runDecodeWithProfile(cfg, chatId, url, selection) {
     osVersion: platform === "android" ? "16" : "10_10.0.19045",
     appVersion: platform === "android" ? "4.8.0" : "4.5.4",
     userAgent: platform === "android" ? "Happ/4.8.0/Android" : `Happ/4.5.4/Windows${cfg.happWindowsSessionId ? `/${cfg.happWindowsSessionId}` : ""}`,
-    proxyAddress: mode === "on" ? selection.endpoint.split(":")[0] : null,
-    proxyPort: mode === "on" ? Number(selection.endpoint.split(":")[1]) : null,
+    proxyAddress: proxyDetails?.hostname || null,
+    proxyPort: proxyDetails?.port || null,
+    proxyProtocol: proxyDetails?.protocol || null,
     proxyEndpoint: mode === "on" ? selection.endpoint : null,
     proxyEnabled: mode === "on",
     sourceHost: directCrypt5 ? "crypt5" : parsedUrl.hostname,
