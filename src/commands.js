@@ -510,6 +510,10 @@ async function runDecodeWithProfile(cfg, chatId, url, selection) {
   if (!["android", "windows"].includes(platform) || !["on", "off"].includes(mode)) {
     return sendMessage(cfg.telegramToken, chatId, `⚠️ Сначала пройди все шаги /decode: платформа и режим прокси.`);
   }
+  if (platform === "windows" && !String(cfg.happWindowsHwid || "").trim()) {
+    return sendMessage(cfg.telegramToken, chatId,
+      `⚠️ Для профиля Happ Windows не задан HWID. Добавь переменную HAPP_WINDOWS_HWID в настройках Cloudflare Worker — бот не будет подставлять выдуманный идентификатор устройства.`);
+  }
   if (mode === "on" && !isKnownHttpProxyEndpoint(selection?.endpoint)) {
     return sendMessage(cfg.telegramToken, chatId, `❌ Выбранный прокси отсутствует в разрешённом списке. Вернись к выбору страны и проверь сервер.`);
   }
@@ -528,7 +532,7 @@ async function runDecodeWithProfile(cfg, chatId, url, selection) {
     deviceLocale: platform === "android" ? "ru" : "RU",
     osVersion: platform === "android" ? "16" : "10_10.0.19045",
     appVersion: platform === "android" ? "4.8.0" : "4.5.4",
-    userAgent: platform === "android" ? "Happ/4.8.0/Android" : `Happ/4.5.4/Windows${cfg.happWindowsSessionId ? `/${cfg.happWindowsSessionId}` : ""}`,
+    userAgent: platform === "android" ? "Happ/4.8.0/Android" : buildWindowsHappHeaders(cfg)["User-Agent"],
     proxyAddress: proxyDetails?.hostname || null,
     proxyPort: proxyDetails?.port || null,
     proxyProtocol: proxyDetails?.protocol || null,
