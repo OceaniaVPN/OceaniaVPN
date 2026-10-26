@@ -96,19 +96,21 @@ async function writeBytes(socket, bytes) {
   finally { writer.releaseLock(); }
 }
 
+const readerBuffers = new WeakMap();
+
 async function readExact(reader, length) {
-  const chunks = [];
-  let received = 0;
-  while (received < length) {
+  let pending = readerBuffers.get(reader) || new Uint8Array(0);
+  while (pending.length < length) {
     const part = await withTimeout(reader.read());
     if (part.done) throw new Error("Соединение закрыто во время согласования протокола");
-    chunks.push(part.value);
-    received += part.value.length;
+    const joined = new Uint8Array(pending.length + part.value.length);
+    joined.set(pending, 0);
+    joined.set(part.value, pending.length);
+    pending = joined;
   }
-  const joined = new Uint8Array(received);
-  let offset = 0;
-  for (const chunk of chunks) { joined.set(chunk, offset); offset += chunk.length; }
-  return joined.slice(0, length);
+  const result = pending.slice(0, length);
+  readerBuffers.set(reader, pending.slice(length));
+  return result;
 }
 
 async function socks5Tunnel(socket, hostname, port) {
