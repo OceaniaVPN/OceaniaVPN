@@ -2,6 +2,7 @@ import { sendMessage, editMessage, answerCallback } from "./telegram.js";
 import { createOrUpdateFile, deleteFile, getFileContent, listAllUsers } from "./github.js";
 import { getState, setState, clearState, STEPS, STEP_MSG } from "./state.js";
 import { decodeSubscription, checkServersAlive } from "./decoder.js";
+import { DECODER_USER_AGENT } from "./useragents.js";
 import { probeHttpProxyTarget } from "./subscription-http.js";
 import { decryptCrypt5 } from "./crypt5.js";
 import { pingServers, cmdDev, cmdDevPing, cmdDevDiag, cmdDevMetrics } from "./devtools.js";
@@ -480,36 +481,13 @@ async function runDecodeProxyDiagnostic(cfg, chatId, platform, countryIndex, ser
   });
 }
 
-function buildAndroidHappHeaders(cfg = {}) {
-  const sessionId = String(cfg.happAndroidSessionId || "").trim();
-  const hwid = String(cfg.happAndroidHwid || "").trim();
-  return {
-    "User-Agent": `Happ/4.8.0/Android${sessionId ? `/${sessionId}` : ""}`,
-    "Accept": "text/plain, application/json;q=0.9",
-    "Accept-Language": "ru-RU,en,*",
-    ...(hwid ? { "X-HWID": hwid } : {}),
-    "X-App-Version": "4.8.0",
-    "X-Device-Locale": "ru",
-    "X-Device-Os": "Android",
-    "X-Device-Model": "2311DRK48G",
-    "X-Ver-Os": "16",
-  };
+function buildAndroidHappHeaders() {
+  // Kept for compatibility with diagnostics; this is the decoder service, not a Happ client.
+  return { "User-Agent": DECODER_USER_AGENT, "Accept": "text/plain, application/json;q=0.9" };
 }
 
-function buildWindowsHappHeaders(cfg = {}) {
-  const sessionId = String(cfg.happWindowsSessionId || Date.now());
-  const hwid = String(cfg.happWindowsHwid || "").trim();
-  return {
-    "User-Agent": `Happ/4.8.0/Windows/${sessionId}`,
-    "Accept": "text/plain, application/json;q=0.9",
-    "Accept-Language": "ru-RU,en,*",
-    ...(hwid ? { "X-HWID": hwid } : {}),
-    "X-App-Version": "4.8.0",
-    "X-Device-Locale": "RU",
-    "X-Device-Os": "Windows",
-    "X-Device-Model": "DESKTOP-AMMPFKL_x86_64",
-    "X-Ver-Os": "10_10.0.19045",
-  };
+function buildWindowsHappHeaders() {
+  return buildAndroidHappHeaders();
 }
 
 async function runDecodeWithProfile(cfg, chatId, url, selection) {
@@ -519,10 +497,6 @@ async function runDecodeWithProfile(cfg, chatId, url, selection) {
   const mode = selection?.mode;
   if (!["android", "windows"].includes(platform) || !["on", "off"].includes(mode)) {
     return sendMessage(cfg.telegramToken, chatId, `⚠️ Сначала пройди все шаги /decode: платформа и режим прокси.`);
-  }
-  if (platform === "windows" && !String(cfg.happWindowsHwid || "").trim()) {
-    return sendMessage(cfg.telegramToken, chatId,
-      `⚠️ Для профиля Happ Windows не задан HWID. Добавь переменную HAPP_WINDOWS_HWID в настройках Cloudflare Worker — бот не будет подставлять выдуманный идентификатор устройства.`);
   }
   if (mode === "on" && !isKnownHttpProxyEndpoint(selection?.endpoint)) {
     return sendMessage(cfg.telegramToken, chatId, `❌ Выбранный прокси отсутствует в разрешённом списке. Вернись к выбору страны и проверь сервер.`);
@@ -537,19 +511,15 @@ async function runDecodeWithProfile(cfg, chatId, url, selection) {
   console.log(JSON.stringify({
     event: "decode",
     platform,
-    deviceOs: platform === "android" ? "Android" : "Windows",
-    deviceModel: platform === "android" ? "2311DRK48G" : "DESKTOP-AMMPFKL_x86_64",
-    deviceLocale: platform === "android" ? "ru" : "RU",
-    osVersion: platform === "android" ? "16" : "10_10.0.19045",
-    appVersion: "4.8.0",
-    userAgent: platform === "android" ? buildAndroidHappHeaders(cfg)["User-Agent"] : buildWindowsHappHeaders(cfg)["User-Agent"],
+    requestIdentity: "OceaniaVPN-Decoder",
+    userAgent: DECODER_USER_AGENT,
     proxyAddress: proxyDetails?.hostname || null,
     proxyPort: proxyDetails?.port || null,
     proxyProtocol: proxyDetails?.protocol || null,
     proxyEndpoint: mode === "on" ? selection.endpoint : null,
     proxyEnabled: mode === "on",
     sourceHost: directCrypt5 ? "crypt5" : parsedUrl.hostname,
-  }));
+  }));;
   await clearState(cfg, chatId).catch(() => {});
   let loadingMsgId = null;
   try {
@@ -577,7 +547,6 @@ async function runDecodeWithProfile(cfg, chatId, url, selection) {
       upstreamSecret: cfg.subscriptionUpstreamSecret || "",
       upstreamOrigin: cfg.subscriptionUpstreamOrigin || "",
       proxyEndpoint: mode === "on" ? selection.endpoint : "",
-      deviceHeaders: platform === "android" ? buildAndroidHappHeaders(cfg) : buildWindowsHappHeaders(cfg),
     });
     if (!result.ok) {
       const errorMsg = `❌ <b>Не удалось расшифровать</b>\n\n${escapeHtml(result.error || "Неизвестная ошибка")}`;
