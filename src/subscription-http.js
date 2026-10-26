@@ -39,15 +39,9 @@ async function fetchViaHttpProxy(url, options, proxyEndpoint, timeoutMs) {
   const { probeOnly = false } = options || {};
   const target = new URL(url);
   const proxy = parseHttpProxyEndpoint(proxyEndpoint);
-  if (!proxy) throw new Error("Некорректный HTTP-прокси");
+  if (!proxy) throw new Error("Некорректный прокси или прокси отсутствует в списке");
 
-  // HTTPS is negotiated after the HTTP CONNECT tunnel is established.
-  // Cloudflare requires the socket to be created in STARTTLS mode before
-  // startTls() can upgrade the tunnel.
-  let socket = connect(
-    { hostname: proxy.hostname, port: proxy.port },
-    { secureTransport: "starttls" },
-  );
+  let socket = connectTcpSocket(proxy.hostname, proxy.port);
   let timeoutId;
   let reader;
   let writer;
@@ -66,50 +60,98 @@ async function fetchViaHttpProxy(url, options, proxyEndpoint, timeoutMs) {
       if (timeoutId === id) timeoutId = null;
     }
   };
-  let phase = "подключение к HTTP-прокси";
-  const readUntil = async (streamReader, marker, limit = 16384) => {
-    const decoder = new TextDecoder();
-    let text = "";
-    while (!text.includes(marker) && text.length < limit) {
+
+  let phase = "подключение к прокси";
+  const write = async (bytes) => {
+    writer = socket.writable.getWriter();
+    try { await timeout(writer.write(bytes instanceof Uint8Array ? bytes : new TextEncoder().encode(bytes))); }
+    finally { try { writer.releaseLock(); } catch {} writer = null; }
+  };
+  const readExact = async (streamReader, length) => {
+    const chunks = [];
+    let received = 0;
+    while (received < length) {
       const part = await timeout(streamReader.read());
+      if (part.done) throw new Error(`Прокси закрыл соединение на этапе ${phase}`);
+      chunks.push(part.value);
+      received += part.value.length;
+    }
+    const joined = new Uint8Array(received);
+    let offset = 0;
+    for (const chunk of chunks) { joined.set(chunk, offset); offset += chunk.length; }
+    return joined.slice(0, length);
+  };
+  const establishSocks5 = async (hostname, port) => {
+    phase = "согласование SOCKS5";
+    await write(Uint8Array.of(5, 1, 0));
+    reader = socket.readable.getReader();
+    const greeting = await readExact(reader, 2);
+    if (greeting[0] !== 5) throw new Error("Ответ прокси не похож на SOCKS5");
+    if (greeting[1] === 255) throw new Error("SOCKS5 не принимает подключение без авторизации");
+    if (greeting[1] !== 0) throw new Error("SOCKS5 выбрал неподдерживаемый способ авторизации");
+
+    const hostBytes = new TextEncoder().encode(hostname);
+    if (!hostBytes.length || hostBytes.length > 255) throw new Error("Некорректное имя целевого хоста");
+    const request = new Uint8Array(7 + hostBytes.length);
+    request.set([5, 1, 0, 3, hostBytes.length], 0);
+    request.set(hostBytes, 5);
+    request[5 + hostBytes.length] = (port >> 8) & 255;
+    request[6 + hostBytes.length] = port & 255;
+    await write(request);
+
+    const head = await readExact(reader, 4);
+    if (head[0] !== 5) throw new Error("Некорректный ответ SOCKS5");
+    if (head[1] !== 0) {
+      const reasons = { 1: "общая ошибка", 2: "доступ запрещён", 3: "сеть недоступна", 4: "хост недоступен", 5: "соединение отклонено", 6: "TTL истёк", 7: "команда не поддерживается", 8: "тип адреса не поддерживается" };
+      throw new Error(`SOCKS5 не смог подключиться: ${reasons[head[1]] || `ошибка ${head[1]}`}`);
+    }
+    const addressLength = head[3] === 1 ? 4 : head[3] === 4 ? 16 : head[3] === 3 ? (await readExact(reader, 1))[0] : 0;
+    if (!addressLength) throw new Error("SOCKS5 вернул неизвестный тип адреса");
+    await readExact(reader, addressLength + 2);
+    try { reader.releaseLock(); } catch {}
+    reader = null;
+  };
+
+  const establishHttpConnect = async (hostname, port) => {
+    phase = "HTTP CONNECT";
+    await write(
+      `CONNECT ${hostname}:${port} HTTP/1.1\r\n` +
+      `Host: ${hostname}:${port}\r\n` +
+      "Proxy-Connection: Keep-Alive\r\n\r\n"
+    );
+    reader = socket.readable.getReader();
+    let response = "";
+    while (!response.includes("\r\n\r\n") && response.length < 8192) {
+      const part = await timeout(reader.read());
       if (part.done) break;
-      text += decoder.decode(part.value, { stream: true });
+      response += new TextDecoder().decode(part.value, { stream: true });
     }
-    if (!text.includes(marker)) {
-      const detail = text.trim().slice(0, 180);
-      throw new Error(detail
-        ? `Прокси закрыл соединение до HTTP-заголовков (этап: ${phase}). Ответ: ${detail}`
-        : `Прокси закрыл соединение без HTTP-заголовков (этап: ${phase})`);
+    const statusLine = response.split(/\r?\n/, 1)[0] || "";
+    const statusMatch = statusLine.match(/^HTTP\/\d(?:\.\d)?\s+(\d{3})/i);
+    if (!statusMatch || Number(statusMatch[1]) !== 200) {
+      if (Number(statusMatch?.[1]) === 407) throw new Error("HTTP-прокси требует авторизацию");
+      throw new Error(`Прокси отклонил CONNECT: ${statusLine || "нет ответа"}`);
     }
-    return text;
+    try { reader.releaseLock(); } catch {}
+    reader = null;
   };
 
   try {
     phase = "ожидание соединения с прокси";
     await timeout(socket.opened);
-    phase = "HTTP CONNECT";
-    writer = socket.writable.getWriter();
-    await writer.write(new TextEncoder().encode(
-      `CONNECT ${target.hostname}:${target.port || (target.protocol === "https:" ? 443 : 80)} HTTP/1.1\r\n` +
-      `Host: ${target.hostname}:${target.port || (target.protocol === "https:" ? 443 : 80)}\r\n` +
-      "Proxy-Connection: Keep-Alive\r\n\r\n"
-    ));
-    writer.releaseLock();
-    writer = null;
-
-    reader = socket.readable.getReader();
-    const connectResponse = await readUntil(reader, "\r\n\r\n", 8192);
-    const statusLine = connectResponse.split(/\r?\n/, 1)[0] || "";
-    const statusMatch = statusLine.match(/^HTTP\/\d(?:\.\d)?\s+(\d{3})/i);
-    if (!statusMatch || Number(statusMatch[1]) !== 200) {
-      throw new Error(`HTTP-прокси отклонил CONNECT: ${statusLine || "нет ответа"}`);
+    if (proxy.protocol === "https") {
+      phase = "TLS до HTTPS-прокси";
+      socket = upgradeSocketToTls(socket, proxy.hostname);
+      await timeout(socket.opened);
     }
-    reader.releaseLock();
-    reader = null;
+
+    const targetPort = target.port ? Number(target.port) : target.protocol === "https:" ? 443 : 80;
+    if (proxy.protocol === "socks5") await establishSocks5(target.hostname, targetPort);
+    else await establishHttpConnect(target.hostname, targetPort);
 
     if (target.protocol === "https:") {
-      phase = "TLS через прокси";
-      socket = socket.startTls({ expectedServerHostname: target.hostname });
+      phase = proxy.protocol === "https" ? "вложенный TLS через HTTPS-прокси" : "TLS через туннель";
+      socket = upgradeSocketToTls(socket, target.hostname);
       await timeout(socket.opened);
     }
 
@@ -122,11 +164,7 @@ async function fetchViaHttpProxy(url, options, proxyEndpoint, timeoutMs) {
     const requestText = `GET ${path} HTTP/1.1\r\n` +
       [...requestHeaders.entries()].map(([k, v]) => `${k}: ${v}\r\n`).join("") + "\r\n";
 
-    writer = socket.writable.getWriter();
-    await writer.write(new TextEncoder().encode(requestText));
-    writer.releaseLock();
-    writer = null;
-
+    await write(requestText);
     reader = socket.readable.getReader();
     const chunks = [];
     let total = 0;
@@ -175,8 +213,6 @@ async function fetchViaHttpProxy(url, options, proxyEndpoint, timeoutMs) {
       const index = line.indexOf(":");
       if (index > 0) responseHeaders.append(line.slice(0, index).trim(), line.slice(index + 1).trim());
     }
-    // Diagnostic probes only need the HTTP status and headers; do not read or
-    // return subscription contents (which may contain credentials/configs).
     if (probeOnly) return new Response(null, { status, headers: responseHeaders });
     let body = raw.slice(headerEnd);
     if (expectedLength !== null) body = body.slice(0, expectedLength);
@@ -189,9 +225,9 @@ async function fetchViaHttpProxy(url, options, proxyEndpoint, timeoutMs) {
         if (lineEnd < 0) break;
         const size = parseInt(encoded.slice(cursor, lineEnd).split(";")[0], 16);
         if (!Number.isFinite(size) || size <= 0) break;
-        const start = lineEnd + 2;
-        decoded += encoded.slice(start, start + size);
-        cursor = start + size + 2;
+        const bodyStart = lineEnd + 2;
+        decoded += encoded.slice(bodyStart, bodyStart + size);
+        cursor = bodyStart + size + 2;
       }
       body = new TextEncoder().encode(decoded);
       responseHeaders.delete("transfer-encoding");
@@ -201,8 +237,8 @@ async function fetchViaHttpProxy(url, options, proxyEndpoint, timeoutMs) {
     if (error?.name === "TimeoutError" || /Таймаут запроса через прокси/.test(String(error?.message || ""))) {
       throw new Error(`Тайм-аут на этапе «${phase}»: прокси не ответил вовремя`);
     }
-    if (/TLS|certificate|cert|handshake/i.test(String(error?.message || "")) && phase === "TLS через прокси") {
-      throw new Error(`Не удалось установить TLS через прокси: ${error.message}`);
+    if (/TLS|certificate|cert|handshake/i.test(String(error?.message || "")) && phase.includes("TLS")) {
+      throw new Error(`Не удалось установить TLS на этапе «${phase}»: ${error.message}`);
     }
     throw error;
   } finally {
