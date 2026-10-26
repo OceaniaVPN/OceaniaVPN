@@ -2,7 +2,6 @@ import { sendMessage, editMessage, answerCallback } from "./telegram.js";
 import { createOrUpdateFile, deleteFile, getFileContent, listAllUsers } from "./github.js";
 import { getState, setState, clearState, STEPS, STEP_MSG } from "./state.js";
 import { decodeSubscription, checkServersAlive } from "./decoder.js";
-import { DECODER_USER_AGENT } from "./useragents.js";
 import { probeHttpProxyTarget } from "./subscription-http.js";
 import { decryptCrypt5 } from "./crypt5.js";
 import { pingServers, cmdDev, cmdDevPing, cmdDevDiag, cmdDevMetrics } from "./devtools.js";
@@ -462,7 +461,7 @@ async function runDecodeProxyDiagnostic(cfg, chatId, platform, countryIndex, ser
   const report = `🔬 <b>Результат диагностики</b>\n\n` +
     `🌐 Прокси: <code>${escapeHtml(endpoint)}</code>\n🎯 Хост подписки: <code>${escapeHtml(target.hostname)}</code>\n\n` +
     `${render("generate_204 (ожидается 204)", control, 204)}\n` +
-    `${render("Подписка · OceaniaVPN-Decoder", subscription)}\n\n` +
+    `${render("Подписка · заголовки Happ", subscription)}\n\n` +
     `<b>Вывод:</b> ${escapeHtml(conclusion)}\n\n<i>Проверка выполняется из Cloudflare через выбранный прокси. Содержимое подписки и URL с параметрами в отчёт не выводятся.</i>`;
   return sendMessage(cfg.telegramToken, chatId, report, {
     inline_keyboard: [
@@ -526,8 +525,8 @@ async function runDecodeWithProfile(cfg, chatId, url, selection) {
   console.log(JSON.stringify({
     event: "decode",
     platform,
-    requestIdentity: "OceaniaVPN-Decoder",
-    userAgent: DECODER_USER_AGENT,
+    requestIdentity: `Happ/${platform === "android" ? "Android" : "Windows"}`,
+    userAgent: (platform === "android" ? buildAndroidHappHeaders(cfg) : buildWindowsHappHeaders(cfg))["User-Agent"],
     proxyAddress: proxyDetails?.hostname || null,
     proxyPort: proxyDetails?.port || null,
     proxyProtocol: proxyDetails?.protocol || null,
