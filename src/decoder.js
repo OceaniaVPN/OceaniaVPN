@@ -21,7 +21,9 @@ function normalizeText(text) {
 }
 
 function stripLeadingSubscriptionHeaders(text) {
-  const lines = String(text || "").replace(/^\uFEFF/, "").split(/\r?\n/);
+  const source = String(text || "").replace(/^\uFEFF/, "");
+  const newline = source.includes("\r\n") ? "\r\n" : "\n";
+  const lines = source.split(/\r?\n/);
   let firstConfigLine = 0;
   while (firstConfigLine < lines.length) {
     const line = lines[firstConfigLine].trim();
@@ -31,9 +33,37 @@ function stripLeadingSubscriptionHeaders(text) {
     }
     break;
   }
-  return lines.slice(firstConfigLine).join("\n").trim();
+  return lines.slice(firstConfigLine).join(newline);
 }
 
+function decodeBase64Text(text) {
+  const compact = String(text || "").replace(/\s/g, "").replace(/-/g, "+").replace(/_/g, "/");
+  if (compact.length < 20 || !/^[A-Za-z0-9+/]+={0,2}$/.test(compact)) return null;
+  const binary = safeBase64(compact);
+  if (binary === null) return null;
+  try {
+    const bytes = Uint8Array.from(binary, (ch) => ch.charCodeAt(0));
+    const decoded = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    if (!decoded || decoded.includes("\u0000")) return null;
+    let controls = 0;
+    for (const ch of decoded) {
+      const code = ch.charCodeAt(0);
+      if (code < 9 || (code > 13 && code < 32)) controls++;
+    }
+    if (controls > Math.max(1, Math.floor(decoded.length * 0.01))) return null;
+    return decoded;
+  } catch {
+    return null;
+  }
+}
+
+// Убираем только ведущие метаданные подписки. Само содержимое узлов не пересобирается.
+function cleanSubscriptionPayload(text) {
+  let payload = stripLeadingSubscriptionHeaders(text);
+  const decoded = decodeBase64Text(payload);
+  if (decoded !== null) payload = stripLeadingSubscriptionHeaders(decoded);
+  return payload;
+}
 function isStubResponse(text) {
   const trimmed = normalizeText(text);
   if (!trimmed) return true;
@@ -229,7 +259,9 @@ async function fetchSubscription(url, trusted = false, requestOptions = {}) {
             if (allContents.length > 0) { const extracted = allContents.join("\n"); return { ok: true, content: extracted, rawContent: extracted, contentType: "text/plain", attempts }; }
           }
         }
-        if (hasParsableContent(text)) return { ok: true, content: text, rawContent: rawText, contentType: ct || "text/plain", attempts };
+        // Не пытаемся распознать протокол в обычном текстовом ответе.
+        // Сохраняем тело источника; ведущие заголовки будут удалены только перед выдачей.
+        if (!isHtml) return { ok: true, content: text, rawContent: rawText, contentType: ct || "text/plain", attempts };
         const candidateUrls = extractAllUrlsFromHtml(text, url).slice(0, 8);
         if (candidateUrls.length > 0) { const extracted = candidateUrls.join("\n"); return { ok: true, content: extracted, rawContent: extracted, contentType: "text/plain", attempts }; }
         bestContent = rawText; bestContentType = ct || "text/plain"; lastError = "Не найдено поддерживаемых конфигураций";
@@ -257,8 +289,9 @@ export async function decodeSubscription(url, trusted = false, pingCheck = false
   // Subscription providers often prepend metadata comments (#name: ..., descriptions).
   // Strip only leading comment/blank lines before format detection; keep inline URI fragments
   // such as #Germany intact, and never modify the actual JSON/YAML/URI payload.
-  let content = stripLeadingSubscriptionHeaders(result.content || "");
-  let rawContent = typeof result.rawContent === "string" ? result.rawContent : (result.content || "");
+  let content = cleanSubscriptionPayload(typeof result.rawContent === "string" ? result.rawContent : (result.content || ""));
+  let rawContent = content;
+  if (!rawContent.trim()) return { ok: false, error: "После удаления заголовков содержимое пустое", configs: [], uris: [], attempts: result.attempts };
   const format = detectFormat(content);
   let parsed = [];
   let finalFormat = format;
@@ -268,8 +301,8 @@ export async function decodeSubscription(url, trusted = false, pingCheck = false
       if (nestedUrl) {
         const nested = await fetchSubscription(nestedUrl, trusted, requestOptions);
         if (!nested.ok) return { ...nested, configs: [], uris: [] };
-        content = nested.content || "";
-        rawContent = typeof nested.rawContent === "string" ? nested.rawContent : content;
+        content = cleanSubscriptionPayload(typeof nested.rawContent === "string" ? nested.rawContent : (nested.content || ""));
+        rawContent = content;
       }
     }
     finalFormat = detectFormat(content);
@@ -281,26 +314,28 @@ export async function decodeSubscription(url, trusted = false, pingCheck = false
     else if (finalFormat === "empty") parseResult = { ok: false, error: "Пустая подписка" };
     else parseResult = parseBase64(content);
 
-    if (parseResult && parseResult.ok === false) {
-      return { ok: false, error: parseResult.error || "Конфигурации не найдены", configs: [], uris: [], attempts: result.attempts, format: finalFormat };
-    }
+    // Парсер используется только для необязательной статистики. Ошибка распознавания
+    // не должна мешать сохранить исходное содержимое подписки.
+    if (parseResult && parseResult.ok === false) parseResult = [];
 
     parsed = Array.isArray(parseResult) ? parseResult : (Array.isArray(parseResult?.uris) ? parseResult.uris : []);
     if (!parsed.length && finalFormat !== "crypt") {
       try {
         const crypt = parseCrypt(content);
-        if (crypt?.ok === false) return { ok: false, error: crypt.error || "Конфигурации не найдены", configs: [], uris: [], attempts: result.attempts, format: finalFormat };
-        if (Array.isArray(crypt)) parsed = crypt;
-        else if (Array.isArray(crypt?.uris)) parsed = crypt.uris;
+        if (crypt?.ok !== false) {
+          if (Array.isArray(crypt)) parsed = crypt;
+          else if (Array.isArray(crypt?.uris)) parsed = crypt.uris;
+        }
       } catch {}
     }
   } catch (e) {
     return { ok: false, error: `Ошибка разбора: ${e?.message || "неизвестная ошибка"}`, configs: [], uris: [], attempts: result.attempts };
   }
   const uris = parsed.map(x => typeof x === "string" ? x : x?.uri).filter(Boolean);
-  if (!uris.length) return { ok: false, error: "Конфигурации не найдены", configs: [], uris: [], attempts: result.attempts, format: finalFormat || format };
+  // Даже если внутренний парсер не распознал формат, исходное тело остаётся полезным payload для Happ.
+  if (!rawContent.trim()) return { ok: false, error: "Пустая подписка после удаления заголовков", configs: [], uris: [], attempts: result.attempts, format: finalFormat || format };
   let aliveFlags;
-  if (pingCheck) aliveFlags = await checkServersAlive(uris);
+  if (pingCheck && uris.length) aliveFlags = await checkServersAlive(uris);
   return { ok: true, configs: parsed, uris, aliveFlags, attempts: result.attempts, format: finalFormat || format, rawContent, contentType: result.contentType || "text/plain", metadata: parsed?.metadata || {} };
 }
 
