@@ -67,7 +67,7 @@ const REMOTE_PROXY_LIST_TTL_MS = 5 * 60 * 1000;
 
 // Optional live source: plain text country headings + IP:port rows.
 // The bundled list remains a fallback if the remote source is unavailable.
-export async function refreshHttpProxyCountries(sourceUrl = "") {
+export async function refreshHttpProxyCountries(sourceUrl = "", githubToken = "") {
   const requestedUrl = String(sourceUrl || "").trim();
   if (!requestedUrl) return HTTP_PROXY_COUNTRIES;
   if (requestedUrl === remoteProxyListUrl && Date.now() - remoteProxyListRefreshedAt < REMOTE_PROXY_LIST_TTL_MS) {
@@ -79,7 +79,10 @@ export async function refreshHttpProxyCountries(sourceUrl = "") {
     try {
       const url = new URL(requestedUrl);
       if (!["http:", "https:"].includes(url.protocol)) throw new Error("PROXY_LIST_URL должен быть HTTP(S)");
-      const response = await fetch(url.toString(), { headers: { Accept: "text/plain" } });
+      const requestHeaders = { Accept: "application/vnd.github.raw+json, text/plain" };
+      // Never forward the GitHub token to raw URLs or arbitrary third-party hosts.
+      if (url.hostname === "api.github.com" && githubToken) requestHeaders.Authorization = "Bearer " + githubToken;
+      const response = await fetch(url.toString(), { headers: requestHeaders });
       if (!response.ok) throw new Error("HTTP " + response.status);
       const body = await response.text();
       if (!body.trim() || body.length > 200000) throw new Error("Пустой или слишком большой список прокси");
