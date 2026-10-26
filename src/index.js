@@ -46,9 +46,10 @@ const SECONDARY_CONFIG = {
   doRename: false
 };
 function getSecondaryTargetUrl(env) {
-  const url = new URL(SECONDARY_CONFIG.targetUrl);
   const token = String(env.SECONDARY_CONFIG_TOKEN || "").trim();
-  if (token) url.searchParams.set("token", token);
+  if (!token) throw new Error("SECONDARY_CONFIG_TOKEN is not configured");
+  const url = new URL(SECONDARY_CONFIG.targetUrl);
+  url.searchParams.set("token", token);
   return url.toString();
 }
 
