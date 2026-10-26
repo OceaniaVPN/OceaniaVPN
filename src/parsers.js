@@ -115,12 +115,21 @@ export function xrayToUri(ob) {
   const name = ob.tag || "Server";
   const ss = ob.streamSettings || {};
 
-  if (proto === "vless" && ob.settings?.vnext?.[0]) {
-    const srv = ob.settings.vnext[0];
-    const usr = srv.users?.[0];
-    if (!usr) return null;
+  if (proto === "vless") {
+    const settings = ob.settings || {};
+    // Prefer the current simplified Xray VLESS schema; keep support for legacy vnext input.
+    const legacyServer = settings.vnext?.[0];
+    const srv = legacyServer || settings;
+    const usr = legacyServer?.users?.[0] || {
+      id: settings.id,
+      flow: settings.flow,
+      encryption: settings.encryption,
+    };
+    if (!srv.address || !srv.port || !usr?.id) return null;
+
     const params = new URLSearchParams();
-    if (ss.network) params.set("type", ss.network);
+    const network = ss.network === "raw" ? "tcp" : ss.network;
+    if (network) params.set("type", network);
     if (ss.security) params.set("security", ss.security);
     if (ss.network === "ws") {
       if (ss.wsSettings?.path) params.set("path", ss.wsSettings.path);
@@ -134,16 +143,13 @@ export function xrayToUri(ob) {
       if (ss.realitySettings.serverName) params.set("sni", ss.realitySettings.serverName);
       if (ss.realitySettings.publicKey) params.set("pbk", ss.realitySettings.publicKey);
       if (ss.realitySettings.shortId) params.set("sid", ss.realitySettings.shortId);
-      // 🔧 ФИКС: fingerprint (fp) для reality раньше не читался вообще —
-      // xrayToUri был единственным конвертером без этого поля (у singboxToUri
-      // и proxyToUri оно уже было). Именно поэтому fp пропадал у конфигов,
-      // пришедших в формате Xray JSON.
       if (ss.realitySettings.fingerprint) params.set("fp", ss.realitySettings.fingerprint);
+      if (ss.realitySettings.spiderX) params.set("spx", ss.realitySettings.spiderX);
     }
     if (ss.tlsSettings?.serverName) params.set("sni", ss.tlsSettings.serverName);
-    // 🔧 ФИКС: то же самое для обычного TLS (не только reality).
     if (ss.tlsSettings?.fingerprint) params.set("fp", ss.tlsSettings.fingerprint);
-    if (usr.flow) params.set("flow", usr.flow);
+    const flow = usr.flow || settings.flow;
+    if (flow) params.set("flow", flow);
     const q = params.toString();
     return `vless://${usr.id}@${srv.address}:${srv.port}${q ? "?" + q : ""}#${encodeURIComponent(name)}`;
   }
