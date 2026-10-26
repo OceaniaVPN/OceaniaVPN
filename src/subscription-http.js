@@ -69,10 +69,21 @@ async function fetchViaHttpProxy(url, options, proxyEndpoint, timeoutMs) {
   };
 const readerBuffers = new WeakMap();
 
+  // A timed-out reader.read() stays pending after Promise.race rejects.
+  // Cancel it before unlocking to avoid "releaseLock with outstanding read promises".
+  const read = async (streamReader) => {
+    try {
+      return await timeout(streamReader.read());
+    } catch (error) {
+      try { await streamReader.cancel(error); } catch {}
+      throw error;
+    }
+  };
+
   const readExact = async (streamReader, length) => {
     let pending = readerBuffers.get(streamReader) || new Uint8Array(0);
     while (pending.length < length) {
-      const part = await timeout(streamReader.read());
+      const part = await read(streamReader);
       if (part.done) throw new Error(`Прокси закрыл соединение на этапе ${phase}`);
       const joined = new Uint8Array(pending.length + part.value.length);
       joined.set(pending, 0);
@@ -124,7 +135,7 @@ const readerBuffers = new WeakMap();
     reader = socket.readable.getReader();
     let response = "";
     while (!response.includes("\r\n\r\n") && response.length < 8192) {
-      const part = await timeout(reader.read());
+      const part = await read(reader);
       if (part.done) break;
       response += new TextDecoder().decode(part.value, { stream: true });
     }
@@ -175,7 +186,7 @@ const readerBuffers = new WeakMap();
     let expectedLength = null;
     let chunked = false;
     while (true) {
-      const part = await timeout(reader.read());
+      const part = await read(reader);
       if (part.done) break;
       chunks.push(part.value);
       total += part.value.length;
@@ -245,7 +256,11 @@ const readerBuffers = new WeakMap();
     throw error;
   } finally {
     if (timeoutId) clearTimeout(timeoutId);
-    try { if (reader) reader.releaseLock(); } catch {}
+    // Settle any outstanding read before releasing the reader lock.
+    if (reader) {
+      try { await reader.cancel(); } catch {}
+      try { reader.releaseLock(); } catch {}
+    }
     try { if (writer) writer.releaseLock(); } catch {}
     try { await socket.close(); } catch {}
   }
