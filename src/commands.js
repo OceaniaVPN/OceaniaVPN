@@ -584,8 +584,8 @@ async function runDecodeWithProfile(cfg, chatId, url, selection) {
       if (loadingMsgId) await editMessage(cfg.telegramToken, chatId, loadingMsgId, errorMsg); else await sendMessage(cfg.telegramToken, chatId, errorMsg);
       return;
     }
-    const uris = result.uris || [];
-    if (loadingMsgId) await editMessage(cfg.telegramToken, chatId, loadingMsgId, `⏳ <b>Найдено ${uris.length} конфигураций</b>\n\n💾 Сохраняю результат…`);
+    const savedLineCount = String(result.rawContent || "").split(/\r?\n/).filter((line) => line.trim()).length;
+    if (loadingMsgId) await editMessage(cfg.telegramToken, chatId, loadingMsgId, "⏳ <b>Получено содержимое подписки</b>\n\n📄 Строк после удаления заголовков: " + savedLineCount + "\n💾 Сохраняю исходное тело без пересборки…");
     const timestamp = Date.now().toString(36);
     const filename = `decoded_${chatId}_${timestamp}.txt`;
     const meta = result.metadata || {};
@@ -614,43 +614,21 @@ async function runDecodeWithProfile(cfg, chatId, url, selection) {
     });
 
     const profileUrl = `${cfg.workerOrigin}/sub?u=${encodeURIComponent(chatId)}&f=${encodeURIComponent(filename)}&p=${encodeURIComponent(platform)}&scope=decode`;
-    const stats = { vless: 0, vmess: 0, trojan: 0, ss: 0, hysteria: 0, other: 0 };
-    for (const uri of uris) {
-      const protocol = (String(uri).match(/^([a-z0-9+.-]+):\/\//i)?.[1] || "").toLowerCase();
-      if (protocol === "vless") stats.vless++;
-      else if (protocol === "vmess") stats.vmess++;
-      else if (protocol === "trojan") stats.trojan++;
-      else if (protocol === "ss" || protocol === "shadowsocks") stats.ss++;
-      else if (protocol === "hysteria" || protocol === "hysteria2") stats.hysteria++;
-      else stats.other++;
-    }
-    const serverLabels = uris.slice(0, 12).map((uri, i) => {
-      let label = "";
-      const hashAt = String(uri).lastIndexOf("#");
-      if (hashAt >= 0) {
-        try { label = decodeURIComponent(String(uri).slice(hashAt + 1)); } catch { label = String(uri).slice(hashAt + 1); }
-      }
-      if (!label) {
-        try { label = new URL(String(uri)).hostname; } catch { label = "сервер без имени"; }
-      }
-      return `${i + 1}. ${escapeHtml(label.slice(0, 100))}`;
-    });
     const platformLabel = platform === "android" ? "Android" : "Windows";
-    const proxyLabel = mode === "on" ? `${selection.country} · ${selection.endpoint}` : "Без прокси";
+    const proxyLabel = mode === "on" ? (selection.country + " · " + selection.endpoint) : "Без прокси";
     const kb = { inline_keyboard: [
-      [{ text: `🔗 Итоговый профиль · ${platformLabel}`, url: profileUrl }],
+      [{ text: "🔗 Итоговый профиль · " + platformLabel, url: profileUrl }],
       [{ text: "🔄 Декодировать другую ссылку", callback_data: "decode" }],
       [{ text: "🏠 Главное меню", callback_data: "menu" }],
     ] };
-    const successMsg = `✅ <b>Подписка расшифрована</b>\n\n` +
-      `━━━━━━━━━━━━━━━━━━━━\n📡 Серверов: <code>${uris.length}</code>\n` +
-      `🔌 VLESS <b>${stats.vless}</b> · VMess <b>${stats.vmess}</b>\n` +
-      `🔌 Trojan <b>${stats.trojan}</b> · SS <b>${stats.ss}</b>\n` +
-      `🔌 Hysteria <b>${stats.hysteria}</b> · Other <b>${stats.other}</b>\n━━━━━━━━━━━━━━━━━━━━\n\n` +
-      `<b>Проверенные имена (первые ${Math.min(12, uris.length)}):</b>\n${serverLabels.join("\n") || "Список имён недоступен"}\n\n` +
-      `🖥 <b>Платформа:</b> ${platformLabel}\n🌐 <b>Прокси для получения:</b> ${escapeHtml(proxyLabel)}\n\n` +
-      `🔗 <b>Ссылка с выбранными настройками:</b>\n<code>${escapeHtml(profileUrl)}</code>\n\n` +
-      `В результат включены только настройки, выбранные в этом запуске /decode. Старый прокси с другой попытки не применяется.`;
+    const successMsg = "✅ <b>Содержимое подписки сохранено</b>\n\n" +
+      "━━━━━━━━━━━━━━━━━━━━\n📄 Строк передано: <code>" + savedLineCount + "</code>\n" +
+      "Заголовки в начале удалены. Остальные строки не пересобирались, имена узлов не менялись.\n" +
+      "━━━━━━━━━━━━━━━━━━━━\n\n" +
+      "<b>Источник:</b> " + escapeHtml(hostname) + "\n" +
+      "<b>Платформа:</b> " + platformLabel + "\n" +
+      "<b>Прокси получения:</b> " + escapeHtml(proxyLabel) + "\n\n" +
+      "🔗 <b>Ссылка профиля:</b>\n<code>" + escapeHtml(profileUrl) + "</code>";
     if (loadingMsgId) await editMessage(cfg.telegramToken, chatId, loadingMsgId, successMsg, kb); else await sendMessage(cfg.telegramToken, chatId, successMsg, kb);
   } catch (err) {
     const errorMsg = `⚠️ <b>Ошибка декодирования</b>\n\n<code>${escapeHtml(err.message || String(err))}</code>`;
