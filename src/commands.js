@@ -9,7 +9,7 @@ import { buildFile } from "./build.js";
 import { escapeHtml } from "./config.js";
 import { COUNTRIES, matchesCountryKey, detectCountryFromText } from "./contries.js";
 import { cmdProxy, addProxyLink } from "./proxy.js";
-import { HTTP_PROXY_COUNTRIES, checkCountryProxies, checkProxyTcp, isKnownHttpProxyEndpoint, parseHttpProxyEndpoint } from "./proxy-check.js";
+import { HTTP_PROXY_COUNTRIES, checkCountryProxies, checkProxyTcp, isKnownHttpProxyEndpoint, parseHttpProxyEndpoint, refreshHttpProxyCountries } from "./proxy-check.js";
 import { getProxyPreference, getActiveProxyPreference, setProxyPreference, getLastDecodedProfile, setLastDecodedProfile, setDecodedProfileProxyPreference } from "./proxy-preferences.js";
 import { listSubscriptions, getActiveSubscription, getActiveFilename, createSubscription, setActiveSubscription, deleteSubscriptionRecord, updateSubscriptionSettings, makeSubscriptionDeviceKey } from "./subscriptions.js";
 import { listScheduledChanges, addScheduledChange, cancelScheduledChange } from "./scheduler.js";
@@ -1176,6 +1176,9 @@ export async function handleCallback(cfg, cb, options = {}) {
   }
 
   const data = String(cb.data || "").trim();
+  if (/^(?:decode_proxy_|px_|proxy(?:_|$))/.test(data)) {
+    await refreshHttpProxyCountries(cfg.proxyListUrl);
+  }
   if (!data) {
     console.warn("[Callback] Empty callback_data");
     return;
@@ -1416,6 +1419,9 @@ export async function handleMessage(cfg, msg) {
   const chatId = msg.chat.id;
   const text = msg.text || "";
   const trimmed = text.trim();
+  if (/^\/(?:proxy|decode)(?:@\w+)?(?:\s|$)/i.test(trimmed)) {
+    await refreshHttpProxyCountries(cfg.proxyListUrl);
+  }
 
   if (msg.document) {
     return sendMessage(
