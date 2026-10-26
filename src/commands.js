@@ -418,7 +418,7 @@ async function runDecodeProxyDiagnostic(cfg, chatId, platform, countryIndex, ser
   }
 
   await sendMessage(cfg.telegramToken, chatId,
-    `⏳ <b>Диагностика через прокси</b>\n\n🌐 Прокси: <code>${escapeHtml(endpoint)}</code>\n🎯 Хост подписки: <code>${escapeHtml(target.hostname)}</code>\n\nПроверяю контрольный адрес и запрос с тем же User-Agent, что использует загрузчик OceaniaVPN. Тело подписки не попадает в отчёт.`);
+    `⏳ <b>Диагностика через прокси</b>\n\n🌐 Прокси: <code>${escapeHtml(endpoint)}</code>\n🎯 Хост подписки: <code>${escapeHtml(target.hostname)}</code>\n\nПроверяю контрольный адрес и запрос с теми же платформенными заголовками Happ, что использует декодер. Тело подписки не попадает в отчёт.`);
 
   const common = {
     proxyEndpoint: endpoint,
@@ -428,10 +428,7 @@ async function runDecodeProxyDiagnostic(cfg, chatId, platform, countryIndex, ser
     upstreamSecret: cfg.subscriptionUpstreamSecret || "",
     upstreamOrigin: cfg.subscriptionUpstreamOrigin || "",
   };
-  const requestHeaders = {
-    "User-Agent": DECODER_USER_AGENT,
-    "Accept": "text/plain, application/json;q=0.9",
-  };
+  const requestHeaders = platform === "android" ? buildAndroidHappHeaders(cfg) : buildWindowsHappHeaders(cfg);
 
   const [control, subscription] = await Promise.all([
     probeHttpProxyTarget("https://www.gstatic.com/generate_204", {
@@ -474,6 +471,38 @@ async function runDecodeProxyDiagnostic(cfg, chatId, platform, countryIndex, ser
       [{ text: "❌ Отмена", callback_data: "decode_cancel" }],
     ],
   });
+}
+
+function buildAndroidHappHeaders(cfg = {}) {
+  const sessionId = String(cfg.happAndroidSessionId || "").trim();
+  const hwid = String(cfg.happAndroidHwid || "").trim();
+  return {
+    "User-Agent": `Happ/4.8.0/Android${sessionId ? `/${sessionId}` : ""}`,
+    "Accept": "text/plain, application/json;q=0.9",
+    "Accept-Language": "ru-RU,en,*",
+    ...(hwid ? { "X-HWID": hwid } : {}),
+    "X-App-Version": "4.8.0",
+    "X-Device-Locale": "ru",
+    "X-Device-Os": "Android",
+    "X-Device-Model": "2311DRK48G",
+    "X-Ver-Os": "16",
+  };
+}
+
+function buildWindowsHappHeaders(cfg = {}) {
+  const sessionId = String(cfg.happWindowsSessionId || Date.now());
+  const hwid = String(cfg.happWindowsHwid || "").trim();
+  return {
+    "User-Agent": `Happ/4.8.0/Windows/${sessionId}`,
+    "Accept": "text/plain, application/json;q=0.9",
+    "Accept-Language": "ru-RU,en,*",
+    ...(hwid ? { "X-HWID": hwid } : {}),
+    "X-App-Version": "4.8.0",
+    "X-Device-Locale": "RU",
+    "X-Device-Os": "Windows",
+    "X-Device-Model": "DESKTOP-AMMPFKL_x86_64",
+    "X-Ver-Os": "10_10.0.19045",
+  };
 }
 
 async function runDecodeWithProfile(cfg, chatId, url, selection) {
@@ -533,6 +562,7 @@ async function runDecodeWithProfile(cfg, chatId, url, selection) {
       upstreamSecret: cfg.subscriptionUpstreamSecret || "",
       upstreamOrigin: cfg.subscriptionUpstreamOrigin || "",
       proxyEndpoint: mode === "on" ? selection.endpoint : "",
+      deviceHeaders: platform === "android" ? buildAndroidHappHeaders(cfg) : buildWindowsHappHeaders(cfg),
     });
     if (!result.ok) {
       const errorMsg = `❌ <b>Не удалось расшифровать</b>\n\n${escapeHtml(result.error || "Неизвестная ошибка")}`;
