@@ -43,7 +43,8 @@ async function fetchViaHttpProxy(url, options, proxyEndpoint, timeoutMs) {
   const hostname = proxy.hostname.includes(":") && !proxy.hostname.startsWith("[")
     ? `[${proxy.hostname}]`
     : proxy.hostname;
-  const proxyUrl = `${proxy.protocol}://${hostname}:${proxy.port}`;
+  const proxyScheme = proxy.protocol === "socks5" ? "socks5h" : proxy.protocol;
+  const proxyUrl = `${proxyScheme}://${hostname}:${proxy.port}`;
 
   try {
     return await fetchThroughProxy(url, proxyUrl, {
