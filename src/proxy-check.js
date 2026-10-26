@@ -58,7 +58,50 @@ function parseProxyList(source) {
 }
 
 // Legacy IP:port values remain supported as HTTP CONNECT proxies.
-export const HTTP_PROXY_COUNTRIES = parseProxyList(proxyListText);
+export let HTTP_PROXY_COUNTRIES = parseProxyList(proxyListText);
+
+let remoteProxyListRefreshedAt = 0;
+let remoteProxyListUrl = "";
+let remoteProxyListPromise = null;
+const REMOTE_PROXY_LIST_TTL_MS = 5 * 60 * 1000;
+
+// Optional live source: plain text country headings + IP:port rows.
+// The bundled list remains a fallback if the remote source is unavailable.
+export async function refreshHttpProxyCountries(sourceUrl = "") {
+  const requestedUrl = String(sourceUrl || "").trim();
+  if (!requestedUrl) return HTTP_PROXY_COUNTRIES;
+  if (requestedUrl === remoteProxyListUrl && Date.now() - remoteProxyListRefreshedAt < REMOTE_PROXY_LIST_TTL_MS) {
+    return HTTP_PROXY_COUNTRIES;
+  }
+  if (remoteProxyListPromise) return remoteProxyListPromise;
+
+  remoteProxyListPromise = (async () => {
+    try {
+      const url = new URL(requestedUrl);
+      if (!["http:", "https:"].includes(url.protocol)) throw new Error("PROXY_LIST_URL должен быть HTTP(S)");
+      const response = await fetch(url.toString(), { headers: { Accept: "text/plain" } });
+      if (!response.ok) throw new Error("HTTP " + response.status);
+      const body = await response.text();
+      if (!body.trim() || body.length > 200000) throw new Error("Пустой или слишком большой список прокси");
+      const parsed = parseProxyList(body);
+      const count = parsed.reduce((total, country) => total + country.servers.length, 0);
+      if (!count) throw new Error("В удалённом источнике не найдено адресов IP:port");
+      HTTP_PROXY_COUNTRIES = parsed;
+      remoteProxyListUrl = requestedUrl;
+      remoteProxyListRefreshedAt = Date.now();
+      console.log("[ProxyList] Refreshed from remote source:", count, "endpoints");
+    } catch (error) {
+      remoteProxyListUrl = requestedUrl;
+      remoteProxyListRefreshedAt = Date.now();
+      console.warn("[ProxyList] Remote refresh failed; keeping last known list:", error?.message || error);
+    } finally {
+      remoteProxyListPromise = null;
+    }
+    return HTTP_PROXY_COUNTRIES;
+  })();
+
+  return remoteProxyListPromise;
+}
 
 export function findHttpProxy(endpoint) {
   const value = String(endpoint || "").trim();
