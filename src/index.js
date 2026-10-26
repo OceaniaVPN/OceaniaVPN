@@ -697,7 +697,7 @@ export default {
     if (event.cron !== "0 * * * *") return;
 
     // Refresh the endpoint list from its configured remote text source on every hourly update.
-    await refreshHttpProxyCountries(cfg.proxyListUrl);
+    await refreshHttpProxyCountries(cfg.proxyListUrl, cfg.githubToken);
 
     // 1. Обновление основного whitelist.txt (4 источника)
     try {
