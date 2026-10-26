@@ -8,7 +8,7 @@ import { COUNTRIES, detectCountryFromText } from "./contries.js";
 import { listSubscriptions, getActiveSubscription, makeSubscriptionDeviceKey } from "./subscriptions.js";
 import { buildHappJsonSubscription } from "./json-subscription.js";
 import { getProxyPreference, getDecodedProfileProxyPreference } from "./proxy-preferences.js";
-import { isKnownHttpProxyEndpoint } from "./proxy-check.js";
+import { isKnownHttpProxyEndpoint, refreshHttpProxyCountries } from "./proxy-check.js";
 import { migrateLegacyKvToD1 } from "./migrate.js";
 import { processScheduledChanges } from "./scheduler.js";
 
@@ -695,6 +695,9 @@ export default {
 
     // Черновики проверяются каждую минуту, а тяжёлое обновление источников — только раз в 4 часа.
     if (event.cron !== "0 * * * *") return;
+
+    // Refresh the endpoint list from its configured remote text source on every hourly update.
+    await refreshHttpProxyCountries(cfg.proxyListUrl);
 
     // 1. Обновление основного whitelist.txt (4 источника)
     try {
