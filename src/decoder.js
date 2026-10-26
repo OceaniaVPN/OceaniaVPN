@@ -184,7 +184,8 @@ async function fetchSubscription(url, trusted = false, requestOptions = {}) {
         if (i > 0) await new Promise(resolve => setTimeout(resolve, RETRY_DELAYS[i]));
         const res = await fetchWithRedirects(actualUrl, httpOptions);
         if (!res.ok) { lastError = `HTTP ${res.status}`; continue; }
-        const text = normalizeText(await res.text());
+        const rawText = await res.text();
+        const text = normalizeText(rawText);
         const ct = res.headers.get("content-type") || "";
         if (!text) { lastError = "Пустой ответ"; continue; }
         if (isTemporaryMessage(text)) { lastError = "Сервер вернул временное сообщение"; continue; }
@@ -195,7 +196,7 @@ async function fetchSubscription(url, trusted = false, requestOptions = {}) {
             const nested = await fetchWithRedirects(envelopeUrl, httpOptions);
             if (nested.ok) {
               const nestedText = normalizeText(await nested.text());
-              if (nestedText) return { ok: true, content: nestedText, contentType: nested.headers.get("content-type") || "text/plain", attempts };
+              if (nestedText) return { ok: true, content: nestedText, rawContent: nestedText, contentType: nested.headers.get("content-type") || "text/plain", attempts };
             }
           } catch {}
         }
@@ -225,13 +226,13 @@ async function fetchSubscription(url, trusted = false, requestOptions = {}) {
                 } else allContents.push(subText);
               } catch {}
             }
-            if (allContents.length > 0) return { ok: true, content: allContents.join("\n"), contentType: "text/plain", attempts };
+            if (allContents.length > 0) { const extracted = allContents.join("\n"); return { ok: true, content: extracted, rawContent: extracted, contentType: "text/plain", attempts }; }
           }
         }
-        if (hasParsableContent(text)) return { ok: true, content: text, contentType: ct || "text/plain", attempts };
+        if (hasParsableContent(text)) return { ok: true, content: text, rawContent: rawText, contentType: ct || "text/plain", attempts };
         const candidateUrls = extractAllUrlsFromHtml(text, url).slice(0, 8);
-        if (candidateUrls.length > 0) return { ok: true, content: candidateUrls.join("\n"), contentType: "text/plain", attempts };
-        bestContent = text; bestContentType = ct || "text/plain"; lastError = "Не найдено поддерживаемых конфигураций";
+        if (candidateUrls.length > 0) { const extracted = candidateUrls.join("\n"); return { ok: true, content: extracted, rawContent: extracted, contentType: "text/plain", attempts }; }
+        bestContent = rawText; bestContentType = ct || "text/plain"; lastError = "Не найдено поддерживаемых конфигураций";
       } catch (e) { lastError = (e?.name === "AbortError" || e?.name === "TimeoutError") ? "Таймаут запроса" : (e?.message || "Ошибка запроса"); }
     }
     return { ok: false, error: lastError, attempts, content: bestContent, contentType: bestContentType };
@@ -298,7 +299,7 @@ export async function decodeSubscription(url, trusted = false, pingCheck = false
   if (!uris.length) return { ok: false, error: "Конфигурации не найдены", configs: [], uris: [], attempts: result.attempts, format: finalFormat || format };
   let aliveFlags;
   if (pingCheck) aliveFlags = await checkServersAlive(uris);
-  return { ok: true, configs: parsed, uris, aliveFlags, attempts: result.attempts, format: finalFormat || format };
+  return { ok: true, configs: parsed, uris, aliveFlags, attempts: result.attempts, format: finalFormat || format, rawContent: result.rawContent ?? result.content ?? "", contentType: result.contentType || "text/plain", metadata: parsed?.metadata || {} };
 }
 
 async function checkServerAlive(uri, timeoutMs = 2500) {
