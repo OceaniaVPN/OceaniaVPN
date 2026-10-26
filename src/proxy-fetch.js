@@ -42,7 +42,7 @@ export async function fetchThroughProxy(url, proxyUrl, options = {}) {
     // Buffer before closing the client: the returned Response must not depend
     // on a socket that has already been closed.
     const body = await response.arrayBuffer();
-    const noBodyStatus = [101, 204, 205, 304].includes(response.status);
+    const noBodyStatus = [204, 205, 304].includes(response.status);
     return new Response(noBodyStatus ? null : body, {
       status: response.status,
       statusText: response.statusText,
