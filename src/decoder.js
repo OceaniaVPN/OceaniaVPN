@@ -258,6 +258,7 @@ export async function decodeSubscription(url, trusted = false, pingCheck = false
   // Strip only leading comment/blank lines before format detection; keep inline URI fragments
   // such as #Germany intact, and never modify the actual JSON/YAML/URI payload.
   let content = stripLeadingSubscriptionHeaders(result.content || "");
+  let rawContent = typeof result.rawContent === "string" ? result.rawContent : (result.content || "");
   const format = detectFormat(content);
   let parsed = [];
   let finalFormat = format;
@@ -268,6 +269,7 @@ export async function decodeSubscription(url, trusted = false, pingCheck = false
         const nested = await fetchSubscription(nestedUrl, trusted, requestOptions);
         if (!nested.ok) return { ...nested, configs: [], uris: [] };
         content = nested.content || "";
+        rawContent = typeof nested.rawContent === "string" ? nested.rawContent : content;
       }
     }
     finalFormat = detectFormat(content);
@@ -299,7 +301,7 @@ export async function decodeSubscription(url, trusted = false, pingCheck = false
   if (!uris.length) return { ok: false, error: "Конфигурации не найдены", configs: [], uris: [], attempts: result.attempts, format: finalFormat || format };
   let aliveFlags;
   if (pingCheck) aliveFlags = await checkServersAlive(uris);
-  return { ok: true, configs: parsed, uris, aliveFlags, attempts: result.attempts, format: finalFormat || format, rawContent: result.rawContent ?? result.content ?? "", contentType: result.contentType || "text/plain", metadata: parsed?.metadata || {} };
+  return { ok: true, configs: parsed, uris, aliveFlags, attempts: result.attempts, format: finalFormat || format, rawContent, contentType: result.contentType || "text/plain", metadata: parsed?.metadata || {} };
 }
 
 async function checkServerAlive(uri, timeoutMs = 2500) {
