@@ -569,7 +569,7 @@ async function runDecodeWithProfile(cfg, chatId, url, selection) {
       `🌐 Источник: <code>${escapeHtml(directCrypt5 ? "crypt5 → " + (parsedUrl?.hostname || "subscription") : parsedUrl.hostname)}</code>\n` +
       `🖥 Платформа: <b>${platform === "android" ? "Android" : "Windows"}</b>\n` +
       `🌐 Прокси: <b>${mode === "on" ? `${escapeHtml(selection.country || "Страна")}, ${escapeHtml(selection.endpoint)}` : "выключен"}</b>\n\n` +
-      `🔍 Формат → извлечение → сохранение…`);
+      `📄 Удаляю только заголовки; оставшиеся строки сохраняю без пересборки…`);
     if (loadingMsg?.result?.message_id) loadingMsgId = loadingMsg.result.message_id;
     const result = await decodeSubscription(url, false, false, {
       apiToken: cfg.subscriptionApiSecret || "",
@@ -588,13 +588,10 @@ async function runDecodeWithProfile(cfg, chatId, url, selection) {
     if (loadingMsgId) await editMessage(cfg.telegramToken, chatId, loadingMsgId, "⏳ <b>Получено содержимое подписки</b>\n\n📄 Строк после удаления заголовков: " + savedLineCount + "\n💾 Сохраняю исходное тело без пересборки…");
     const timestamp = Date.now().toString(36);
     const filename = `decoded_${chatId}_${timestamp}.txt`;
-    const meta = result.metadata || {};
     const hostname = directCrypt5 ? "crypt5" : (parsedUrl.hostname || "subscription");
-    // Keep the provider payload byte-for-byte at the text level. Parsing above is
-    // only for diagnostics; do not rebuild URI/JSON/YAML or rewrite server names.
-    const content = typeof result.rawContent === "string"
-      ? result.rawContent
-      : buildFile({ title: meta["profile-title"] || `Decoded • ${hostname}`, interval: meta["profile-update-interval"] || 4, webpage: meta["profile-web-page-url"] || url, announce: meta.announce || null }, uris);
+    // Raw payload is the source of truth. No protocol-based reconstruction or name rewriting.
+    const content = typeof result.rawContent === "string" ? result.rawContent : ""; 
+    if (!content.trim()) throw new Error("После удаления заголовков не осталось содержимого.");
     const res = await createOrUpdateFile(cfg, filename, content, `Decode from ${hostname}`);
     if (!(res.content || res.sha)) {
       const errorMsg = `❌ <b>Ошибка сохранения</b>\n\n${escapeHtml(res.message || "неизвестно")}`;
