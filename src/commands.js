@@ -493,6 +493,7 @@ function buildWindowsHappHeaders(cfg = {}) {
   return {
     "User-Agent": `Happ/4.5.4/Windows/${sessionId}`,
     "Accept": "text/plain, application/json;q=0.9",
+    "Accept-Language": "ru-RU,en,*",
     ...(hwid ? { "X-HWID": hwid } : {}),
     "X-App-Version": "4.5.4",
     "X-Device-Locale": "RU",
