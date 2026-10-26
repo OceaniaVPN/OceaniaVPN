@@ -67,19 +67,21 @@ async function fetchViaHttpProxy(url, options, proxyEndpoint, timeoutMs) {
     try { await timeout(writer.write(bytes instanceof Uint8Array ? bytes : new TextEncoder().encode(bytes))); }
     finally { try { writer.releaseLock(); } catch {} writer = null; }
   };
+const readerBuffers = new WeakMap();
+
   const readExact = async (streamReader, length) => {
-    const chunks = [];
-    let received = 0;
-    while (received < length) {
+    let pending = readerBuffers.get(streamReader) || new Uint8Array(0);
+    while (pending.length < length) {
       const part = await timeout(streamReader.read());
       if (part.done) throw new Error(`Прокси закрыл соединение на этапе ${phase}`);
-      chunks.push(part.value);
-      received += part.value.length;
+      const joined = new Uint8Array(pending.length + part.value.length);
+      joined.set(pending, 0);
+      joined.set(part.value, pending.length);
+      pending = joined;
     }
-    const joined = new Uint8Array(received);
-    let offset = 0;
-    for (const chunk of chunks) { joined.set(chunk, offset); offset += chunk.length; }
-    return joined.slice(0, length);
+    const result = pending.slice(0, length);
+    readerBuffers.set(streamReader, pending.slice(length));
+    return result;
   };
   const establishSocks5 = async (hostname, port) => {
     phase = "согласование SOCKS5";
