@@ -18,7 +18,7 @@ function wrapSocket(raw) {
 }
 
 export function connectTcpSocket(hostname, port) {
-  const raw = connect({ hostname, port }, { secureTransport: "off", allowHalfOpen: false });
+  const raw = connect({ hostname, port }, { secureTransport: "starttls", allowHalfOpen: false });
   return wrapSocket(raw);
 }
 
