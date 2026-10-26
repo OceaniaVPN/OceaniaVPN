@@ -1177,7 +1177,7 @@ export async function handleCallback(cfg, cb, options = {}) {
 
   const data = String(cb.data || "").trim();
   if (/^(?:decode_proxy_|px_|proxy(?:_|$))/.test(data)) {
-    await refreshHttpProxyCountries(cfg.proxyListUrl);
+    await refreshHttpProxyCountries(cfg.proxyListUrl, cfg.githubToken);
   }
   if (!data) {
     console.warn("[Callback] Empty callback_data");
@@ -1420,7 +1420,7 @@ export async function handleMessage(cfg, msg) {
   const text = msg.text || "";
   const trimmed = text.trim();
   if (/^\/(?:proxy|decode)(?:@\w+)?(?:\s|$)/i.test(trimmed)) {
-    await refreshHttpProxyCountries(cfg.proxyListUrl);
+    await refreshHttpProxyCountries(cfg.proxyListUrl, cfg.githubToken);
   }
 
   if (msg.document) {
