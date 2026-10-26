@@ -235,7 +235,9 @@ const readerBuffers = new WeakMap();
       const receivedBytes = raw.length;
       throw new Error(receivedBytes
         ? `Соединение закрыто до получения HTTP-заголовков от ${target.hostname} (этап: ${phase}, получено байт: ${receivedBytes})`
-        : `Туннель через прокси установлен, но ${target.hostname} закрыл соединение без HTTP-ответа (этап: ${phase}). Проверь адрес подписки и ограничения прокси по целевому хосту`);
+        : target.protocol === "https:"
+          ? `После SOCKS5/CONNECT нет HTTP-ответа от ${target.hostname}. Возможная причина: Cloudflare Workers startTls() через прокси на production edge не передаёт SNI целевого хоста (известное ограничение runtime); проверка URL сама по себе этого не исправит. Нужен транспорт с корректным TLS SNI или отдельный relay.`
+          : `Туннель через прокси установлен, но ${target.hostname} закрыл соединение без HTTP-ответа (этап: ${phase}). Проверь адрес подписки и ограничения прокси по целевому хосту`);
     }
     const headerText = new TextDecoder().decode(raw.slice(0, headerEnd));
     const lines = headerText.split("\r\n");
