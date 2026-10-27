@@ -553,7 +553,7 @@ async function runDecodeWithProfile(cfg, chatId, url, selection) {
       `🌐 Источник: <code>${escapeHtml(directCrypt5 ? "crypt5 → " + (parsedUrl?.hostname || "subscription") : parsedUrl.hostname)}</code>\n` +
       `🖥 Платформа: <b>${platform === "android" ? "Android" : "Windows"}</b>\n` +
       `🌐 Прокси: <b>${mode === "on" ? `${escapeHtml(selection.country || "Страна")}, ${escapeHtml(selection.endpoint)}` : "выключен"}</b>\n\n` +
-      `📄 Удаляю только заголовки; оставшиеся строки сохраняю без пересборки…`);
+      `📄 Сохраняю исходное тело и начальные метаданные подписки; формат содержимого не пересобираю…`);
     if (loadingMsg?.result?.message_id) loadingMsgId = loadingMsg.result.message_id;
     const result = await decodeSubscription(url, false, false, {
       apiToken: cfg.subscriptionApiSecret || "",
@@ -604,7 +604,7 @@ async function runDecodeWithProfile(cfg, chatId, url, selection) {
     ] };
     const successMsg = "✅ <b>Содержимое подписки сохранено</b>\n\n" +
       "━━━━━━━━━━━━━━━━━━━━\n📄 Строк передано: <code>" + savedLineCount + "</code>\n" +
-      "Заголовки в начале удалены. Остальные строки не пересобирались, имена узлов не менялись.\n" +
+      "Исходное тело и начальные метаданные сохранены. При выдаче известные метаданные переносятся в HTTP-заголовки; ссылки и имена узлов не пересобирались.\n" +
       "━━━━━━━━━━━━━━━━━━━━\n\n" +
       "<b>Источник:</b> " + escapeHtml(hostname) + "\n" +
       "<b>Платформа:</b> " + platformLabel + "\n" +
