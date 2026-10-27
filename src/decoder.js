@@ -20,6 +20,16 @@ function normalizeText(text) {
     .trim();
 }
 
+function safeHost(value) {
+  try { return new URL(String(value || "")).hostname || null; }
+  catch { return null; }
+}
+
+function logDecodeEvent(event) {
+  // Do not log complete URLs, payload text, tokens, profile links, or device IDs.
+  try { console.info(JSON.stringify(event)); } catch {}
+}
+
 function stripLeadingSubscriptionHeaders(text) {
   const source = String(text || "").replace(/^\uFEFF/, "");
   const newline = source.includes("\r\n") ? "\r\n" : "\n";
@@ -208,9 +218,24 @@ async function fetchSubscription(url, trusted = false, requestOptions = {}) {
         const rawText = await res.text();
         const text = normalizeText(rawText);
         const ct = res.headers.get("content-type") || "";
+        const htmlLike = ct.includes("text/html") || /<html|<!doctype|<body|<script/i.test(text);
+        const temporaryMessage = isTemporaryMessage(text);
+        const stubResponse = isStubResponse(text);
+        logDecodeEvent({
+          event: "subscription_decode_body",
+          host: safeHost(actualUrl),
+          attempt: attempts,
+          status: res.status,
+          bodyLength: rawText.length,
+          contentType: ct || null,
+          empty: !text,
+          temporaryMessage,
+          stubResponse,
+          html: htmlLike,
+        });
         if (!text) { lastError = "Пустой ответ"; continue; }
-        if (isTemporaryMessage(text)) { lastError = "Сервер вернул временное сообщение"; continue; }
-        if (isStubResponse(text)) { lastError = "Сервер вернул заглушку"; continue; }
+        if (temporaryMessage) { lastError = "Сервер вернул временное сообщение"; continue; }
+        if (stubResponse) { lastError = "Сервер вернул заглушку"; continue; }
         const envelopeUrl = unwrapEnvelope(text);
         if (envelopeUrl && envelopeUrl !== actualUrl) {
           try {
@@ -221,7 +246,7 @@ async function fetchSubscription(url, trusted = false, requestOptions = {}) {
             }
           } catch {}
         }
-        const isHtml = ct.includes("text/html") || /<html|<!doctype|<body|<script/i.test(text);
+        const isHtml = htmlLike;
         if (isHtml) {
           const allUrls = extractAllUrlsFromHtml(text, url).slice(0, 3);
           if (allUrls.length > 0) {
@@ -276,7 +301,17 @@ export async function decodeSubscription(url, trusted = false, pingCheck = false
   const cleanUrl = url.trim().replace(/^<|>$/g, "");
   if (!/^https?:\/\//i.test(cleanUrl)) return { ok: false, error: "Нужна HTTP(S)-ссылка", configs: [], uris: [], attempts: 0 };
   const result = await fetchSubscription(cleanUrl, trusted, requestOptions);
-  if (!result.ok) return { ...result, configs: [], uris: [] };
+  if (!result.ok) {
+    logDecodeEvent({
+      event: "subscription_decode_result",
+      host: safeHost(cleanUrl),
+      ok: false,
+      attempts: Number(result.attempts) || 0,
+      status: Number(result.status) || null,
+      error: String(result.error || "Ошибка декодирования").slice(0, 100),
+    });
+    return { ...result, configs: [], uris: [] };
+  }
   // Preserve the upstream body for storage and later HTTP metadata reconstruction.
   // Parse a separate payload with only the leading comment/metadata lines removed.
   let rawContent = typeof result.rawContent === "string" ? result.rawContent : (result.content || "");
@@ -328,6 +363,17 @@ export async function decodeSubscription(url, trusted = false, pingCheck = false
   if (!rawContent.trim()) return { ok: false, error: "Пустая подписка после удаления заголовков", configs: [], uris: [], attempts: result.attempts, format: finalFormat || format };
   let aliveFlags;
   if (pingCheck && uris.length) aliveFlags = await checkServersAlive(uris);
+  logDecodeEvent({
+    event: "subscription_decode_result",
+    host: safeHost(cleanUrl),
+    ok: true,
+    attempts: Number(result.attempts) || 0,
+    format: finalFormat || format,
+    configCount: parsed.length,
+    uriCount: uris.length,
+    bodyLength: rawContent.length,
+    contentType: result.contentType || "text/plain",
+  });
   return { ok: true, configs: parsed, uris, aliveFlags, attempts: result.attempts, format: finalFormat || format, rawContent, contentType: result.contentType || "text/plain", metadata: parsed?.metadata || {} };
 }
 
