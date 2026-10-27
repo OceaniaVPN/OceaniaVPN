@@ -190,7 +190,21 @@ async function fetchSubscription(url, trusted = false, requestOptions = {}) {
       try {
         if (i > 0) await new Promise(resolve => setTimeout(resolve, RETRY_DELAYS[i]));
         const res = await fetchWithRedirects(actualUrl, httpOptions);
-        if (!res.ok) { lastError = `HTTP ${res.status}`; continue; }
+        if (!res.ok) {
+          lastError = `HTTP ${res.status}`;
+          // Do not repeat permanent client/auth errors. Retry only statuses that
+          // can plausibly clear on a subsequent request.
+          const retryableStatus = res.status === 408 || res.status === 425 ||
+            res.status === 429 || res.status >= 500;
+          if (!retryableStatus || i === MAX_ATTEMPTS - 1) {
+            return { ok: false, error: lastError, attempts, status: res.status, content: bestContent, contentType: bestContentType };
+          }
+          const retryAfter = Number(res.headers.get("retry-after"));
+          if (res.status === 429 && Number.isFinite(retryAfter) && retryAfter > 0) {
+            await new Promise(resolve => setTimeout(resolve, Math.min(retryAfter * 1000, 2000)));
+          }
+          continue;
+        }
         const rawText = await res.text();
         const text = normalizeText(rawText);
         const ct = res.headers.get("content-type") || "";
@@ -209,7 +223,7 @@ async function fetchSubscription(url, trusted = false, requestOptions = {}) {
         }
         const isHtml = ct.includes("text/html") || /<html|<!doctype|<body|<script/i.test(text);
         if (isHtml) {
-          const allUrls = extractAllUrlsFromHtml(text, url).slice(0, 8);
+          const allUrls = extractAllUrlsFromHtml(text, url).slice(0, 3);
           if (allUrls.length > 0) {
             const allContents = [];
             for (const subUrl of allUrls) {
@@ -220,7 +234,7 @@ async function fetchSubscription(url, trusted = false, requestOptions = {}) {
                 if (!subText || isStubResponse(subText) || isTemporaryMessage(subText)) continue;
                 const subCt = subRes.headers.get("content-type") || "";
                 if (/<html|<!doctype|<script/i.test(subText) || subCt.includes("text/html")) {
-                  const nestedUrls = extractAllUrlsFromHtml(subText, subUrl).slice(0, 6);
+                  const nestedUrls = extractAllUrlsFromHtml(subText, subUrl).slice(0, 1);
                   for (const nestedUrl of nestedUrls) {
                     try {
                       const nestedRes = await fetchWithRedirects(nestedUrl, httpOptions);
@@ -239,7 +253,7 @@ async function fetchSubscription(url, trusted = false, requestOptions = {}) {
         // Не пытаемся распознать протокол в обычном текстовом ответе.
         // Сохраняем тело источника; ведущие заголовки будут удалены только перед выдачей.
         if (!isHtml) return { ok: true, content: text, rawContent: rawText, contentType: ct || "text/plain", attempts };
-        const candidateUrls = extractAllUrlsFromHtml(text, url).slice(0, 8);
+        const candidateUrls = extractAllUrlsFromHtml(text, url).slice(0, 3);
         if (candidateUrls.length > 0) { const extracted = candidateUrls.join("\n"); return { ok: true, content: extracted, rawContent: extracted, contentType: "text/plain", attempts }; }
         bestContent = rawText; bestContentType = ct || "text/plain"; lastError = "Не найдено поддерживаемых конфигураций";
       } catch (e) { lastError = (e?.name === "AbortError" || e?.name === "TimeoutError") ? "Таймаут запроса" : (e?.message || "Ошибка запроса"); }
@@ -263,12 +277,11 @@ export async function decodeSubscription(url, trusted = false, pingCheck = false
   if (!/^https?:\/\//i.test(cleanUrl)) return { ok: false, error: "Нужна HTTP(S)-ссылка", configs: [], uris: [], attempts: 0 };
   const result = await fetchSubscription(cleanUrl, trusted, requestOptions);
   if (!result.ok) return { ...result, configs: [], uris: [] };
-  // Subscription providers often prepend metadata comments (#name: ..., descriptions).
-  // Strip only leading comment/blank lines before format detection; keep inline URI fragments
-  // such as #Germany intact, and never modify the actual JSON/YAML/URI payload.
-  let content = cleanSubscriptionPayload(typeof result.rawContent === "string" ? result.rawContent : (result.content || ""));
-  let rawContent = content;
-  if (!rawContent.trim()) return { ok: false, error: "После удаления заголовков содержимое пустое", configs: [], uris: [], attempts: result.attempts };
+  // Preserve the upstream body for storage and later HTTP metadata reconstruction.
+  // Parse a separate payload with only the leading comment/metadata lines removed.
+  let rawContent = typeof result.rawContent === "string" ? result.rawContent : (result.content || "");
+  let content = cleanSubscriptionPayload(rawContent);
+  if (!content.trim()) return { ok: false, error: "После удаления заголовков содержимое пустое", configs: [], uris: [], attempts: result.attempts };
   const format = detectFormat(content);
   let parsed = [];
   let finalFormat = format;
@@ -278,8 +291,8 @@ export async function decodeSubscription(url, trusted = false, pingCheck = false
       if (nestedUrl) {
         const nested = await fetchSubscription(nestedUrl, trusted, requestOptions);
         if (!nested.ok) return { ...nested, configs: [], uris: [] };
-        content = cleanSubscriptionPayload(typeof nested.rawContent === "string" ? nested.rawContent : (nested.content || ""));
-        rawContent = content;
+        rawContent = typeof nested.rawContent === "string" ? nested.rawContent : (nested.content || "");
+        content = cleanSubscriptionPayload(rawContent);
       }
     }
     finalFormat = detectFormat(content);
