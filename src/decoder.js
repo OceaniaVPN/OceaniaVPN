@@ -308,7 +308,14 @@ export async function decodeSubscription(url, trusted = false, pingCheck = false
       ok: false,
       attempts: Number(result.attempts) || 0,
       status: Number(result.status) || null,
-      error: String(result.error || "Ошибка декодирования").slice(0, 100),
+      errorCategory: result.status
+        ? "http_status"
+        : /таймаут/i.test(String(result.error || "")) ? "timeout"
+        : /заглушк/i.test(String(result.error || "")) ? "stub_response"
+        : /пуст/i.test(String(result.error || "")) ? "empty_response"
+        : /временн/i.test(String(result.error || "")) ? "temporary_response"
+        : /не найдено поддерживаемых/i.test(String(result.error || "")) ? "no_supported_payload"
+        : "request_or_decode_error",
     });
     return { ...result, configs: [], uris: [] };
   }
