@@ -178,6 +178,20 @@ function stripLeadingSubscriptionHeaders(text) {
   return lines.slice(first).join(newline);
 }
 
+function inferDecodedContentType(content) {
+  const payload = stripLeadingSubscriptionHeaders(content).trimStart();
+  if (/^[\[{]/.test(payload)) {
+    try {
+      JSON.parse(payload);
+      return "application/json;charset=utf-8";
+    } catch {}
+  }
+  if (/^(?:proxies|proxy-groups|mixed-port|port|mode)\s*:/im.test(payload)) {
+    return "text/yaml;charset=utf-8";
+  }
+  return "text/plain;charset=utf-8";
+}
+
 async function serveSubscription(request, cfg) {
   const url = new URL(request.url);
 
@@ -368,7 +382,9 @@ async function serveSubscription(request, cfg) {
     return new Response(result.body, { headers });
   }
 
-  headers["Content-Type"] = "text/plain;charset=utf-8";
+  headers["Content-Type"] = isOwnedDecodedProfile
+    ? inferDecodedContentType(content)
+    : "text/plain;charset=utf-8";
   return new Response(content, { headers });
 }
 
