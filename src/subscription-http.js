@@ -12,6 +12,19 @@ function safeOrigin(value) {
   }
 }
 
+function routeLabel(pathname) {
+  if (pathname === "/") return "root";
+  if (pathname === "/sub") return "subscription-endpoint";
+  if (/^\/api(?:\/|$)/i.test(pathname)) return "api";
+  return "other";
+}
+
+function logRequestEvent(event) {
+  // Never log full URLs, query strings, Authorization values, bot secrets,
+  // subscription bodies, device IDs, or proxy credentials.
+  try { console.info(JSON.stringify(event)); } catch {}
+}
+
 export async function fetchWithTimeout(url, options = {}, timeoutMs = 8000) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -90,17 +103,57 @@ export async function fetchWithRedirects(initialUrl, options = {}) {
       requestHeaders.set("X-Bot-Secret", upstreamSecret);
     }
 
-    const response = proxyEndpoint
-      ? await fetchViaHttpProxy(currentUrl, { headers: requestHeaders, probeOnly }, proxyEndpoint, timeoutMs)
-      : await fetchWithTimeout(currentUrl, {
-          method: "GET",
-          headers: requestHeaders,
-          redirect: "manual",
-        }, timeoutMs);
+    const hopStartedAt = Date.now();
+    const transport = proxyEndpoint ? "explicit-proxy-tunnel" : "worker-fetch";
+    let response;
+    try {
+      response = proxyEndpoint
+        ? await fetchViaHttpProxy(currentUrl, { headers: requestHeaders, probeOnly }, proxyEndpoint, timeoutMs)
+        : await fetchWithTimeout(currentUrl, {
+            method: "GET",
+            headers: requestHeaders,
+            redirect: "manual",
+          }, timeoutMs);
+    } catch (error) {
+      logRequestEvent({
+        event: "subscription_http_error",
+        host: target.hostname,
+        protocol: target.protocol.replace(":", ""),
+        route: routeLabel(target.pathname),
+        transport,
+        redirectHop: hop,
+        elapsedMs: Date.now() - hopStartedAt,
+        errorType: error?.name || "Error",
+        // Whether credentials were attached, not their values.
+        authorizationHeaderPresent: requestHeaders.has("authorization"),
+        botSecretHeaderPresent: requestHeaders.has("x-bot-secret"),
+      });
+      throw error;
+    }
 
-    if (!REDIRECT_STATUSES.has(response.status)) return response;
-
+    const isRedirect = REDIRECT_STATUSES.has(response.status);
     const location = response.headers.get("location");
+    logRequestEvent({
+      event: "subscription_http_response",
+      host: target.hostname,
+      protocol: target.protocol.replace(":", ""),
+      route: routeLabel(target.pathname),
+      transport,
+      redirectHop: hop,
+      status: response.status,
+      elapsedMs: Date.now() - hopStartedAt,
+      contentType: response.headers.get("content-type") || null,
+      serverHeaderPresent: response.headers.has("server"),
+      cfRayPresent: response.headers.has("cf-ray"),
+      redirect: isRedirect,
+      locationPresent: Boolean(location),
+      userAgentPresent: requestHeaders.has("user-agent"),
+      acceptPresent: requestHeaders.has("accept"),
+      authorizationHeaderPresent: requestHeaders.has("authorization"),
+      botSecretHeaderPresent: requestHeaders.has("x-bot-secret"),
+    });
+
+    if (!isRedirect) return response;
     if (!location) return response;
     const trimmedLocation = location.trim();
     if (APP_SCHEME_PATTERN.test(trimmedLocation)) {
