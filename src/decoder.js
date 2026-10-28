@@ -30,6 +30,18 @@ function logDecodeEvent(event) {
   try { console.info(JSON.stringify(event)); } catch {}
 }
 
+function isBlockedDomainUrl(value) {
+  try {
+    const hostname = new URL(String(value || "")).hostname.toLowerCase().replace(/\.$/, "");
+    return BLOCKED_DOMAINS.some(domain => {
+      const blocked = domain.toLowerCase();
+      return hostname === blocked || hostname.endsWith("." + blocked);
+    });
+  } catch {
+    return false;
+  }
+}
+
 function stripLeadingSubscriptionHeaders(text) {
   const source = String(text || "").replace(/^\uFEFF/, "");
   const newline = source.includes("\r\n") ? "\r\n" : "\n";
@@ -172,9 +184,9 @@ function hasParsableContent(text) {
 
 async function fetchSubscription(url, trusted = false, requestOptions = {}) {
   try {
-    const lowerUrl = url.toLowerCase();
-    const isBlocked = BLOCKED_DOMAINS.some(domain => lowerUrl.includes(domain.toLowerCase()));
-    if (isBlocked && !trusted) return { ok: false, error: "🚫 Домен заблокирован", attempts: 0 };
+    if (isBlockedDomainUrl(url)) {
+      return { ok: false, error: "🚫 Этот домен запрещён для декодирования", attempts: 0 };
+    }
     if (trusted && (!requestOptions.upstreamSecret || !requestOptions.upstreamOrigin)) {
       return {
         ok: false,
