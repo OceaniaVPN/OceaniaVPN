@@ -44,6 +44,28 @@ function isBlockedDomainUrl(value) {
   }
 }
 
+function containsBlockedDomainInPayload(...values) {
+  const text = values.map(value => {
+    if (typeof value === "string") return value;
+    try { return JSON.stringify(value); } catch { return ""; }
+  }).join("\n");
+  return BLOCKED_DOMAINS.some(domain => {
+    const escaped = domain.replace(/[.*+?^$()|[\]\\]/g, "\\function isBlockedDomainUrl(value) {
+  try {
+    const hostname = new URL(String(value || "")).hostname.toLowerCase().replace(/\.$/, "");
+    return BLOCKED_DOMAINS.some(domain => {
+      const blocked = domain.toLowerCase();
+      return hostname === blocked || hostname.endsWith("." + blocked);
+    });
+  } catch {
+    return false;
+  }
+}
+");
+    return new RegExp("(^|[^a-z0-9.-])" + escaped + "(?=$|[^a-z0-9.-])", "i").test(text);
+  });
+}
+
 function stripLeadingSubscriptionHeaders(text) {
   const source = String(text || "").replace(/^\uFEFF/, "");
   const newline = source.includes("\r\n") ? "\r\n" : "\n";
@@ -380,6 +402,23 @@ export async function decodeSubscription(url, trusted = false, pingCheck = false
     parsed = [];
   }
   const uris = parsed.map(x => typeof x === "string" ? x : x?.uri).filter(Boolean);
+  // Block not only input hosts, but also a decoded/crypt payload that resolves to a protected host.
+  if (containsBlockedDomainInPayload(rawContent, parsed, uris)) {
+    logDecodeEvent({
+      event: "subscription_decode_result",
+      host: safeHost(cleanUrl),
+      ok: false,
+      attempts: Number(result.attempts) || 0,
+      errorCategory: "blocked_domain_in_decoded_payload",
+    });
+    return {
+      ok: false,
+      error: "🚫 В расшифрованном содержимом обнаружен запрещённый домен",
+      configs: [],
+      uris: [],
+      attempts: result.attempts,
+    };
+  }
   // Даже если внутренний парсер не распознал формат, исходное тело остаётся полезным payload для Happ.
   if (!rawContent.trim()) return { ok: false, error: "Пустая подписка после удаления заголовков", configs: [], uris: [], attempts: result.attempts, format: finalFormat || format };
   let aliveFlags;
