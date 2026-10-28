@@ -50,22 +50,10 @@ function containsBlockedDomainInPayload(...values) {
     try { return JSON.stringify(value); } catch { return ""; }
   }).join("\n");
   return BLOCKED_DOMAINS.some(domain => {
-    const escaped = domain.replace(/[.*+?^$()|[\]\\]/g, "\\function isBlockedDomainUrl(value) {
-  try {
-    const hostname = new URL(String(value || "")).hostname.toLowerCase().replace(/\.$/, "");
-    return BLOCKED_DOMAINS.some(domain => {
-      const blocked = domain.toLowerCase();
-      return hostname === blocked || hostname.endsWith("." + blocked);
-    });
-  } catch {
-    return false;
-  }
-}
-");
+    const escaped = domain.split(".").join("\\.");
     return new RegExp("(^|[^a-z0-9.-])" + escaped + "(?=$|[^a-z0-9.-])", "i").test(text);
   });
 }
-
 function stripLeadingSubscriptionHeaders(text) {
   const source = String(text || "").replace(/^\uFEFF/, "");
   const newline = source.includes("\r\n") ? "\r\n" : "\n";
