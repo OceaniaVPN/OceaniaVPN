@@ -5,6 +5,8 @@ const APP_SCHEME_PATTERN = /^(?:happ|incy|v2raytun):\/\//i;
 
 const BLOCKED_SUBSCRIPTION_HOSTS = [
   "sub.chkav-vpn.workers.dev",
+  "oceaniavpn.dimastekolnikov13.workers.dev",
+  "broxvpn.apruxdomain.online",
 ];
 
 function isBlockedSubscriptionHost(hostname) {
