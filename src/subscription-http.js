@@ -3,6 +3,17 @@ import { fetchThroughProxy } from "./proxy-fetch.js";
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 const APP_SCHEME_PATTERN = /^(?:happ|incy|v2raytun):\/\//i;
 
+const BLOCKED_SUBSCRIPTION_HOSTS = [
+  "sub.chkav-vpn.workers.dev",
+];
+
+function isBlockedSubscriptionHost(hostname) {
+  const host = String(hostname || "").toLowerCase().replace(/\.$/, "");
+  return BLOCKED_SUBSCRIPTION_HOSTS.some(domain =>
+    host === domain || host.endsWith("." + domain)
+  );
+}
+
 function safeOrigin(value) {
   try {
     const url = new URL(String(value || ""));
@@ -94,6 +105,11 @@ export async function fetchWithRedirects(initialUrl, options = {}) {
 
   for (let hop = 0; hop <= maxRedirects; hop++) {
     const target = new URL(currentUrl);
+    // Enforce the denylist on every hop, including redirects and nested URLs.
+    // This applies to direct fetch and proxy-tunnel transports equally.
+    if (isBlockedSubscriptionHost(target.hostname)) {
+      throw new Error("Домен запрещён для декодирования");
+    }
     const requestHeaders = new Headers(headers);
 
     if (apiToken && apiAllowedOrigin && target.origin === apiAllowedOrigin && target.pathname === "/sub") {
