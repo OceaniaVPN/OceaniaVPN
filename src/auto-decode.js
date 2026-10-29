@@ -168,8 +168,12 @@ export async function runAutoDecodeOnce(cfg, chatId, subscriptionId, options = {
     }));
 
     if (notify) {
-      await sendMessage(cfg.telegramToken, chatId,
-        `✅ <b>Auto Decode обновил подписку</b>\n\n📡 Серверов источника: <code>${newUris.length}</code>\n📋 Всего в подписке: <code>${nextLinks.length}</code>\n⏰ Следующее обновление примерно через 5 часов.`);
+      try {
+        await sendMessage(cfg.telegramToken, chatId,
+          `✅ <b>Auto Decode обновил подписку</b>\n\n📡 Серверов источника: <code>${newUris.length}</code>\n📋 Всего в подписке: <code>${nextLinks.length}</code>\n⏰ Следующее обновление примерно через 5 часов.`);
+      } catch (notifyError) {
+        console.warn("[AutoDecode] Update succeeded but Telegram notification failed:", notifyError?.message || notifyError);
+      }
     }
     return { ok: true, parsedCount: newUris.length, totalCount: nextLinks.length, nextRunAt: updated.nextRunAt };
   } catch (error) {
