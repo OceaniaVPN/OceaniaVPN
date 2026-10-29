@@ -13,6 +13,7 @@ import { HTTP_PROXY_COUNTRIES, checkCountryProxies, checkProxyTcp, isKnownHttpPr
 import { getProxyPreference, getActiveProxyPreference, setProxyPreference, getLastDecodedProfile, setLastDecodedProfile, setDecodedProfileProxyPreference } from "./proxy-preferences.js";
 import { listSubscriptions, getActiveSubscription, getActiveFilename, createSubscription, setActiveSubscription, deleteSubscriptionRecord, updateSubscriptionSettings, makeSubscriptionDeviceKey } from "./subscriptions.js";
 import { listScheduledChanges, addScheduledChange, cancelScheduledChange } from "./scheduler.js";
+import { getAutoDecodeConfig, setAutoDecodeSource, setAutoDecodeEnabled, runAutoDecodeOnce } from "./auto-decode.js";
 
 function splitSubscriptionFile(content) {
   const lines = content.split("\n");
@@ -583,6 +584,17 @@ async function runDecodeWithProfile(cfg, chatId, url, selection) {
       return;
     }
 
+    const parsedUris = [...new Set((Array.isArray(result.uris) ? result.uris : [])
+      .map(uri => String(uri || "").trim())
+      .filter(isSupportedServerUri))];
+    if (cfg.store && parsedUris.length) {
+      await cfg.store.put(`parsedcache_${chatId}`, JSON.stringify({
+        uris: parsedUris,
+        sourceHost: hostname,
+        savedAt: Date.now(),
+      }), { expirationTtl: 86400 });
+    }
+
     // Store the current run's exact choice per generated profile. Never consult
     // a previous Android/Windows proxy preference for this decoded filename.
     await setDecodedProfileProxyPreference(cfg, chatId, filename, platform, {
@@ -598,12 +610,14 @@ async function runDecodeWithProfile(cfg, chatId, url, selection) {
     const platformLabel = platform === "android" ? "Android" : "Windows";
     const proxyLabel = mode === "on" ? (selection.country + " · " + selection.endpoint) : "Без прокси";
     const kb = { inline_keyboard: [
+      ...(parsedUris.length ? [[{ text: "➕ Добавить распознанные серверы в подписку", callback_data: "add_parsed_to_sub" }]] : []),
       [{ text: "🔗 Итоговый профиль · " + platformLabel, url: profileUrl }],
       [{ text: "🔄 Декодировать другую ссылку", callback_data: "decode" }],
       [{ text: "🏠 Главное меню", callback_data: "menu" }],
     ] };
     const successMsg = "✅ <b>Содержимое подписки сохранено</b>\n\n" +
       "━━━━━━━━━━━━━━━━━━━━\n📄 Строк передано: <code>" + savedLineCount + "</code>\n" +
+      "🔎 Распознано серверов для добавления: <code>" + parsedUris.length + "</code>\n" +
       "Исходное тело и начальные метаданные сохранены. При выдаче известные метаданные переносятся в HTTP-заголовки; ссылки и имена узлов не пересобирались.\n" +
       "━━━━━━━━━━━━━━━━━━━━\n\n" +
       "<b>Источник:</b> " + escapeHtml(hostname) + "\n" +
@@ -733,7 +747,65 @@ export async function cmdMy(cfg, chatId) {
   const formatLabel = active.format === "json" ? "Happ JSON" : "VLESS/URI список";
   const msg = `📋 <b>МОЙ ПРОФИЛЬ</b>\n\n🟢 Статус: <b>АКТИВЕН</b>\n🏷 Подписка: <b>${escapeHtml(active.title || "Моя подписка")}</b>\n📡 Серверов: <code>${links.length}</code>\n🧾 Формат: <b>${formatLabel}</b>\n📱 Устройства: <code>${limitLabel}</code>\n\n<b>Параметры профиля</b>\n<pre>${escapeHtml(headers.join("\n"))}</pre>`;
   await sendMessage(cfg.telegramToken, chatId, msg, { inline_keyboard: [[{ text: "🧾 Формат подписки", callback_data: `sub_format_menu_${active.id}` }, { text: "📱 Устройства", callback_data: `dev_manage_${active.id}` }], [{ text: "🔗 Открыть подписку", url: subUrl }], [{ text: "🎨 Страница", url: pageUrl }, { text: "🖼 Тема", callback_data: "theme_pick" }], [{ text: "📡 Серверы", callback_data: "list" }, { text: "📤 Экспорт", callback_data: "export" }],
-    [{ text: "🔀 Все подписки", callback_data: "subs" }], [{ text: "⚡ Проверка", callback_data: "check" }, { text: "📊 Аналитика", callback_data: "analytics" }], [{ text: "🗑 Удалить", callback_data: "delete" }], [{ text: "🏠 Меню", callback_data: "menu" }]] });
+    [{ text: "🔁 Auto Decode · 5 ч", callback_data: "autodecode" }], [{ text: "🔀 Все подписки", callback_data: "subs" }], [{ text: "⚡ Проверка", callback_data: "check" }, { text: "📊 Аналитика", callback_data: "analytics" }], [{ text: "🗑 Удалить", callback_data: "delete" }], [{ text: "🏠 Меню", callback_data: "menu" }]] });
+}
+
+async function cmdAutoDecodeSettings(cfg, chatId) {
+  const active = await getActiveSubscription(cfg, chatId);
+  if (!active) {
+    return sendMessage(cfg.telegramToken, chatId, "📭 <b>Сначала создай подписку.</b>", {
+      inline_keyboard: [[{ text: "🚀 Создать подписку", callback_data: "create" }], [{ text: "🏠 Меню", callback_data: "menu" }]]
+    });
+  }
+  const config = await getAutoDecodeConfig(cfg, chatId, active.id);
+  const sourceHost = (() => {
+    if (!config?.sourceUrl) return "не задан";
+    if (/^happ:\/\/crypt5\//i.test(config.sourceUrl)) return "Crypt5";
+    try { return new URL(config.sourceUrl).hostname; } catch { return "источник задан"; }
+  })();
+  const formatTime = value => value ? new Date(value).toLocaleString("ru-RU", {
+    timeZone: "Europe/Berlin", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit"
+  }) : "—";
+  const rows = [[{ text: "🔗 Указать / сменить ссылку", callback_data: "autodecode_set" }]];
+  if (config?.sourceUrl) {
+    rows.push([{ text: "▶️ Расшифровать и обновить сейчас", callback_data: "autodecode_run" }]);
+    rows.push([{ text: config.enabled ? "⏸ Отключить автообновление" : "✅ Включить каждые 5 часов", callback_data: config.enabled ? "autodecode_off" : "autodecode_on" }]);
+  }
+  rows.push([{ text: "📋 Мой профиль", callback_data: "my" }, { text: "🏠 Меню", callback_data: "menu" }]);
+  const status = !config?.sourceUrl ? "не настроен" : config.enabled ? "включён" : "на паузе";
+  let body = `🔁 <b>AUTO DECODE · 5 ЧАСОВ</b>\n\n📋 Подписка: <b>${escapeHtml(active.title || "Моя подписка")}</b>\n⚙️ Статус: <b>${status}</b>\n🌐 Источник: <code>${escapeHtml(sourceHost)}</code>\n\n`;
+  if (config?.lastRunAt) body += `🕒 Последний запуск: <code>${escapeHtml(formatTime(config.lastRunAt))}</code>\n`;
+  if (config?.enabled && config?.nextRunAt) body += `⏭ Следующий запуск примерно: <code>${escapeHtml(formatTime(config.nextRunAt))}</code>\n`;
+  if (Number.isFinite(config?.lastCount)) body += `📡 Серверов из источника: <code>${config.lastCount}</code>\n`;
+  if (config?.lastError) body += `\n⚠️ Последняя ошибка: <code>${escapeHtml(String(config.lastError).slice(0, 250))}</code>\n`;
+  body += `\nКогда функция включена, источник повторно расшифровывается примерно каждые 5 часов. Серверы из этого источника обновляются; остальные серверы и заголовки подписки сохраняются.`;
+  return sendMessage(cfg.telegramToken, chatId, body, { inline_keyboard: rows });
+}
+
+async function handleAutoDecodeUrl(cfg, chatId, text, state) {
+  const value = String(text || "").trim();
+  const subscriptionId = String(state?.autoDecodeSubscriptionId || "");
+  if (!subscriptionId) {
+    await clearState(cfg, chatId).catch(() => {});
+    return sendMessage(cfg.telegramToken, chatId, "⚠️ Подписка для настройки не найдена. Открой Auto Decode заново.");
+  }
+  try {
+    const subscriptions = await listSubscriptions(cfg, chatId);
+    const active = subscriptions.find(item => String(item.id) === subscriptionId);
+    if (!active) throw new Error("Подписка уже удалена.");
+    const config = await setAutoDecodeSource(cfg, chatId, subscriptionId, value);
+    await clearState(cfg, chatId).catch(() => {});
+    const sourceHost = /^happ:\/\/crypt5\//i.test(config.sourceUrl)
+      ? "Crypt5"
+      : new URL(config.sourceUrl).hostname;
+    return sendMessage(cfg.telegramToken, chatId,
+      `✅ <b>Источник Auto Decode сохранён</b>\n\n📋 Подписка: <b>${escapeHtml(active.title || "Моя подписка")}</b>\n🌐 Источник: <code>${escapeHtml(sourceHost)}</code>\n⏰ Автообновление включено; первый запуск начнётся в ближайшую минуту, затем примерно каждые 5 часов.`,
+      { inline_keyboard: [[{ text: "▶️ Запустить сейчас", callback_data: "autodecode_run" }], [{ text: "🔁 Настройки Auto Decode", callback_data: "autodecode" }], [{ text: "🏠 Меню", callback_data: "menu" }]] });
+  } catch (error) {
+    return sendMessage(cfg.telegramToken, chatId,
+      `❌ <b>Не удалось сохранить источник</b>\n\n<code>${escapeHtml(error?.message || String(error))}</code>\n\nОтправь HTTP(S)-ссылку или happ://crypt5/...`,
+      { inline_keyboard: [[{ text: "❌ Отмена", callback_data: "autodecode_cancel" }]] });
+  }
 }
 
 async function cmdSubscriptionFormatMenu(cfg, chatId, subscriptionId) {
@@ -813,6 +885,7 @@ export async function cmdList(cfg, chatId, page = 0) {
   if (page > 0) kb.push([{ text: "⬅️", callback_data: `list_page_${page - 1}` }]);
   if (page < totalPages - 1) { if (kb.length) kb[0].push({ text: "➡️", callback_data: `list_page_${page + 1}` }); else kb.push([{ text: "➡️", callback_data: `list_page_${page + 1}` }]); }
   kb.push([{ text: "⚡ Проверить", callback_data: "check" }, { text: "🏆 Лучший", callback_data: "best" }]);
+  if (links.length) kb.push([{ text: "🗑 Удалить все серверы", callback_data: "delete_all_servers" }]);
   kb.push([{ text: "🏠 Меню", callback_data: "menu" }]);
   await sendMessage(cfg.telegramToken, chatId, text, { inline_keyboard: kb });
 }
@@ -886,6 +959,26 @@ export async function cmdDeleteServer(cfg, chatId, n) {
   return sendMessage(cfg.telegramToken, chatId, `❌ Не удалось сохранить изменения.`);
 }
 
+export async function cmdDeleteAllServers(cfg, chatId) {
+  const filename = await getActiveFilename(cfg, chatId);
+  const content = await getFileContent(cfg, filename);
+  if (content === null) return sendMessage(cfg.telegramToken, chatId, "📭 <b>Нет подписки.</b>");
+  const { headers, links } = splitSubscriptionFile(content);
+  if (!links.length) {
+    return sendMessage(cfg.telegramToken, chatId, "ℹ️ В подписке уже нет серверов.", {
+      inline_keyboard: [[{ text: "📡 Список серверов", callback_data: "list" }], [{ text: "🏠 Меню", callback_data: "menu" }]]
+    });
+  }
+  const nextContent = headers.join("\n");
+  const res = await createOrUpdateFile(cfg, filename, nextContent, `Delete all ${links.length} servers for ${chatId}`);
+  if (!(res.content || res.sha || res.commit)) {
+    return sendMessage(cfg.telegramToken, chatId, "❌ Не удалось удалить серверы: GitHub не подтвердил сохранение.");
+  }
+  return sendMessage(cfg.telegramToken, chatId,
+    `🗑 <b>Все серверы удалены</b>\n\nУдалено: <code>${links.length}</code>\nЗаголовки и настройки подписки сохранены.`,
+    { inline_keyboard: [[{ text: "➕ Добавить сервер", callback_data: "add_prompt" }], [{ text: "📋 Мой профиль", callback_data: "my" }], [{ text: "🏠 Меню", callback_data: "menu" }]] });
+}
+
 export async function cmdDelete(cfg, chatId) {
   const active = await getActiveSubscription(cfg, chatId);
   if (!active) return sendMessage(cfg.telegramToken, chatId, `📭 <b>Нет подписок.</b>`, { inline_keyboard: [[{ text: "🚀 Создать", callback_data: "create" }]] });
@@ -900,6 +993,41 @@ export async function cmdDelete(cfg, chatId) {
         : [[{ text: "🚀 Создать подписку", callback_data: "create" }], [{ text: "🏠 Меню", callback_data: "menu" }]] });
   }
   return sendMessage(cfg.telegramToken, chatId, `❌ Не удалось удалить подписку.`);
+}
+
+async function cmdAddParsedToSubscription(cfg, chatId) {
+  const cached = cfg.store ? await cfg.store.get(`parsedcache_${chatId}`, "json") : null;
+  const parsedUris = [...new Set((Array.isArray(cached?.uris) ? cached.uris : [])
+    .map(uri => String(uri || "").trim())
+    .filter(isSupportedServerUri))];
+  if (!parsedUris.length) {
+    return sendMessage(cfg.telegramToken, chatId,
+      "⌛ <b>Нет распознанных серверов для добавления.</b>\n\nЗапусти декодер ещё раз и выбери источник с поддерживаемыми серверами.",
+      { inline_keyboard: [[{ text: "🔍 Декодер", callback_data: "decode" }], [{ text: "🏠 Меню", callback_data: "menu" }]] });
+  }
+  const filename = await getActiveFilename(cfg, chatId);
+  const content = await getFileContent(cfg, filename);
+  if (content === null) {
+    return sendMessage(cfg.telegramToken, chatId,
+      "📭 <b>Сначала создай подписку.</b>",
+      { inline_keyboard: [[{ text: "🚀 Создать подписку", callback_data: "create" }], [{ text: "🏠 Меню", callback_data: "menu" }]] });
+  }
+  const { headers, links } = splitSubscriptionFile(content);
+  const existing = new Set(links);
+  const added = parsedUris.filter(uri => !existing.has(uri));
+  if (!added.length) {
+    return sendMessage(cfg.telegramToken, chatId,
+      `ℹ️ Все распознанные серверы уже есть в подписке.\n\n📡 В подписке: <code>${links.length}</code>\n🔎 Проверено: <code>${parsedUris.length}</code>`,
+      { inline_keyboard: [[{ text: "📡 Серверы", callback_data: "list" }], [{ text: "🏠 Меню", callback_data: "menu" }]] });
+  }
+  const nextContent = [...headers, ...links, ...added].join("\n");
+  const res = await createOrUpdateFile(cfg, filename, nextContent, `Append ${added.length} decoded servers for ${chatId}`);
+  if (!(res.content || res.sha || res.commit)) {
+    return sendMessage(cfg.telegramToken, chatId, "❌ Не удалось добавить серверы: GitHub не подтвердил сохранение.");
+  }
+  return sendMessage(cfg.telegramToken, chatId,
+    `✅ <b>Распознанные серверы добавлены</b>\n\n➕ Добавлено: <code>${added.length}</code>\n📡 Всего в подписке: <code>${links.length + added.length}</code>\n♻️ Повторы пропущены, текущие серверы сохранены.`,
+    { inline_keyboard: [[{ text: "📡 Список серверов", callback_data: "list" }], [{ text: "📋 Мой профиль", callback_data: "my" }], [{ text: "🏠 Меню", callback_data: "menu" }]] });
 }
 
 async function getUserLinks(cfg, chatId) {
@@ -1338,6 +1466,49 @@ export async function handleCallback(cfg, cb, options = {}) {
   else if (data === "create") { await setState(cfg, chatId, { step: "title" }); await sendMessage(cfg.telegramToken, chatId, STEP_MSG.title); }
   else if (data === "decode") await cmdDecode(cfg, chatId, "");
   else if (data === "my") await cmdMy(cfg, chatId);
+  else if (data === "autodecode") await cmdAutoDecodeSettings(cfg, chatId);
+  else if (data === "autodecode_set") {
+    const active = await getActiveSubscription(cfg, chatId);
+    if (!active) return cmdAutoDecodeSettings(cfg, chatId);
+    await setState(cfg, chatId, { step: "auto_decode_url", autoDecodeSubscriptionId: active.id });
+    return sendMessage(cfg.telegramToken, chatId,
+      "🔁 <b>Источник Auto Decode</b>\n\nОтправь HTTP(S)-ссылку на подписку или прямую ссылку <code>happ://crypt5/...</code>. Бот будет расшифровывать её каждые 5 часов и обновлять серверы в текущей подписке.\n\nЧтобы отменить, нажми кнопку ниже.",
+      { inline_keyboard: [[{ text: "❌ Отмена", callback_data: "autodecode_cancel" }]] });
+  }
+  else if (data === "autodecode_cancel") {
+    await clearState(cfg, chatId).catch(() => {});
+    return cmdAutoDecodeSettings(cfg, chatId);
+  }
+  else if (data === "autodecode_on" || data === "autodecode_off") {
+    const active = await getActiveSubscription(cfg, chatId);
+    if (!active) return cmdAutoDecodeSettings(cfg, chatId);
+    try {
+      await setAutoDecodeEnabled(cfg, chatId, active.id, data === "autodecode_on");
+      await sendMessage(cfg.telegramToken, chatId, data === "autodecode_on"
+        ? "✅ Auto Decode включён. Первый запуск запланирован на ближайшую минуту, дальше — примерно каждые 5 часов."
+        : "⏸ Автообновление выключено. Настройка и источник сохранены.");
+    } catch (error) {
+      await sendMessage(cfg.telegramToken, chatId, `❌ ${escapeHtml(error?.message || String(error))}`);
+    }
+    return cmdAutoDecodeSettings(cfg, chatId);
+  }
+  else if (data === "autodecode_run") {
+    const active = await getActiveSubscription(cfg, chatId);
+    if (!active) return cmdAutoDecodeSettings(cfg, chatId);
+    await sendMessage(cfg.telegramToken, chatId, "⏳ <b>Запускаю Auto Decode</b>\n\nИсточник расшифровывается, распознанные серверы будут обновлены в выбранной подписке.");
+    const result = await runAutoDecodeOnce(cfg, chatId, active.id, { automatic: false, notify: false });
+    if (result.ok) await sendMessage(cfg.telegramToken, chatId,
+      `✅ <b>Подписка обновлена</b>\n\n📡 Серверов источника: <code>${result.parsedCount}</code>\n📋 Всего серверов: <code>${result.totalCount}</code>`,
+      { inline_keyboard: [[{ text: "📡 Серверы", callback_data: "list" }], [{ text: "🔁 Настройки Auto Decode", callback_data: "autodecode" }]] });
+    else await sendMessage(cfg.telegramToken, chatId,
+      `⚠️ <b>Не удалось обновить подписку</b>\n\n<code>${escapeHtml(result.error || "Неизвестная ошибка")}</code>`,
+      { inline_keyboard: [[{ text: "🔁 Настройки Auto Decode", callback_data: "autodecode" }], [{ text: "🏠 Меню", callback_data: "menu" }]] });
+  }
+  else if (data === "add_parsed_to_sub") await cmdAddParsedToSubscription(cfg, chatId);
+  else if (data === "delete_all_servers") await sendMessage(cfg.telegramToken, chatId,
+    "⚠️ <b>Удалить все серверы из текущей подписки?</b>\n\nЗаголовки и параметры профиля останутся. Это действие нельзя отменить.",
+    { inline_keyboard: [[{ text: "🗑 Да, удалить всё", callback_data: "delete_all_confirm" }], [{ text: "↩️ Отмена", callback_data: "list" }]] });
+  else if (data === "delete_all_confirm") await cmdDeleteAllServers(cfg, chatId);
   else if (data === "subs") await cmdSubscriptions(cfg, chatId);
   else if (data === "schedule") await cmdScheduledList(cfg, chatId);
   else if (data === "schedule_add" || data === "schedule_remove") {
@@ -1440,6 +1611,7 @@ export async function handleMessage(cfg, msg) {
     if (cmd === "/add") return cmdAdd(cfg, chatId, parts.slice(1).join(" "));
     if (cmd === "/replace") return cmdReplaceServer(cfg, chatId, parts.slice(1).join(" "));
     if (cmd === "/delete") {
+      if (String(parts[1] || "").toLowerCase() === "all") return cmdDeleteAllServers(cfg, chatId);
       if (parts.length > 1) return cmdDeleteServer(cfg, chatId, parts[1]);
       return cmdDelete(cfg, chatId);
     }
@@ -1458,6 +1630,9 @@ export async function handleMessage(cfg, msg) {
   if (/^https?:\/\//i.test(trimmed)) {
     let pendingState = null;
     try { pendingState = await getState(cfg, chatId); } catch {}
+    if (pendingState?.step === "auto_decode_url") {
+      return handleAutoDecodeUrl(cfg, chatId, trimmed, pendingState);
+    }
     if (pendingState?.step && String(pendingState.step).startsWith("decode_")) {
       return handleDecodeFlowText(cfg, chatId, trimmed, pendingState);
     }
@@ -1492,6 +1667,10 @@ export async function handleMessage(cfg, msg) {
 
   if (state?.step === "schedule_date" || state?.step === "schedule_uri") {
     return handleScheduleStep(cfg, chatId, trimmed, state);
+  }
+
+  if (state?.step === "auto_decode_url") {
+    return handleAutoDecodeUrl(cfg, chatId, trimmed, state);
   }
 
   if (state?.step && String(state.step).startsWith("decode_")) {
