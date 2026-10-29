@@ -926,7 +926,7 @@ function parseServerIndex(value) {
 }
 
 function isSupportedServerUri(value) {
-  return /^(vless|vmess|trojan|ss|hysteria2|hy2):\/\/\S+$/i.test(String(value || "").trim());
+  return /^(vless|vmess|trojan|ss|hysteria2|hy2|tuic|wireguard|wg):\/\/\S+$/i.test(String(value || "").trim());
 }
 
 export async function cmdReplaceServer(cfg, chatId, value) {
