@@ -11,6 +11,7 @@ import { getProxyPreference, getDecodedProfileProxyPreference } from "./proxy-pr
 import { isKnownHttpProxyEndpoint, refreshHttpProxyCountries } from "./proxy-check.js";
 import { migrateLegacyKvToD1 } from "./migrate.js";
 import { processScheduledChanges } from "./scheduler.js";
+import { processAutoDecodeSubscriptions } from "./auto-decode.js";
 
 // ==========================================
 // ОСНОВНАЯ КОНФИГУРАЦИЯ (4 источника)
@@ -708,6 +709,17 @@ export default {
       console.log("[Cron] Scheduled changes:", scheduleResult);
     } catch (e) {
       console.error("[Cron] Scheduled changes error:", e);
+    }
+
+    // Personal Auto Decode sources are checked on every cron tick; each source
+    // runs only when its own five-hour nextRunAt timestamp is due.
+    try {
+      const autoDecodeResult = await processAutoDecodeSubscriptions(cfg);
+      if (autoDecodeResult.processed || autoDecodeResult.failed || autoDecodeResult.skipped) {
+        console.log("[Cron] Auto Decode:", autoDecodeResult);
+      }
+    } catch (e) {
+      console.error("[Cron] Auto Decode error:", e);
     }
 
     // Черновики проверяются каждую минуту, а тяжёлое обновление источников — только раз в 4 часа.
