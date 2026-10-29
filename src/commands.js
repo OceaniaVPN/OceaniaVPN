@@ -587,12 +587,16 @@ async function runDecodeWithProfile(cfg, chatId, url, selection) {
     const parsedUris = [...new Set((Array.isArray(result.uris) ? result.uris : [])
       .map(uri => String(uri || "").trim())
       .filter(isSupportedServerUri))];
-    if (cfg.store && parsedUris.length) {
-      await cfg.store.put(`parsedcache_${chatId}`, JSON.stringify({
-        uris: parsedUris,
-        sourceHost: hostname,
-        savedAt: Date.now(),
-      }), { expirationTtl: 86400 });
+    if (cfg.store) {
+      if (parsedUris.length) {
+        await cfg.store.put(`parsedcache_${chatId}`, JSON.stringify({
+          uris: parsedUris,
+          sourceHost: hostname,
+          savedAt: Date.now(),
+        }), { expirationTtl: 86400 });
+      } else {
+        await cfg.store.delete(`parsedcache_${chatId}`).catch(() => {});
+      }
     }
 
     // Store the current run's exact choice per generated profile. Never consult
@@ -985,6 +989,7 @@ export async function cmdDelete(cfg, chatId) {
   const res = await deleteFile(cfg, active.filename, `Delete subscription ${active.id} for ${chatId}`);
   if (res.content || res.sha) {
     await deleteSubscriptionRecord(cfg, chatId, active.id);
+    if (cfg.store) await cfg.store.delete(`autodecode_${chatId}_${active.id}`).catch(() => {});
     const remaining = await listSubscriptions(cfg, chatId);
     return sendMessage(cfg.telegramToken, chatId,
       `🗑 <b>Подписка «${escapeHtml(active.title)}» удалена.</b>\n\nОсталось подписок: <code>${remaining.length}</code>`,
