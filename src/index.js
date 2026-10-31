@@ -554,6 +554,17 @@ async function runManualUpdate(env, reportChatId) {
   await sendReport("🏁 <b>Ручное обновление завершено.</b>");
 }
 
+function isTelegramWebhookAuthorized(request, configuredSecret) {
+  if (!configuredSecret) return true;
+  const supplied = request.headers.get("x-telegram-bot-api-secret-token") || "";
+  if (supplied.length !== configuredSecret.length) return false;
+  let difference = 0;
+  for (let i = 0; i < configuredSecret.length; i++) {
+    difference |= supplied.charCodeAt(i) ^ configuredSecret.charCodeAt(i);
+  }
+  return difference === 0;
+}
+
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
@@ -613,11 +624,20 @@ export default {
         baseUrl.hash = "";
         const workerUrl = baseUrl.toString();
 
+        if (cfg.webhookSecret && !/^[A-Za-z0-9_-]{1,256}$/.test(cfg.webhookSecret)) {
+          return new Response(JSON.stringify({ ok: false, error: "TELEGRAM_WEBHOOK_SECRET must be 1-256 characters: letters, digits, _ or -" }), {
+            status: 400,
+            headers: { "Content-Type": "application/json" }
+          });
+        }
+        const webhookPayload = { url: workerUrl };
+        if (cfg.webhookSecret) webhookPayload.secret_token = cfg.webhookSecret;
+
         const apiUrl = "https://api.telegram.org/bot" + cfg.telegramToken + "/setWebhook";
         const res = await fetch(apiUrl, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ url: workerUrl })
+          body: JSON.stringify(webhookPayload)
         });
         const body = await res.text();
 
@@ -652,6 +672,13 @@ export default {
     }
 
     if (request.method === "POST") {
+      if (!isTelegramWebhookAuthorized(request, cfg.webhookSecret)) {
+        console.warn("[Webhook] Rejected POST with an invalid Telegram secret token.");
+        return new Response("Forbidden", {
+          status: 403,
+          headers: { "Cache-Control": "no-store" }
+        });
+      }
       let update = null;
       try {
         update = await request.json();
