@@ -445,6 +445,8 @@ async function fetchSubscription(url, trusted = false, requestOptions = {}, stag
                       if (nestedRes.ok) {
                         const nestedText = normalizeText(await nestedRes.text());
                         if (nestedText && !isStubResponse(nestedText) && !isTemporaryMessage(nestedText)) allContents.push(nestedText);
+                      } else {
+                        candidateFailures.push(describeHttpFailure(nestedRes, nestedUrl, attempts, "html_nested_candidate"));
                       }
                     } catch {}
                   }
