@@ -272,7 +272,6 @@ export function buildHappJsonSubscription(content, httpProxyEndpoint = null) {
       outbounds.push({ tag: "direct", protocol: "freedom" });
       configs.push({
         remarks: String(remarks || "VPN server").slice(0, 100),
-        // ECH/echConfig is intentionally not emitted in StekloVPN profiles.
         dns: { servers: ["1.1.1.1", "1.0.0.1"], queryStrategy: "UseIP" },
         inbounds: [],
         outbounds,
