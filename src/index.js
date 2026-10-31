@@ -579,23 +579,46 @@ export default {
     }
 
     if (request.method === "GET") {
+      if (url.pathname === "/telegram/webhook" || url.pathname === "/webhook") {
+        return new Response("Telegram webhook endpoint ready", {
+          headers: { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store" }
+        });
+      }
       if (url.pathname === "/") return new Response("StekloVPN Bot OK", { headers: { "Content-Type": "text/plain; charset=utf-8" } });
       if (url.pathname === "/page") return pageSubscription(request, cfg);
       if (url.pathname === "/sub") return serveSubscription(request, cfg);
       if (url.pathname === "/set-webhook") {
-        // Никогда не брать webhook URL из Host запроса:
-        // старый домен/старый Worker мог перекинуть Telegram обратно на старую версию.
-        // Приоритет: явный TELEGRAM_WEBHOOK_URL -> WORKER_ORIGIN -> текущий host.
-        const workerUrl = (
-          env.TELEGRAM_WEBHOOK_URL ||
-          env.WORKER_ORIGIN ||
-          url.origin
-        ).replace(/\/$/, "");
+        // Telegram должен отправлять обновления на обработчик, а не на корень Worker.
+        // TELEGRAM_WEBHOOK_URL может содержать полный URL с собственным путём;
+        // WORKER_ORIGIN задаёт только origin и получает канонический путь.
+        if (!cfg.telegramToken) {
+          return new Response(JSON.stringify({ ok: false, error: "TELEGRAM_BOT_TOKEN is not configured" }), {
+            status: 503,
+            headers: { "Content-Type": "application/json" }
+          });
+        }
 
-        const apiUrl = "https://api.telegram.org/bot" + cfg.telegramToken +
-          "/setWebhook?url=" + encodeURIComponent(workerUrl);
+        const configuredWebhook = String(env.TELEGRAM_WEBHOOK_URL || "").trim();
+        const baseUrl = new URL(configuredWebhook || env.WORKER_ORIGIN || url.origin);
+        if (baseUrl.protocol !== "https:") {
+          return new Response(JSON.stringify({ ok: false, error: "Telegram webhook URL must use HTTPS" }), {
+            status: 400,
+            headers: { "Content-Type": "application/json" }
+          });
+        }
+        if (!configuredWebhook || baseUrl.pathname === "/" || !baseUrl.pathname) {
+          baseUrl.pathname = "/telegram/webhook";
+        }
+        baseUrl.search = "";
+        baseUrl.hash = "";
+        const workerUrl = baseUrl.toString();
 
-        const res = await fetch(apiUrl, { method: "POST" });
+        const apiUrl = "https://api.telegram.org/bot" + cfg.telegramToken + "/setWebhook";
+        const res = await fetch(apiUrl, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ url: workerUrl })
+        });
         const body = await res.text();
 
         console.log("[Webhook] setWebhook ->", workerUrl, body);
@@ -603,7 +626,11 @@ export default {
           ok: res.ok,
           webhookUrl: workerUrl,
           telegram: (() => {
-            try { return JSON.parse(body); } catch { return body; }
+            try {
+              return JSON.parse(body);
+            } catch {
+              return body;
+            }
           })()
         }), {
           status: res.ok ? 200 : 502,
