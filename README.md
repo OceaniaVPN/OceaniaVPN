@@ -14,8 +14,8 @@ Telegram-бот для управления VPN-подписками, серве
 ## Развёртывание
 
 1. Установить Node.js 20+ и зависимости: `npm install`.
-2. Задать в Cloudflare Worker необходимые секреты: `TELEGRAM_BOT_TOKEN`, `GITHUB_TOKEN`, `ADMIN_ID`, `SUBSCRIPTION_SECRET`.
-3. При необходимости задать `SECONDARY_CONFIG_URL` (адрес дополнительного источника подписки) и обновить `WORKER_ORIGIN` на адрес нового Worker либо оставить его пустым, чтобы использовался текущий адрес запроса.
+2. В настройках нового Worker заново задать секреты и переменные: `TELEGRAM_BOT_TOKEN`, `GITHUB_TOKEN`, `ADMIN_ID`, `SUBSCRIPTION_SECRET` и остальные используемые ранее значения. Секреты от старого Worker автоматически не переносятся.
+3. Обновить или удалить старые значения `WORKER_ORIGIN` и `TELEGRAM_WEBHOOK_URL`, чтобы они указывали на новый Worker. После публикации один раз открыть `/set-webhook` на новом адресе, чтобы Telegram начал отправлять обновления в новый Worker. При необходимости задать `SECONDARY_CONFIG_URL` — адрес дополнительного источника подписки.
 4. Для автоматического создания/восстановления D1 задать `CLOUDFLARE_ACCOUNT_ID` и `CLOUDFLARE_API_TOKEN` в окружении деплоя. Токену нужны права D1 Read и D1 Write; для публикации Worker Wrangler также должен иметь доступ Workers Scripts:Edit.
 5. В настройках сборки Cloudflare указать команду деплоя `npm run deploy`.
 
