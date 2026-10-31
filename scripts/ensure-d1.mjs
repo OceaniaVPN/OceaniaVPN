@@ -91,15 +91,23 @@ export async function ensureD1() {
     }
   }
 
-  const databaseName = String(process.env.D1_DATABASE_NAME || "steklovpn").trim();
-  if (!/^[a-zA-Z0-9_-]{1,64}$/.test(databaseName)) {
-    throw new Error("D1_DATABASE_NAME must contain 1-64 letters, digits, underscores or hyphens.");
+  // If the saved UUID is stale, first look up the configured database name.
+  // This avoids silently creating a fresh, empty database while the old named
+  // database (and its user state) still exists in the same Cloudflare account.
+  const requestedDatabaseName = String(process.env.D1_DATABASE_NAME || "steklovpn").trim();
+  const databases = await listDatabases(accountId, token);
+  let database = configuredName
+    ? databases.find(item => item.name === configuredName)
+    : null;
+
+  if (!database) {
+    if (!/^[a-zA-Z0-9_-]{1,64}$/.test(requestedDatabaseName)) {
+      throw new Error("D1_DATABASE_NAME must contain 1-64 letters, digits, underscores or hyphens.");
+    }
+    database = databases.find(item => item.name === requestedDatabaseName);
   }
 
-  const databases = await listDatabases(accountId, token);
-  let database = databases.find(item => item.name === databaseName);
   let created = false;
-
   if (!database) {
     const jurisdiction = String(process.env.D1_JURISDICTION || "eu").toLowerCase();
     if (!["eu", "us", "fedramp"].includes(jurisdiction)) {
@@ -107,7 +115,7 @@ export async function ensureD1() {
     }
     const result = await cloudflareRequest(accountId, token, base, {
       method: "POST",
-      body: JSON.stringify({ name: databaseName, jurisdiction })
+      body: JSON.stringify({ name: requestedDatabaseName, jurisdiction })
     });
     database = result.result;
     created = true;
