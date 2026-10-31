@@ -27,6 +27,56 @@ function safeHost(value) {
   catch { return null; }
 }
 
+function safeRequestTarget(value) {
+  try {
+    const url = new URL(String(value || ""));
+    const path = (url.pathname || "/").split("/").map(segment =>
+      segment.length > 48 ? "[redacted]" : segment
+    ).join("/");
+    return {
+      protocol: url.protocol.replace(/:$/, ""),
+      host: url.hostname,
+      path,
+      target: url.protocol + "//" + url.host + path,
+    };
+  } catch {
+    return { protocol: null, host: safeHost(value), path: null, target: null };
+  }
+}
+
+function httpStatusName(status) {
+  return ({
+    400: "Bad Request", 401: "Unauthorized", 403: "Forbidden",
+    404: "Not Found", 405: "Method Not Allowed", 408: "Request Timeout",
+    410: "Gone", 425: "Too Early", 429: "Too Many Requests",
+    500: "Internal Server Error", 502: "Bad Gateway",
+    503: "Service Unavailable", 504: "Gateway Timeout",
+  })[Number(status)] || "HTTP Error";
+}
+
+function describeHttpFailure(response, requestUrl, attempts, stage) {
+  const status = Number(response && response.status) || 0;
+  const endpoint = safeRequestTarget((response && response.url) || requestUrl);
+  const statusName = httpStatusName(status);
+  let explanation = "Источник отклонил HTTP-запрос.";
+  if (status === 401) explanation = "Источник не принял авторизацию.";
+  else if (status === 403) explanation = "Источник запретил доступ к ресурсу.";
+  else if (status === 404) explanation = "Источник не нашёл указанный путь или ресурс. Это ответ сервера, а не ошибка разбора конфигурации.";
+  else if (status === 405) explanation = "Источник не поддерживает используемый HTTP-метод.";
+  else if (status === 410) explanation = "Ресурс удалён или срок его действия истёк.";
+  else if (status === 429) explanation = "Источник ограничил частоту запросов.";
+  else if (status >= 500) explanation = "На стороне источника или промежуточного сервера произошла ошибка.";
+  return {
+    ok: false,
+    error: "HTTP " + status + " " + statusName + ". " + explanation +
+      " Адрес: " + (endpoint.target || endpoint.host || "неизвестен") +
+      ". Этап: " + stage + ".",
+    status, statusName, attempts, stage,
+    endpoint: endpoint.target, host: endpoint.host, path: endpoint.path,
+    contentType: response && response.headers && response.headers.get("content-type") || null,
+  };
+}
+
 function logDecodeEvent(event) {
   // Do not log complete URLs, payload text, tokens, profile links, or device IDs.
   try { console.info(JSON.stringify(event)); } catch {}
@@ -279,7 +329,7 @@ function hasParsableContent(text) {
   return false;
 }
 
-async function fetchSubscription(url, trusted = false, requestOptions = {}) {
+async function fetchSubscription(url, trusted = false, requestOptions = {}, stage = "source") {
   try {
     if (isBlockedDomainUrl(url)) {
       return { ok: false, error: "🚫 Этот домен запрещён для декодирования", attempts: 0 };
@@ -310,13 +360,20 @@ async function fetchSubscription(url, trusted = false, requestOptions = {}) {
         if (i > 0) await new Promise(resolve => setTimeout(resolve, RETRY_DELAYS[i]));
         const res = await fetchWithRedirects(actualUrl, httpOptions);
         if (!res.ok) {
-          lastError = `HTTP ${res.status}`;
-          // Do not repeat permanent client/auth errors. Retry only statuses that
-          // can plausibly clear on a subsequent request.
+          const failure = describeHttpFailure(res, actualUrl, attempts, stage);
+          logDecodeEvent({
+            event: "subscription_decode_http_error",
+            host: failure.host, path: failure.path,
+            status: failure.status, statusName: failure.statusName,
+            stage: failure.stage, attempt: attempts,
+            contentType: failure.contentType,
+          });
+          lastError = failure.error;
+          // Do not retry permanent 4xx responses: a repeated 404 cannot fix a missing route.
           const retryableStatus = res.status === 408 || res.status === 425 ||
             res.status === 429 || res.status >= 500;
           if (!retryableStatus || i === MAX_ATTEMPTS - 1) {
-            return { ok: false, error: lastError, attempts, status: res.status, content: bestContent, contentType: bestContentType };
+            return { ...failure, content: bestContent, contentType: bestContentType };
           }
           const retryAfter = Number(res.headers.get("retry-after"));
           if (res.status === 429 && Number.isFinite(retryAfter) && retryAfter > 0) {
