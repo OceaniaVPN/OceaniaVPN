@@ -1,4 +1,4 @@
-name = "steklovpnzloy"
+name = "steklovpnzloy-bot"
 main = "src/index.js"
 compatibility_date = "2026-08-16"
 
@@ -12,6 +12,7 @@ BOT_REPO_OWNER = "OceaniaVPN"
 BOT_REPO_NAME = "OceaniaVPN"
 CONFIGS_FOLDER = "configs"
 BRANCH = "main"
+WORKER_ORIGIN = "https://steklovpnzloy-bot.dimastekolnikov13.workers.dev"
 
 [[kv_namespaces]]
 binding = "BOT_STATE"
