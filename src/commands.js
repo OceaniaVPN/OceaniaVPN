@@ -305,7 +305,7 @@ export async function cmdDecode(cfg, chatId, url) {
     return sendMessage(cfg.telegramToken, chatId,
       `❌ <b>Нужна HTTP(S)-ссылка или happ://crypt5/</b>\n\nИспользуй <code>/decode https://example.com/sub</code>.`);
   }
-  return beginDecodeFlow(cfg, chatId, parsedUrl.toString());
+  return beginDecodeFlow(cfg, chatId, inputUrl);
 }
 
 async function handleDecodeFlowText(cfg, chatId, text, state) {
@@ -322,7 +322,7 @@ async function handleDecodeFlowText(cfg, chatId, text, state) {
       `❌ Нужна HTTP(S)-ссылка или <code>happ://crypt5/...</code>. Отправь URL ещё раз или нажми «Отмена».`,
       { inline_keyboard: [[{ text: "❌ Отмена", callback_data: "decode_cancel" }]] });
   }
-  return beginDecodeFlow(cfg, chatId, directCrypt5 ? value : parsedUrl.toString());
+  return beginDecodeFlow(cfg, chatId, value);
 }
 
 async function showDecodeProxyCountry(cfg, chatId, platform, index) {
@@ -521,7 +521,8 @@ async function runDecodeWithProfile(cfg, chatId, url, selection) {
   if (!directCrypt5 && (!parsedUrl || !["http:", "https:"].includes(parsedUrl.protocol))) {
     return sendMessage(cfg.telegramToken, chatId, `❌ <b>Нужна HTTP(S)-ссылка или happ://crypt5/</b>`);
   }
-  url = directCrypt5 ? inputRawUrl : parsedUrl.toString();
+  // Keep the exact URL string supplied by the user; parsedUrl is validation/metadata only.
+  url = inputRawUrl;
   const proxyDetails = mode === "on" ? parseHttpProxyEndpoint(selection.endpoint) : null;
   console.log(JSON.stringify({
     event: "decode",
