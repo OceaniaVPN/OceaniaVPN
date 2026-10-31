@@ -35,17 +35,14 @@ function safeRequestTarget(value) {
     ).join("/");
     const queryParameterCount = Array.from(url.searchParams.keys()).length;
     const tokenParameterPresent = url.searchParams.has("token");
-    // Show that a token query parameter was sent without ever exposing its value.
-    const safeQuery = tokenParameterPresent
-      ? "?token=[redacted]"
-      : (queryParameterCount > 0 ? "?[redacted]" : "");
     return {
       protocol: url.protocol.replace(/:$/, ""),
       host: url.hostname,
       path,
       queryParameterCount,
       tokenParameterPresent,
-      target: url.protocol + "//" + url.host + path + safeQuery,
+      // Keep diagnostics readable; never render a redaction placeholder as a URL.
+      target: url.protocol + "//" + url.host + path,
     };
   } catch {
     return {
@@ -359,8 +356,9 @@ async function fetchSubscription(url, trusted = false, requestOptions = {}, stag
         attempts: 0,
       };
     }
-    const redirectTarget = extractRedirectTarget(url);
-    const actualUrl = redirectTarget ? new URL(redirectTarget, url).toString() : url;
+    // Fetch the exact source URL the user supplied. Do not reinterpret
+    // its query parameters as a wrapper URL before the first HTTP request.
+    const actualUrl = url;
     let lastError = "Неизвестная ошибка", attempts = 0, bestContent = null, bestContentType = null;
     const MAX_ATTEMPTS = 3;
     const RETRY_DELAYS = [0, 400, 1000];
