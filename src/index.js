@@ -45,10 +45,18 @@ const SECONDARY_CONFIG = {
   userinfo: "upload=0; download=0; total=536870912000; expire=0",
   doRename: false
 };
+function getSecondaryConfigUrl(env) {
+  const target = String(env.SECONDARY_CONFIG_URL || SECONDARY_CONFIG.targetUrl).trim();
+  const url = new URL(target);
+  if (url.protocol !== "https:" && url.protocol !== "http:") {
+    throw new Error("SECONDARY_CONFIG_URL must be an HTTP(S) URL");
+  }
+  return url;
+}
 function getSecondaryTargetUrl(env) {
   const token = String(env.SECONDARY_CONFIG_TOKEN || "").trim();
   if (!token) throw new Error("SECONDARY_CONFIG_TOKEN is not configured");
-  const url = new URL(SECONDARY_CONFIG.targetUrl);
+  const url = getSecondaryConfigUrl(env);
   url.searchParams.set("token", token);
   return url.toString();
 }
@@ -524,7 +532,7 @@ async function runManualUpdate(env, reportChatId) {
   try {
     const result2 = await decodeSubscription(getSecondaryTargetUrl(env), true, false, {
       upstreamSecret: env.SUBSCRIPTION_UPSTREAM_SECRET || "",
-      upstreamOrigin: env.SUBSCRIPTION_UPSTREAM_ORIGIN || new URL(SECONDARY_CONFIG.targetUrl).origin,
+      upstreamOrigin: env.SUBSCRIPTION_UPSTREAM_ORIGIN || getSecondaryConfigUrl(env).origin,
     });
     const content2 = typeof result2.rawContent === "string" ? result2.rawContent : "";
     if (result2.ok && content2.trim()) {
@@ -746,12 +754,12 @@ export default {
 
     // 2. Обновление второго конфига (steklovpn_auto.txt)
     try {
-      console.log("[Cron] Decoding secondary source: " + SECONDARY_CONFIG.targetUrl);
+      console.log("[Cron] Decoding secondary source: " + getSecondaryConfigUrl(env).toString());
       // Service-to-service auth is sent only to the configured upstream origin.
       // The upstream must validate X-Bot-Secret; do not rely on a spoofed client UA.
       const result2 = await decodeSubscription(getSecondaryTargetUrl(env), true, false, {
         upstreamSecret: env.SUBSCRIPTION_UPSTREAM_SECRET || "",
-        upstreamOrigin: env.SUBSCRIPTION_UPSTREAM_ORIGIN || new URL(SECONDARY_CONFIG.targetUrl).origin,
+        upstreamOrigin: env.SUBSCRIPTION_UPSTREAM_ORIGIN || getSecondaryConfigUrl(env).origin,
       });
       const content2 = typeof result2.rawContent === "string" ? result2.rawContent : "";
       if (result2.ok && content2.trim()) {
