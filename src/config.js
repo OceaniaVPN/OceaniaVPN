@@ -31,7 +31,7 @@ export function getConfig(env) {
     // Do not reuse SUBSCRIPTION_SECRET or TELEGRAM_BOT_TOKEN for these.
     subscriptionApiSecret: env.SUBSCRIPTION_API_SECRET || "",
     subscriptionUpstreamSecret: env.SUBSCRIPTION_UPSTREAM_SECRET || "",
-    subscriptionUpstreamOrigin: (env.SUBSCRIPTION_UPSTREAM_ORIGIN || "").replace(/\/$/, ""),
+    // Default only to the known StekloVPN source. The HTTP layer sends X-Bot-Secret\n    // only to this exact origin and /sub, never to arbitrary subscription hosts.\n    subscriptionUpstreamOrigin: (env.SUBSCRIPTION_UPSTREAM_ORIGIN || "https://steklovpnzloy.dimastekolnikov13.workers.dev").replace(/\/$/, ""),
     // Optional decoder identity values; configure from an authorized real client log.
     happWindowsHwid: (env.HAPP_WINDOWS_HWID || "").trim(),
     happWindowsSessionId: (env.HAPP_WINDOWS_SESSION_ID || "").trim(),
