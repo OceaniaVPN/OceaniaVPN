@@ -9,7 +9,6 @@ import { listSubscriptions, getActiveSubscription, makeSubscriptionDeviceKey } f
 import { buildHappJsonSubscription } from "./json-subscription.js";
 import { getProxyPreference, getDecodedProfileProxyPreference } from "./proxy-preferences.js";
 import { isKnownHttpProxyEndpoint, refreshHttpProxyCountries } from "./proxy-check.js";
-import { migrateLegacyKvToD1 } from "./migrate.js";
 import { processScheduledChanges } from "./scheduler.js";
 import { processAutoDecodeSubscriptions } from "./auto-decode.js";
 
@@ -547,19 +546,6 @@ async function runManualUpdate(env, reportChatId) {
   await sendReport("🏁 <b>Ручное обновление завершено.</b>");
 }
 
-let legacyKvMigrationPromise = null;
-
-async function ensureLegacyKvMigration(cfg) {
-  if (!cfg.db || !cfg.legacyKv) return { skipped: true };
-  if (!legacyKvMigrationPromise) {
-    legacyKvMigrationPromise = migrateLegacyKvToD1(cfg).catch((error) => {
-      legacyKvMigrationPromise = null;
-      throw error;
-    });
-  }
-  return legacyKvMigrationPromise;
-}
-
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
@@ -575,12 +561,6 @@ export default {
     let cfg;
     try {
       cfg = getConfig(env);
-      try {
-        const migration = await ensureLegacyKvMigration(cfg);
-        if (migration?.migrated) console.log("[Startup] Legacy KV -> D1 migrated:", migration.migrated);
-      } catch (migrationError) {
-        console.error("[Startup] Legacy KV -> D1 migration failed; legacy data remains in KV:", migrationError?.stack || migrationError);
-      }
       if (!cfg.workerOrigin) cfg.workerOrigin = url.origin;
     } catch (e) {
       console.error("[Startup] Configuration initialization failed:", e?.stack || e);
