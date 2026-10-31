@@ -454,16 +454,16 @@ async function fetchSubscription(url, trusted = false, requestOptions = {}, stag
               } catch {}
             }
             if (allContents.length > 0) { const extracted = allContents.join("\n"); return { ok: true, content: extracted, rawContent: extracted, contentType: "text/plain", attempts }; }
-            const notFound = candidateFailures.find(failure => failure.status === 404);
-            if (notFound) {
+            const candidateFailure = candidateFailures.find(failure => failure.status === 404) || candidateFailures[0];
+            if (candidateFailure) {
               logDecodeEvent({
                 event: "subscription_decode_http_error",
-                host: notFound.host, path: notFound.path,
-                status: notFound.status, statusName: notFound.statusName,
-                stage: notFound.stage, attempt: attempts,
-                contentType: notFound.contentType,
+                host: candidateFailure.host, path: candidateFailure.path,
+                status: candidateFailure.status, statusName: candidateFailure.statusName,
+                stage: candidateFailure.stage, attempt: attempts,
+                contentType: candidateFailure.contentType,
               });
-              return notFound;
+              return candidateFailure;
             }
           }
         }
