@@ -33,14 +33,29 @@ function safeRequestTarget(value) {
     const path = (url.pathname || "/").split("/").map(segment =>
       segment.length > 48 ? "[redacted]" : segment
     ).join("/");
+    const queryParameterCount = Array.from(url.searchParams.keys()).length;
+    const tokenParameterPresent = url.searchParams.has("token");
+    // Show that a token query parameter was sent without ever exposing its value.
+    const safeQuery = tokenParameterPresent
+      ? "?token=[redacted]"
+      : (queryParameterCount > 0 ? "?[redacted]" : "");
     return {
       protocol: url.protocol.replace(/:$/, ""),
       host: url.hostname,
       path,
-      target: url.protocol + "//" + url.host + path,
+      queryParameterCount,
+      tokenParameterPresent,
+      target: url.protocol + "//" + url.host + path + safeQuery,
     };
   } catch {
-    return { protocol: null, host: safeHost(value), path: null, target: null };
+    return {
+      protocol: null,
+      host: safeHost(value),
+      path: null,
+      queryParameterCount: 0,
+      tokenParameterPresent: false,
+      target: null,
+    };
   }
 }
 
@@ -69,10 +84,13 @@ function describeHttpFailure(response, requestUrl, attempts, stage) {
   return {
     ok: false,
     error: "HTTP " + status + " " + statusName + ". " + explanation +
+      (endpoint.tokenParameterPresent ? " Параметр token был передан; его значение скрыто." : "") +
       " Адрес: " + (endpoint.target || endpoint.host || "неизвестен") +
       ". Этап: " + stage + ".",
     status, statusName, attempts, stage,
     endpoint: endpoint.target, host: endpoint.host, path: endpoint.path,
+    queryParameterCount: endpoint.queryParameterCount,
+    tokenParameterPresent: endpoint.tokenParameterPresent,
     contentType: response && response.headers && response.headers.get("content-type") || null,
   };
 }
@@ -364,6 +382,8 @@ async function fetchSubscription(url, trusted = false, requestOptions = {}, stag
           logDecodeEvent({
             event: "subscription_decode_http_error",
             host: failure.host, path: failure.path,
+            queryParameterCount: failure.queryParameterCount,
+            tokenParameterPresent: failure.tokenParameterPresent,
             status: failure.status, statusName: failure.statusName,
             stage: failure.stage, attempt: attempts,
             contentType: failure.contentType,
