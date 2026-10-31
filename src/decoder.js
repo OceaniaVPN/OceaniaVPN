@@ -406,10 +406,19 @@ async function fetchSubscription(url, trusted = false, requestOptions = {}, stag
         if (envelopeUrl && envelopeUrl !== actualUrl) {
           try {
             const nested = await fetchWithRedirects(envelopeUrl, httpOptions);
-            if (nested.ok) {
-              const nestedText = normalizeText(await nested.text());
-              if (nestedText) return { ok: true, content: nestedText, rawContent: nestedText, contentType: nested.headers.get("content-type") || "text/plain", attempts };
+            if (!nested.ok) {
+              const failure = describeHttpFailure(nested, envelopeUrl, attempts, "envelope");
+              logDecodeEvent({
+                event: "subscription_decode_http_error",
+                host: failure.host, path: failure.path,
+                status: failure.status, statusName: failure.statusName,
+                stage: failure.stage, attempt: attempts,
+                contentType: failure.contentType,
+              });
+              return failure;
             }
+            const nestedText = normalizeText(await nested.text());
+            if (nestedText) return { ok: true, content: nestedText, rawContent: nestedText, contentType: nested.headers.get("content-type") || "text/plain", attempts };
           } catch {}
         }
         const isHtml = htmlLike;
@@ -417,10 +426,14 @@ async function fetchSubscription(url, trusted = false, requestOptions = {}, stag
           const allUrls = extractAllUrlsFromHtml(text, url).slice(0, 3);
           if (allUrls.length > 0) {
             const allContents = [];
+            const candidateFailures = [];
             for (const subUrl of allUrls) {
               try {
                 const subRes = await fetchWithRedirects(subUrl, httpOptions);
-                if (!subRes.ok) continue;
+                if (!subRes.ok) {
+                  candidateFailures.push(describeHttpFailure(subRes, subUrl, attempts, "html_candidate"));
+                  continue;
+                }
                 const subText = normalizeText(await subRes.text());
                 if (!subText || isStubResponse(subText) || isTemporaryMessage(subText)) continue;
                 const subCt = subRes.headers.get("content-type") || "";
@@ -439,6 +452,17 @@ async function fetchSubscription(url, trusted = false, requestOptions = {}, stag
               } catch {}
             }
             if (allContents.length > 0) { const extracted = allContents.join("\n"); return { ok: true, content: extracted, rawContent: extracted, contentType: "text/plain", attempts }; }
+            const notFound = candidateFailures.find(failure => failure.status === 404);
+            if (notFound) {
+              logDecodeEvent({
+                event: "subscription_decode_http_error",
+                host: notFound.host, path: notFound.path,
+                status: notFound.status, statusName: notFound.statusName,
+                stage: notFound.stage, attempt: attempts,
+                contentType: notFound.contentType,
+              });
+              return notFound;
+            }
           }
         }
         // Не пытаемся распознать протокол в обычном текстовом ответе.
@@ -447,9 +471,19 @@ async function fetchSubscription(url, trusted = false, requestOptions = {}, stag
         const candidateUrls = extractAllUrlsFromHtml(text, url).slice(0, 3);
         if (candidateUrls.length > 0) { const extracted = candidateUrls.join("\n"); return { ok: true, content: extracted, rawContent: extracted, contentType: "text/plain", attempts }; }
         bestContent = rawText; bestContentType = ct || "text/plain"; lastError = "Не найдено поддерживаемых конфигураций";
-      } catch (e) { lastError = (e?.name === "AbortError" || e?.name === "TimeoutError") ? "Таймаут запроса" : (e?.message || "Ошибка запроса"); }
+      } catch (e) {
+        lastError = (e?.name === "AbortError" || e?.name === "TimeoutError") ? "Таймаут запроса" : (e?.message || "Ошибка запроса");
+        const endpoint = safeRequestTarget(actualUrl);
+        logDecodeEvent({
+          event: "subscription_decode_request_error",
+          host: endpoint.host, path: endpoint.path, stage,
+          attempt: attempts, errorType: e?.name || "Error",
+          error: String(lastError).replace(/https?:\/\/[^\s"'<>]+/gi, "[URL]").slice(0, 180),
+        });
+      }
     }
-    return { ok: false, error: lastError, attempts, content: bestContent, contentType: bestContentType };
+    const endpoint = safeRequestTarget(actualUrl);
+    return { ok: false, error: lastError, attempts, content: bestContent, contentType: bestContentType, stage, endpoint: endpoint.target, host: endpoint.host, path: endpoint.path };
   } catch (e) { return { ok: false, error: e?.message || "Ошибка декодирования", attempts: 0 }; }
 }
 
@@ -467,14 +501,16 @@ export async function decodeSubscription(url, trusted = false, pingCheck = false
   const cleanUrl = url.trim().replace(/^<|>$/g, "");
   if (!/^https?:\/\//i.test(cleanUrl)) return { ok: false, error: "Нужна HTTP(S)-ссылка", configs: [], uris: [], attempts: 0 };
   const decoderRequestOptions = { ...requestOptions };
-  const result = await fetchSubscription(cleanUrl, trusted, decoderRequestOptions);
+  const result = await fetchSubscription(cleanUrl, trusted, decoderRequestOptions, "source");
   if (!result.ok) {
     logDecodeEvent({
       event: "subscription_decode_result",
-      host: safeHost(cleanUrl),
+      host: result.host || safeHost(cleanUrl),
+      path: result.path || safeRequestTarget(cleanUrl).path,
       ok: false,
       attempts: Number(result.attempts) || 0,
       status: Number(result.status) || null,
+      stage: result.stage || "source",
       errorCategory: result.status
         ? "http_status"
         : /таймаут/i.test(String(result.error || "")) ? "timeout"
@@ -498,8 +534,20 @@ export async function decodeSubscription(url, trusted = false, pingCheck = false
     if (format === "envelope") {
       const nestedUrl = unwrapEnvelope(content);
       if (nestedUrl) {
-        const nested = await fetchSubscription(nestedUrl, trusted, decoderRequestOptions);
-        if (!nested.ok) return { ...nested, configs: [], uris: [] };
+        const nested = await fetchSubscription(nestedUrl, trusted, decoderRequestOptions, "envelope");
+        if (!nested.ok) {
+          logDecodeEvent({
+            event: "subscription_decode_result",
+            host: nested.host || safeHost(nestedUrl),
+            path: nested.path || safeRequestTarget(nestedUrl).path,
+            ok: false,
+            attempts: Number(nested.attempts) || 0,
+            status: Number(nested.status) || null,
+            stage: nested.stage || "envelope",
+            errorCategory: nested.status ? "http_status" : "nested_request_error",
+          });
+          return { ...nested, configs: [], uris: [] };
+        }
         rawContent = typeof nested.rawContent === "string" ? nested.rawContent : (nested.content || "");
         content = cleanSubscriptionPayload(rawContent);
       }
