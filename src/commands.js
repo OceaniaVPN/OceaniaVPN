@@ -209,7 +209,7 @@ export async function cmdStart(cfg, chatId) {
   await sendMessage(
     cfg.telegramToken,
     chatId,
-    `🌊 <b>OCEANIA VPN</b>\n<i>Control Center · быстрый доступ ко всему</i>\n\n` +
+    `🔷 <b>STEKLO VPN</b>\n<i>Control Center · быстрый доступ ко всему</i>\n\n` +
     `╭────────────────────╮\n` +
     `│ ${status}\n` +
     `│ 📡 Серверов: <b>${servers}</b>\n` +
@@ -223,7 +223,7 @@ export async function cmdStart(cfg, chatId) {
 }
 export async function cmdHelp(cfg, chatId) {
   await sendMessage(cfg.telegramToken, chatId,
-    `ℹ️ <b>OCEANIA VPN · Справка</b>\n\n` +
+    `ℹ️ <b>STEKLO VPN · Справка</b>\n\n` +
     `<b>Основное</b>\n/start · главное меню\n/create · создать подписку\n/my · активная подписка\n/subs · все подписки и переключение\n/schedule · черновики: запланировать добавление/удаление сервера\n/list · серверы + проверка\n/add · добавить сервер/подписку\n/replace N · заменить сервер\n/delete N · удалить сервер\n/export · ссылки\n/decode · импортировать подписку\n/proxy · прокси-подписки\n\n` +
     `<b>Полезные функции</b>\n/check · проверить серверы\n/best · найти самый быстрый сервер\n/clean · удалить дубли\n/analytics · аналитика профиля\n/share · поделиться подпиской\n/cancel · отменить операцию\n\n` +
     `<b>Для разработчика</b>\n/users · пользователи\n/stats · статистика\n/dev · DEV Control Center\n\n` +
@@ -1114,7 +1114,7 @@ export async function cmdShare(cfg, chatId) {
   const content = await getFileContent(cfg, await getActiveFilename(cfg, chatId));
   if (!content) return sendMessage(cfg.telegramToken, chatId, `📭 <b>Нет подписки для отправки.</b>`, backToMenuKeyboard());
   const { subUrl, pageUrl } = await userUrls(cfg, chatId);
-  const shareUrl = `https://t.me/share/url?url=${encodeURIComponent(subUrl)}&text=${encodeURIComponent("Моя подписка OceaniaVPN")}`;
+  const shareUrl = `https://t.me/share/url?url=${encodeURIComponent(subUrl)}&text=${encodeURIComponent("Моя подписка StekloVPN")}`;
   await sendMessage(cfg.telegramToken, chatId, `🔗 <b>ПОДЕЛИТЬСЯ ПОДПИСКОЙ</b>\n\nСсылка на подписку:\n<code>${escapeHtml(subUrl)}</code>\n\nСтраница:\n<code>${escapeHtml(pageUrl)}</code>`, { inline_keyboard: [[{ text: "📤 Поделиться в Telegram", url: shareUrl }], [{ text: "📋 Открыть подписку", url: subUrl }], [{ text: "🏠 Меню", callback_data: "menu" }]] });
 }
 
@@ -1127,7 +1127,7 @@ export async function cmdUsers(cfg, chatId, userId) {
 export async function cmdStats(cfg, chatId, userId) {
   if (userId !== cfg.adminId) return sendMessage(cfg.telegramToken, chatId, `⛔️ Нет прав`);
   const users = await listAllUsers(cfg);
-  await sendMessage(cfg.telegramToken, chatId, `📊 <b>Статистика OceaniaVPN</b>\n\n👥 Пользователей: <code>${users.length}</code>\n📁 Профилей: <code>${users.length}</code>\n🧰 DEV-инструменты: <b>online</b>`, { inline_keyboard: [[{ text: "🧰 DEV Center", callback_data: "dev" }], [{ text: "🏠 Меню", callback_data: "menu" }]] });
+  await sendMessage(cfg.telegramToken, chatId, `📊 <b>Статистика StekloVPN</b>\n\n👥 Пользователей: <code>${users.length}</code>\n📁 Профилей: <code>${users.length}</code>\n🧰 DEV-инструменты: <b>online</b>`, { inline_keyboard: [[{ text: "🧰 DEV Center", callback_data: "dev" }], [{ text: "🏠 Меню", callback_data: "menu" }]] });
 }
 
 function proxyPlatformKeyboard() {

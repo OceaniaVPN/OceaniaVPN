@@ -38,11 +38,11 @@ const AUTO_UPDATE_CONFIG = {
 // ВТОРАЯ КОНФИГУРАЦИЯ (Только одна ссылка)
 // ==========================================
 const SECONDARY_CONFIG = {
-  targetUrl: "https://okeaniavpn.dimastekolnikov1.workers.dev/sub", // Имя файла для этой подписки
-  title: "OkeaniaVPN Auto",
+  targetUrl: "https://steklovpn.dimastekolnikov1.workers.dev/sub", // Secondary subscription endpoint
+  title: "StekloVPN Auto",
   interval: 1,
   webpage: "https://t.me/free_vpn123456",
-  announce: "OkeaniaVPN Auto Update",
+  announce: "StekloVPN Auto Update",
   userinfo: "upload=0; download=0; total=536870912000; expire=0",
   doRename: false
 };
@@ -367,7 +367,7 @@ async function serveSubscription(request, cfg) {
     const result = buildHappJsonSubscription(content, httpProxyEndpoint);
     headers["Content-Type"] = "application/json;charset=utf-8";
     headers["Content-Disposition"] = 'inline; filename="subscription.json"';
-    if (httpProxyEndpoint) headers["X-Oceania-Proxy-Mode"] = "HTTP-CONNECT";
+    if (httpProxyEndpoint) headers["X-VPN-Proxy-Mode"] = "HTTP-CONNECT";
     if (result.unsupported.length) headers["X-Subscription-Unsupported-Configs"] = String(result.unsupported.length);
     if (result.errors.length) headers["X-Subscription-Invalid-Configs"] = String(result.errors.length);
     if (result.unsupported.length || result.errors.length) {
@@ -445,15 +445,8 @@ async function renderThemedPage(request, cfg, content) {
   }
 
   const themeName = pickTheme(url.searchParams.get("theme"));
-  // cfg.configRepoOwner/configRepoName — это настраиваемый репозиторий
-  // ХРАНЕНИЯ файлов подписок (user_*.txt), он может отличаться от репозитория
-  // с кодом бота (env.CONFIG_REPO_NAME по умолчанию вообще "StekloVPN", см.
-  // config.js). Папка temi/ живёт конкретно в OceaniaVPN/OceaniaVPN — зашиваем
-  // это отдельно, не завязываясь на настраиваемый storage-репозиторий.
-  const THEME_REPO_OWNER = "OceaniaVPN";
-  const THEME_REPO_NAME = "OceaniaVPN";
-  const THEME_BRANCH = "main";
-  const themeUrl = `https://raw.githubusercontent.com/${THEME_REPO_OWNER}/${THEME_REPO_NAME}/${THEME_BRANCH}/temi/${themeName}.html`;
+  // Theme files are read from the configured bot source repository.
+  const themeUrl = `https://raw.githubusercontent.com/${cfg.botRepoOwner}/${cfg.botRepoName}/${cfg.branch}/temi/${themeName}.html`;
 
   let html;
   try {
@@ -539,19 +532,32 @@ async function runManualUpdate(env, reportChatId) {
       const lineCount2 = content2.split(/\r?\n/).filter((line) => line.trim()).length;
       const res2 = await createOrUpdateFile(cfg, SECONDARY_CONFIG.targetFilename, content2, "Manual secondary update: " + lineCount2 + " body lines");
       if (res2.content || res2.sha) {
-        await sendReport("✅ <b>Okeania конфиг обновлен!</b>\n\n📄 Строк передано без пересборки: <code>" + lineCount2 + "</code>");
+        await sendReport("✅ <b>StekloVPN конфиг обновлен!</b>\n\n📄 Строк передано без пересборки: <code>" + lineCount2 + "</code>");
       } else {
-        await sendReport("⚠️ <b>Okeania:</b> файл не подтверждён как обновлённый.");
+        await sendReport("⚠️ <b>StekloVPN:</b> файл не подтверждён как обновлённый.");
       }
     } else {
-      await sendReport("❌ <b>Okeania:</b> пустой или недоступный источник." + (result2.error ? "\n<code>" + String(result2.error).replace(/[&<>]/g, "") + "</code>" : ""));
+      await sendReport("❌ <b>StekloVPN:</b> пустой или недоступный источник." + (result2.error ? "\n<code>" + String(result2.error).replace(/[&<>]/g, "") + "</code>" : ""));
     }
   } catch (e) {
-    console.error("[Manual Update] Okeania error:", e);
-    await sendReport("❌ <b>Okeania — ошибка:</b> <code>" + String(e.message || e).replace(/[&<>]/g, "") + "</code>");
+    console.error("[Manual Update] StekloVPN error:", e);
+    await sendReport("❌ <b>StekloVPN — ошибка:</b> <code>" + String(e.message || e).replace(/[&<>]/g, "") + "</code>");
   }
 
   await sendReport("🏁 <b>Ручное обновление завершено.</b>");
+}
+
+let legacyKvMigrationPromise = null;
+
+async function ensureLegacyKvMigration(cfg) {
+  if (!cfg.db || !cfg.legacyKv) return { skipped: true };
+  if (!legacyKvMigrationPromise) {
+    legacyKvMigrationPromise = migrateLegacyKvToD1(cfg).catch((error) => {
+      legacyKvMigrationPromise = null;
+      throw error;
+    });
+  }
+  return legacyKvMigrationPromise;
 }
 
 export default {
@@ -561,7 +567,7 @@ export default {
     // Health check must not depend on D1/KV bindings or Telegram/GitHub secrets.
     // This lets us distinguish a live Worker from failures in application setup.
     if (request.method === "GET" && url.pathname === "/") {
-      return new Response("OceaniaVPN Bot OK", {
+      return new Response("StekloVPN Bot OK", {
         headers: { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store" }
       });
     }
@@ -569,6 +575,12 @@ export default {
     let cfg;
     try {
       cfg = getConfig(env);
+      try {
+        const migration = await ensureLegacyKvMigration(cfg);
+        if (migration?.migrated) console.log("[Startup] Legacy KV -> D1 migrated:", migration.migrated);
+      } catch (migrationError) {
+        console.error("[Startup] Legacy KV -> D1 migration failed; legacy data remains in KV:", migrationError?.stack || migrationError);
+      }
       if (!cfg.workerOrigin) cfg.workerOrigin = url.origin;
     } catch (e) {
       console.error("[Startup] Configuration initialization failed:", e?.stack || e);
@@ -579,7 +591,7 @@ export default {
     }
 
     if (request.method === "GET") {
-      if (url.pathname === "/") return new Response("OceaniaVPN Bot OK", { headers: { "Content-Type": "text/plain; charset=utf-8" } });
+      if (url.pathname === "/") return new Response("StekloVPN Bot OK", { headers: { "Content-Type": "text/plain; charset=utf-8" } });
       if (url.pathname === "/page") return pageSubscription(request, cfg);
       if (url.pathname === "/sub") return serveSubscription(request, cfg);
       if (url.pathname === "/set-webhook") {
@@ -752,7 +764,7 @@ export default {
       console.error("[Cron] Main Update Error:", e);
     }
 
-    // 2. Обновление второго конфига (okeania_auto.txt)
+    // 2. Обновление второго конфига (steklovpn_auto.txt)
     try {
       console.log("[Cron] Decoding secondary source: " + SECONDARY_CONFIG.targetUrl);
       // Service-to-service auth is sent only to the configured upstream origin.
@@ -767,7 +779,7 @@ export default {
         const res2 = await createOrUpdateFile(cfg, SECONDARY_CONFIG.targetFilename, content2, "Secondary Auto update: " + lineCount2 + " body lines");
         if ((res2.content || res2.sha) && cfg.adminId && cfg.adminId > 0) {
           const rawUrl2 = "https://raw.githubusercontent.com/" + cfg.configRepoOwner + "/" + cfg.configRepoName + "/" + cfg.branch + "/" + cfg.configsFolder + "/" + SECONDARY_CONFIG.targetFilename;
-          await sendMessage(cfg.telegramToken, cfg.adminId, "✅ <b>Второй конфиг (Okeania) обновлен!</b>\n\n📄 Строк передано без пересборки: <code>" + lineCount2 + "</code>\n🔗 <a href=\"" + rawUrl2 + "\">Открыть</a>");
+          await sendMessage(cfg.telegramToken, cfg.adminId, "✅ <b>Второй конфиг (StekloVPN) обновлен!</b>\n\n📄 Строк передано без пересборки: <code>" + lineCount2 + "</code>\n🔗 <a href=\"" + rawUrl2 + "\">Открыть</a>");
         }
         console.log("[Cron] Secondary success: " + lineCount2 + " body lines saved");
       } else {

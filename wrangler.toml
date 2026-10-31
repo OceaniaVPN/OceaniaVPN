@@ -1,4 +1,4 @@
-name = "oceaniavpn"
+name = "steklovpn"
 main = "src/index.js"
 compatibility_date = "2026-08-16"
 
@@ -8,6 +8,8 @@ command = "npm install"
 [vars]
 CONFIG_REPO_OWNER = "OceaniaVPN"
 CONFIG_REPO_NAME = "StekloVPN"
+BOT_REPO_OWNER = "OceaniaVPN"
+BOT_REPO_NAME = "OceaniaVPN"
 CONFIGS_FOLDER = "configs"
 BRANCH = "main"
 
@@ -17,8 +19,10 @@ id = "e56a18bce1624f87bc03b8de27544eb7"
 
 [[d1_databases]]
 binding = "BOT_DB"
+# Existing D1 identity is retained; deploy provisioning validates/reuses it before creating a replacement.
 database_name = "kakok"
 database_id = "6f075ed1-56c8-4bee-8e18-961dc9574b55"
+migrations_dir = "migrations"
 # Deployment trigger: 2026-10-03T20:12:11.410Z
 
 

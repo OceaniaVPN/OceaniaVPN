@@ -1,17 +1,21 @@
 import { createD1Store } from "./d1.js";
 export function getConfig(env) {
   const d1 = createD1Store(env.BOT_DB);
+  const botRepoOwner = String(env.BOT_REPO_OWNER || env.GITHUB_OWNER || env.CONFIG_REPO_OWNER || "").trim();
+  const botRepoName = String(env.BOT_REPO_NAME || "StekloVPN").trim();
+  const configRepoOwner = String(env.CONFIG_REPO_OWNER || botRepoOwner).trim();
   return {
     telegramToken: env.TELEGRAM_BOT_TOKEN,
     githubToken: env.GITHUB_TOKEN,
     adminId: parseInt(env.ADMIN_ID || "0"),
-    configRepoOwner: env.CONFIG_REPO_OWNER || "OceaniaVPN",
+    configRepoOwner,
     configRepoName: env.CONFIG_REPO_NAME || "StekloVPN",
-    // Репо где лежит папка temi/ с HTML-темами. По умолчанию = репо бота (OceaniaVPN/OceaniaVPN).
-    botRepoName: env.BOT_REPO_NAME || env.CONFIG_REPO_OWNER || "OceaniaVPN",
+    // GitHub repository containing the bot theme pages and proxy-list.txt.
+    botRepoOwner,
+    botRepoName,
     configsFolder: env.CONFIGS_FOLDER || "configs",
     branch: env.BRANCH || "main",
-    proxyListUrl: (env.PROXY_LIST_URL || "https://api.github.com/repos/OceaniaVPN/OceaniaVPN/contents/src/proxy-list.txt?ref=main").trim(),
+    proxyListUrl: (env.PROXY_LIST_URL || `https://api.github.com/repos/${botRepoOwner}/${botRepoName}/contents/src/proxy-list.txt?ref=main`).trim(),
     db: d1,
     // D1 is the primary state store. BOT_STATE remains available only during
     // the one-time KV -> D1 migration window.

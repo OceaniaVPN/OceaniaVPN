@@ -3,7 +3,7 @@ async function ghRequest(cfg, method, endpoint, body = null, options = {}) {
   const headers = {
     Authorization: `token ${cfg.githubToken}`,
     Accept: "application/vnd.github.v3+json",
-    "User-Agent": "OceaniaVPN-Bot",
+    "User-Agent": "StekloVPN-Bot",
   };
   if (body) headers["Content-Type"] = "application/json";
 

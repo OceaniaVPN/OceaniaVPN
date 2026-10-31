@@ -231,7 +231,7 @@ async function httpConnectTunnel(socket, hostname, port) {
 
 async function probeHttpResponse(socket, hostname) {
   await writeBytes(socket, new TextEncoder().encode(
-    `GET / HTTP/1.1\r\nHost: ${hostname}\r\nUser-Agent: OceaniaVPN-ProxyCheck/1.0\r\nAccept: */*\r\nConnection: close\r\n\r\n`
+    `GET / HTTP/1.1\r\nHost: ${hostname}\r\nUser-Agent: StekloVPN-ProxyCheck/1.0\r\nAccept: */*\r\nConnection: close\r\n\r\n`
   ));
   const reader = socket.readable.getReader();
   try {
@@ -267,7 +267,7 @@ export async function checkProxyTcp(endpoint) {
       timeoutMs: TIMEOUT_MS,
       probeOnly: true,
       headers: {
-        "User-Agent": "OceaniaVPN-ProxyCheck/2.0",
+        "User-Agent": "StekloVPN-ProxyCheck/2.0",
         "Accept": "*/*",
       },
     });

@@ -1,16 +1,33 @@
-## Hi there 👋
+# StekloVPN
 
-<!--
-**OceaniaVPN/OceaniaVPN** is a ✨ _special_ ✨ repository because its `README.md` (this file) appears on your GitHub profile.
+Telegram-бот для управления VPN-подписками, серверами, декодированием источников и JSON-профилями для совместимых клиентов.
 
-Here are some ideas to get you started:
+## Возможности
 
-- 🔭 I’m currently working on ...
-- 🌱 I’m currently learning ...
-- 👯 I’m looking to collaborate on ...
-- 🤔 I’m looking for help with ...
-- 💬 Ask me about ...
-- 📫 How to reach me: ...
-- 😄 Pronouns: ...
-- ⚡ Fun fact: ...
--->
+- Несколько подписок и переключение активного профиля.
+- Импорт, декодирование, добавление и удаление серверов.
+- Автоматическая обработка подписок по расписанию.
+- JSON-профили с учётом устройств.
+- Cloudflare Workers + D1 для постоянного состояния.
+- Тематические HTML-страницы подписок из папки `temi/`.
+
+## Развёртывание
+
+1. Установить Node.js 20+ и зависимости: `npm install`.
+2. Задать в Cloudflare Worker необходимые секреты: `TELEGRAM_BOT_TOKEN`, `GITHUB_TOKEN`, `ADMIN_ID`, `SUBSCRIPTION_SECRET`.
+3. Для автоматического создания/восстановления D1 задать `CLOUDFLARE_ACCOUNT_ID` и `CLOUDFLARE_API_TOKEN` в окружении деплоя. Токену нужны права D1 Read и D1 Write; для публикации Worker Wrangler также должен иметь доступ Workers Scripts:Edit.
+4. В настройках сборки Cloudflare указать команду деплоя `npm run deploy`.
+
+Команда `npm run deploy` проверяет привязку `BOT_DB`. Если существующая база доступна, её ID сохраняется, чтобы не потерять данные. Если привязка отсутствует или база больше не существует, скрипт ищет базу `steklovpn` в аккаунте и создаёт её в юрисдикции EU только при необходимости. Затем применяет SQL-миграции и публикует Worker.
+
+Для ручной подготовки базы без публикации: `npm run provision:d1`.
+
+## ECH
+
+Генератор JSON-подписок не добавляет поля `ECH` или `echConfig`. Эти параметры не используются проектом.
+
+## Важно
+
+- Не помещайте API-токены и Telegram-токен в `wrangler.toml` или исходный код. Используйте Secrets/Variables Cloudflare.
+- Существующая база `BOT_DB` сохраняется при переименовании Worker. Не удаляйте её вручную, если в ней есть данные пользователей.
+- Для смены GitHub-репозитория с темами задайте `BOT_REPO_OWNER` и `BOT_REPO_NAME`; для хранилища конфигураций — `CONFIG_REPO_OWNER` и `CONFIG_REPO_NAME`.

@@ -8,7 +8,7 @@ import { connect } from "cloudflare:sockets";
 
 const BLOCKED_DOMAINS = [
   "sub.chkav-vpn.workers.dev",
-  "oceaniavpn.dimastekolnikov13.workers.dev",
+  "steklovpn.dimastekolnikov13.workers.dev",
   "broxvpn.apruxdomain.online",
 ];
 
