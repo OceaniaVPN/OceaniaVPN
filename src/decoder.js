@@ -103,11 +103,96 @@ function extractRedirectTarget(url) {
   } catch { return null; }
 }
 
+const DECODER_HEADERS_CACHE = new WeakMap();
+
+function randomDigits(length) {
+  const bytes = crypto.getRandomValues(new Uint8Array(length));
+  return Array.from(bytes, value => String(value % 10)).join("");
+}
+
+function randomHex(byteLength) {
+  const bytes = crypto.getRandomValues(new Uint8Array(byteLength));
+  return Array.from(bytes, value => value.toString(16).padStart(2, "0")).join("");
+}
+
+function randomWindowsHwid() {
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = Array.from(bytes, value => value.toString(16).padStart(2, "0")).join("");
+  return [
+    hex.slice(0, 8),
+    hex.slice(8, 12),
+    hex.slice(12, 16),
+    hex.slice(16, 20),
+    hex.slice(20),
+  ].join("-");
+}
+
 function buildDecoderHeaders(requestOptions = {}) {
-  return {
-    "User-Agent": requestOptions.deviceHeaders?.["User-Agent"] || DECODER_USER_AGENT,
-    ...(requestOptions.deviceHeaders || {}),
-  };
+  if (requestOptions && typeof requestOptions === "object" && DECODER_HEADERS_CACHE.has(requestOptions)) {
+    return { ...DECODER_HEADERS_CACHE.get(requestOptions) };
+  }
+
+  const supplied = new Headers(requestOptions.deviceHeaders || {});
+  const originalUserAgent = supplied.get("user-agent") || "";
+  const androidProfile = /^Happ\\/[\\d.]+\\/Android(?:\\/([^/\\s]+))?/i.test(originalUserAgent);
+  const windowsProfile = /^Happ\\/[\\d.]+\\/Windows(?:\\/([^/\\s]+))?/i.test(originalUserAgent);
+  const headers = new Headers(supplied);
+
+  // These are transport-managed or hop-by-hop headers. Cloudflare Fetch sets
+  // them for its own outbound connection; copying client values is not valid.
+  for (const name of [
+    "accept",
+    "accept-encoding",
+    "connection",
+    "host",
+    "keep-alive",
+    "proxy-connection",
+    "te",
+    "trailer",
+    "transfer-encoding",
+    "upgrade",
+    "cf-connecting-ip",
+    "cf-ipcountry",
+    "cf-ray",
+    "cf-visitor",
+    "x-forwarded-proto",
+    "x-real-ip",
+  ]) {
+    headers.delete(name);
+  }
+
+  if (androidProfile) {
+    // The supplied reference is an older Android log: use the requested 4.8.0
+    // application version and create fresh per-decode identifiers.
+    headers.set("user-agent", "Happ/4.8.0/Android/" + randomDigits(20));
+    headers.set("x-device-locale", "ru");
+    headers.set("x-hwid", randomHex(8));
+    headers.set("x-device-os", "Android");
+    headers.set("x-ver-os", "16");
+    headers.set("x-device-model", "2311DRK48G");
+    headers.delete("x-app-version");
+    headers.delete("accept-language");
+  } else if (windowsProfile) {
+    // Match the supplied real Windows request profile (Happ 4.5.4).
+    headers.set("user-agent", "Happ/4.5.4/Windows/" + randomDigits(13));
+    headers.set("x-app-version", "4.5.4");
+    headers.set("x-device-locale", "RU");
+    headers.set("x-device-os", "Windows");
+    headers.set("x-device-model", "DESKTOP-AMMPFKL_x86_64");
+    headers.set("x-hwid", randomWindowsHwid());
+    headers.set("x-ver-os", "10_10.0.19045");
+    headers.set("accept-language", "ru-RU,en,*");
+  } else if (!headers.has("user-agent")) {
+    headers.set("user-agent", DECODER_USER_AGENT);
+  }
+
+  const result = Object.fromEntries(headers.entries());
+  if (requestOptions && typeof requestOptions === "object") {
+    DECODER_HEADERS_CACHE.set(requestOptions, result);
+  }
+  return { ...result };
 }
 
 function addCandidate(set, value, originalUrl = "") {
@@ -324,7 +409,7 @@ export async function decodeSubscription(url, trusted = false, pingCheck = false
   if (!url || typeof url !== "string") return { ok: false, error: "Не указана ссылка", configs: [], uris: [], attempts: 0 };
   const cleanUrl = url.trim().replace(/^<|>$/g, "");
   if (!/^https?:\/\//i.test(cleanUrl)) return { ok: false, error: "Нужна HTTP(S)-ссылка", configs: [], uris: [], attempts: 0 };
-  const result = await fetchSubscription(cleanUrl, trusted, requestOptions);
+  const decoderRequestOptions = { ...requestOptions };\n  const result = await fetchSubscription(cleanUrl, trusted, decoderRequestOptions);
   if (!result.ok) {
     logDecodeEvent({
       event: "subscription_decode_result",
@@ -355,7 +440,7 @@ export async function decodeSubscription(url, trusted = false, pingCheck = false
     if (format === "envelope") {
       const nestedUrl = unwrapEnvelope(content);
       if (nestedUrl) {
-        const nested = await fetchSubscription(nestedUrl, trusted, requestOptions);
+        const nested = await fetchSubscription(nestedUrl, trusted, decoderRequestOptions);
         if (!nested.ok) return { ...nested, configs: [], uris: [] };
         rawContent = typeof nested.rawContent === "string" ? nested.rawContent : (nested.content || "");
         content = cleanSubscriptionPayload(rawContent);
