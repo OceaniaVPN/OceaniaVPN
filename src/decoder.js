@@ -136,8 +136,8 @@ function buildDecoderHeaders(requestOptions = {}) {
 
   const supplied = new Headers(requestOptions.deviceHeaders || {});
   const originalUserAgent = supplied.get("user-agent") || "";
-  const androidProfile = /^Happ\\/[\\d.]+\\/Android(?:\\/([^/\\s]+))?/i.test(originalUserAgent);
-  const windowsProfile = /^Happ\\/[\\d.]+\\/Windows(?:\\/([^/\\s]+))?/i.test(originalUserAgent);
+  const androidProfile = /^Happ\/[\d.]+\/Android(?:\/([^/\s]+))?/i.test(originalUserAgent);
+  const windowsProfile = /^Happ\/[\d.]+\/Windows(?:\/([^/\s]+))?/i.test(originalUserAgent);
   const headers = new Headers(supplied);
 
   // These are transport-managed or hop-by-hop headers. Cloudflare Fetch sets
@@ -409,7 +409,8 @@ export async function decodeSubscription(url, trusted = false, pingCheck = false
   if (!url || typeof url !== "string") return { ok: false, error: "Не указана ссылка", configs: [], uris: [], attempts: 0 };
   const cleanUrl = url.trim().replace(/^<|>$/g, "");
   if (!/^https?:\/\//i.test(cleanUrl)) return { ok: false, error: "Нужна HTTP(S)-ссылка", configs: [], uris: [], attempts: 0 };
-  const decoderRequestOptions = { ...requestOptions };\n  const result = await fetchSubscription(cleanUrl, trusted, decoderRequestOptions);
+  const decoderRequestOptions = { ...requestOptions };
+  const result = await fetchSubscription(cleanUrl, trusted, decoderRequestOptions);
   if (!result.ok) {
     logDecodeEvent({
       event: "subscription_decode_result",
