@@ -672,6 +672,9 @@ export default {
     }
 
     if (request.method === "POST") {
+      if (!["/telegram/webhook", "/webhook", "/"].includes(url.pathname)) {
+        return new Response("Not found", { status: 404 });
+      }
       if (!isTelegramWebhookAuthorized(request, cfg.webhookSecret)) {
         console.warn("[Webhook] Rejected POST with an invalid Telegram secret token.");
         return new Response("Forbidden", {
