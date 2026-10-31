@@ -32,6 +32,18 @@ function routeLabel(pathname) {
   return "other";
 }
 
+function preserveSameOriginToken(sourceValue, destinationValue) {
+  const source = new URL(sourceValue);
+  const destination = new URL(destinationValue, source);
+  const hasSourceToken = source.searchParams.has("token");
+  const alreadyHasDestinationToken = destination.searchParams.has("token");
+  if (source.origin !== destination.origin || !hasSourceToken || alreadyHasDestinationToken) {
+    return { url: destination.toString(), preserved: false };
+  }
+  destination.searchParams.set("token", source.searchParams.get("token") || "");
+  return { url: destination.toString(), preserved: true };
+}
+
 function logRequestEvent(event) {
   // Never log full URLs, query strings, Authorization values, bot secrets,
   // subscription bodies, device IDs, or proxy credentials.
@@ -158,6 +170,8 @@ export async function fetchWithRedirects(initialUrl, options = {}) {
       route: routeLabel(target.pathname),
       transport,
       redirectHop: hop,
+      queryParameterCount: Array.from(target.searchParams.keys()).length,
+      tokenParameterPresent: target.searchParams.has("token"),
       status: response.status,
       elapsedMs: Date.now() - hopStartedAt,
       contentType: response.headers.get("content-type") || null,
@@ -181,9 +195,32 @@ export async function fetchWithRedirects(initialUrl, options = {}) {
       });
     }
 
-    currentUrl = new URL(trimmedLocation, target).toString();
+    // Keep a URL token when this same origin redirects to a canonical path
+    // without its query string. Never forward it to another origin.
+    const redirected = preserveSameOriginToken(target, trimmedLocation);
+    currentUrl = redirected.url;
+    let tokenQueryPreserved = redirected.preserved;
+
     const extracted = extractRedirectTarget(currentUrl);
-    if (extracted) currentUrl = new URL(extracted, currentUrl).toString();
+    if (extracted) {
+      const nested = preserveSameOriginToken(currentUrl, extracted);
+      currentUrl = nested.url;
+      tokenQueryPreserved = tokenQueryPreserved || nested.preserved;
+    }
+
+    const nextTarget = new URL(currentUrl);
+    logRequestEvent({
+      event: "subscription_http_redirect",
+      fromHost: target.hostname,
+      fromPath: target.pathname,
+      toHost: nextTarget.hostname,
+      toPath: nextTarget.pathname,
+      sameOrigin: target.origin === nextTarget.origin,
+      sourceTokenParameterPresent: target.searchParams.has("token"),
+      targetTokenParameterPresent: nextTarget.searchParams.has("token"),
+      tokenQueryPreserved,
+      redirectHop: hop,
+    });
   }
 
   throw new Error(`Превышен лимит перенаправлений (${maxRedirects})`);
