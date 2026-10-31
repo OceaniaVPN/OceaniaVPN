@@ -113,7 +113,11 @@ export async function fetchWithRedirects(initialUrl, options = {}) {
     probeOnly = false,
   } = options;
 
-  let currentUrl = new URL(initialUrl).toString();
+  // Validate the supplied URL without serializing/rebuilding it. The first
+  // request uses the original string, including its query string, verbatim.
+  const originalUrl = String(initialUrl);
+  new URL(originalUrl);
+  let currentUrl = originalUrl;
   const apiAllowedOrigin = safeOrigin(apiOrigin);
   const upstreamAllowedOrigin = safeOrigin(upstreamOrigin);
 
