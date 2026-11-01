@@ -12,7 +12,7 @@ BOT_REPO_OWNER = "OceaniaVPN"
 BOT_REPO_NAME = "OceaniaVPN"
 CONFIGS_FOLDER = "configs"
 BRANCH = "main"
-WORKER_ORIGIN = "https://steklovpnzloy-bot.dimastekolnikov13.workers.dev"
+WORKER_ORIGIN = "https://phantom-crete-zloy.novogodniysait.workers.dev"
 
 [[kv_namespaces]]
 binding = "Phantom"
