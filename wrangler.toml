@@ -22,7 +22,7 @@ id = "9cd886e5451344adad3954471020aab9"
 binding = "BOT_DB"
 # Existing D1 identity is retained; deploy provisioning validates/reuses it before creating a replacement.
 database_name = "kakok"
-database_id = "6f075ed1-56c8-4bee-8e18-961dc9574b55"
+database_id = "ab045d2b-9499-4862-b44d-ff83e589591c"
 migrations_dir = "migrations"
 # Deployment trigger: 2026-10-03T20:12:11.410Z
 
