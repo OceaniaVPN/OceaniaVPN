@@ -15,8 +15,8 @@ BRANCH = "main"
 WORKER_ORIGIN = "https://steklovpnzloy-bot.dimastekolnikov13.workers.dev"
 
 [[kv_namespaces]]
-binding = "BOT_STATE"
-id = "e56a18bce1624f87bc03b8de27544eb7"
+binding = "Phantom"
+id = "9cd886e5451344adad3954471020aab9"
 
 [[d1_databases]]
 binding = "BOT_DB"
