@@ -913,7 +913,7 @@ function parseAddJsonPayload(value) {
     if (typeof data === "string" && isSupportedServerUri(data)) {
       return { valid: true, uris: [data.trim()] };
     }
-    const parsed = parseJson(raw);
+    const parsed = parseJson(raw, { allowProxyNumberTags: true });
     return {
       valid: true,
       uris: parsed?.ok && Array.isArray(parsed.uris) ? parsed.uris : [],
