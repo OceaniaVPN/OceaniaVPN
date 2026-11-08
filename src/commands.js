@@ -4,6 +4,7 @@ import { getState, setState, clearState, STEPS, STEP_MSG } from "./state.js";
 import { decodeSubscription, checkServersAlive } from "./decoder.js";
 import { probeHttpProxyTarget } from "./subscription-http.js";
 import { decryptCrypt5 } from "./crypt5.js";
+import { parseJson } from "./parsers.js";
 import { pingServers, cmdDev, cmdDevPing, cmdDevDiag, cmdDevMetrics } from "./devtools.js";
 import { buildFile } from "./build.js";
 import { escapeHtml } from "./config.js";
@@ -902,10 +903,85 @@ export async function cmdExport(cfg, chatId) {
   await sendMessage(cfg.telegramToken, chatId, `📤 <b>ЭКСПОРТ</b>\n\n🔗 Подписка:\n<code>${escapeHtml(subUrl)}</code>\n\n🎨 Страница:\n<code>${escapeHtml(pageUrl)}</code>`, { inline_keyboard: [[{ text: "📋 Подписка", url: subUrl }, { text: "🎨 Страница", url: pageUrl }], [{ text: "📤 Поделиться", callback_data: "share" }], [{ text: "🏠 Меню", callback_data: "menu" }]] });
 }
 
+function parseAddJsonPayload(value) {
+  const source = String(value || "").replace(/^\\uFEFF/, "").trim();
+  if (!/^[\\[{"]/.test(source)) return null;
+
+  const readRecord = (raw) => {
+    let data;
+    try { data = JSON.parse(raw); } catch { return { valid: false, uris: [] }; }
+    if (typeof data === "string" && isSupportedServerUri(data)) {
+      return { valid: true, uris: [data.trim()] };
+    }
+    const parsed = parseJson(raw);
+    return {
+      valid: true,
+      uris: parsed?.ok && Array.isArray(parsed.uris) ? parsed.uris : [],
+    };
+  };
+
+  // First try a regular JSON document (objects, arrays and pretty-printed JSON).
+  const whole = readRecord(source);
+  let uris = whole.valid ? whole.uris : [];
+
+  // NDJSON is a sequence of independent JSON values, one per non-empty line.
+  // This path is local to /add; the regular subscription decoder is unchanged.
+  if (!whole.valid) {
+    const records = source.split(/\\r?\\n/).map(line => line.trim()).filter(Boolean);
+    if (records.length > 1) {
+      const collected = [];
+      let validNdjson = true;
+      for (const record of records) {
+        const parsed = readRecord(record);
+        if (!parsed.valid) {
+          validNdjson = false;
+          break;
+        }
+        collected.push(...parsed.uris);
+      }
+      if (validNdjson) uris = collected;
+    }
+  }
+
+  return {
+    uris: [...new Set(uris.map(uri => String(uri || "").trim()).filter(isSupportedServerUri))],
+  };
+}
+
 export async function cmdAdd(cfg, chatId, value) {
   const text = String(value || "").trim();
   if (!text) return sendMessage(cfg.telegramToken, chatId, `➕ <b>Добавление</b>\n\nОтправь VLESS/VMess/Trojan/SS или URL подписки.`);
   if (isTelegramProxyLink(text)) return addProxyLink(cfg, chatId, text);
+
+  const jsonPayload = parseAddJsonPayload(text);
+  if (jsonPayload) {
+    if (!jsonPayload.uris.length) {
+      return sendMessage(cfg.telegramToken, chatId,
+        "❌ <b>JSON/NDJSON не содержит распознаваемых серверов.</b>\\n\\nПоддерживаются конфиги Xray/Sing-box/Hiddify и NDJSON (один JSON-объект на строку).");
+    }
+
+    const filename = await getActiveFilename(cfg, chatId);
+    const content = await getFileContent(cfg, filename);
+    const split = content ? splitSubscriptionFile(content) : { headers: [], links: [] };
+    const existing = new Set(split.links);
+    const added = jsonPayload.uris.filter(uri => !existing.has(uri));
+
+    if (!added.length) {
+      return sendMessage(cfg.telegramToken, chatId,
+        `ℹ️ Все ${jsonPayload.uris.length} серверов из JSON уже есть в подписке.`,
+        { inline_keyboard: [[{ text: "📡 Список", callback_data: "list" }], [{ text: "🏠 Меню", callback_data: "menu" }]] });
+    }
+
+    const newContent = [...split.headers, ...split.links, ...added].join("\\n");
+    const res = await createOrUpdateFile(cfg, filename, newContent, `Add ${added.length} JSON servers for ${chatId}`);
+    if (res.content || res.sha) {
+      return sendMessage(cfg.telegramToken, chatId,
+        `✅ <b>Серверы из JSON добавлены.</b>\\n\\n➕ Добавлено: <code>${added.length}</code>\\n📡 Всего: <code>${split.links.length + added.length}</code>`,
+        { inline_keyboard: [[{ text: "📡 Список", callback_data: "list" }], [{ text: "🏠 Меню", callback_data: "menu" }]] });
+    }
+    return sendMessage(cfg.telegramToken, chatId, "❌ Не удалось сохранить серверы из JSON.");
+  }
+
   const content = await getFileContent(cfg, await getActiveFilename(cfg, chatId));
   const lines = content ? splitSubscriptionFile(content).links : [];
   if (/^(vless|vmess|trojan|ss|hysteria2|hy2):\/\//i.test(text)) {
@@ -1614,7 +1690,7 @@ export async function handleMessage(cfg, msg) {
     if (cmd === "/clean") return cmdClean(cfg, chatId);
     if (cmd === "/analytics") return cmdAnalytics(cfg, chatId);
     if (cmd === "/share") return cmdShare(cfg, chatId);
-    if (cmd === "/add") return cmdAdd(cfg, chatId, parts.slice(1).join(" "));
+    if (cmd === "/add") return cmdAdd(cfg, chatId, trimmed.slice(parts[0].length).trim());
     if (cmd === "/replace") return cmdReplaceServer(cfg, chatId, parts.slice(1).join(" "));
     if (cmd === "/delete") {
       if (String(parts[1] || "").toLowerCase() === "all") return cmdDeleteAllServers(cfg, chatId);
