@@ -318,7 +318,7 @@ export function parseYaml(content) {
   }
 }
 
-function isNonServerOutbound(ob) {
+function isNonServerOutbound(ob, options = {}) {
   const protocol = String(ob?.type || ob?.protocol || "").toLowerCase();
   const tag = String(ob?.tag || ob?.name || "").trim().toLowerCase();
   const nonServerProtocols = new Set([
@@ -330,7 +330,7 @@ function isNonServerOutbound(ob) {
   if (/(?:балансировщик|балансер|balancer|load[-_ ]?balanc|urltest|selector|fallback)/i.test(tag)) return true;
   // These are internal labels used by our own generated subscription JSON,
   // not standalone user-facing nodes.
-  if (/^proxy-\d+$/i.test(tag)) return true;
+  if (!options.allowProxyNumberTags && /^proxy-\d+$/i.test(tag)) return true;
   return false;
 }
 
@@ -359,13 +359,13 @@ function canonicalUriKey(uri) {
   }
 }
 
-export function parseJson(content) {
+export function parseJson(content, options = {}) {
   try {
     const data = JSON.parse(content);
     const uris = [];
 
     const tryConvert = (ob) => {
-      if (isNonServerOutbound(ob)) return null;
+      if (isNonServerOutbound(ob, options)) return null;
       let uri = singboxToUri(ob);
       if (!uri) uri = xrayToUri(ob);
       if (!uri) uri = proxyToUri(ob);
@@ -374,7 +374,7 @@ export function parseJson(content) {
 
     const collectOutbounds = (outbounds) => {
       for (const ob of outbounds) {
-        if (isNonServerOutbound(ob)) continue;
+        if (isNonServerOutbound(ob, options)) continue;
         const uri = tryConvert(ob);
         if (uri) uris.push(uri);
       }
