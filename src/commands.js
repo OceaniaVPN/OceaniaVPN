@@ -904,8 +904,8 @@ export async function cmdExport(cfg, chatId) {
 }
 
 function parseAddJsonPayload(value) {
-  const source = String(value || "").replace(/^\\uFEFF/, "").trim();
-  if (!/^[\\[{"]/.test(source)) return null;
+  const source = String(value || "").replace(/^\uFEFF/, "").trim();
+  if (!/^[\[{"]/.test(source)) return null;
 
   const readRecord = (raw) => {
     let data;
@@ -927,7 +927,7 @@ function parseAddJsonPayload(value) {
   // NDJSON is a sequence of independent JSON values, one per non-empty line.
   // This path is local to /add; the regular subscription decoder is unchanged.
   if (!whole.valid) {
-    const records = source.split(/\\r?\\n/).map(line => line.trim()).filter(Boolean);
+    const records = source.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
     if (records.length > 1) {
       const collected = [];
       let validNdjson = true;
@@ -957,7 +957,7 @@ export async function cmdAdd(cfg, chatId, value) {
   if (jsonPayload) {
     if (!jsonPayload.uris.length) {
       return sendMessage(cfg.telegramToken, chatId,
-        "❌ <b>JSON/NDJSON не содержит распознаваемых серверов.</b>\\n\\nПоддерживаются конфиги Xray/Sing-box/Hiddify и NDJSON (один JSON-объект на строку).");
+        "❌ <b>JSON/NDJSON не содержит распознаваемых серверов.</b>\n\nПоддерживаются конфиги Xray/Sing-box/Hiddify и NDJSON (один JSON-объект на строку).");
     }
 
     const filename = await getActiveFilename(cfg, chatId);
@@ -972,11 +972,11 @@ export async function cmdAdd(cfg, chatId, value) {
         { inline_keyboard: [[{ text: "📡 Список", callback_data: "list" }], [{ text: "🏠 Меню", callback_data: "menu" }]] });
     }
 
-    const newContent = [...split.headers, ...split.links, ...added].join("\\n");
+    const newContent = [...split.headers, ...split.links, ...added].join("\n");
     const res = await createOrUpdateFile(cfg, filename, newContent, `Add ${added.length} JSON servers for ${chatId}`);
     if (res.content || res.sha) {
       return sendMessage(cfg.telegramToken, chatId,
-        `✅ <b>Серверы из JSON добавлены.</b>\\n\\n➕ Добавлено: <code>${added.length}</code>\\n📡 Всего: <code>${split.links.length + added.length}</code>`,
+        `✅ <b>Серверы из JSON добавлены.</b>\n\n➕ Добавлено: <code>${added.length}</code>\n📡 Всего: <code>${split.links.length + added.length}</code>`,
         { inline_keyboard: [[{ text: "📡 Список", callback_data: "list" }], [{ text: "🏠 Меню", callback_data: "menu" }]] });
     }
     return sendMessage(cfg.telegramToken, chatId, "❌ Не удалось сохранить серверы из JSON.");
