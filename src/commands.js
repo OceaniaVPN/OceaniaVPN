@@ -920,26 +920,91 @@ function parseAddJsonPayload(value) {
     };
   };
 
-  // First try a regular JSON document (objects, arrays and pretty-printed JSON).
+  // Split a JSON text sequence into complete top-level JSON values.
+  // Unlike line splitting, this handles pretty-printed objects spanning
+  // multiple lines as well as compact objects placed after them.
+  const splitJsonDocuments = (input) => {
+    const documents = [];
+    let index = 0;
+
+    while (index < input.length) {
+      while (index < input.length && /\s/.test(input[index])) index++;
+      if (index >= input.length) break;
+
+      const start = index;
+      const first = input[index];
+
+      if (first === "{" || first === "[") {
+        const stack = [first === "{" ? "}" : "]"];
+        let inString = false;
+        let escaped = false;
+        index++;
+
+        while (index < input.length && stack.length) {
+          const ch = input[index];
+          if (inString) {
+            if (escaped) escaped = false;
+            else if (ch === "\\") escaped = true;
+            else if (ch === '"') inString = false;
+          } else if (ch === '"') {
+            inString = true;
+          } else if (ch === "{") {
+            stack.push("}");
+          } else if (ch === "[") {
+            stack.push("]");
+          } else if (ch === "}" || ch === "]") {
+            if (stack.pop() !== ch) return null;
+          }
+          index++;
+        }
+
+        if (stack.length || inString) return null;
+      } else if (first === '"') {
+        let escaped = false;
+        index++;
+        while (index < input.length) {
+          const ch = input[index++];
+          if (escaped) escaped = false;
+          else if (ch === "\\") escaped = true;
+          else if (ch === '"') break;
+        }
+        if (input[index - 1] !== '"') return null;
+      } else {
+        while (index < input.length && !/[\s,]/.test(input[index])) index++;
+      }
+
+      const document = input.slice(start, index).trim();
+      if (!document) return null;
+      try { JSON.parse(document); } catch { return null; }
+      documents.push(document);
+
+      // Be tolerant of comma-separated top-level values as well.
+      if (input[index] === ",") index++;
+    }
+
+    return documents;
+  };
+
+  // First try one regular JSON document (object, array, pretty JSON, etc.).
   const whole = readRecord(source);
   let uris = whole.valid ? whole.uris : [];
 
-  // NDJSON is a sequence of independent JSON values, one per non-empty line.
-  // This path is local to /add; the regular subscription decoder is unchanged.
+  // If this is a JSON text sequence, parse each complete object independently.
+  // This is deliberately scoped to /add; /decode keeps its existing behavior.
   if (!whole.valid) {
-    const records = source.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
-    if (records.length > 1) {
+    const documents = splitJsonDocuments(source);
+    if (documents?.length > 1) {
       const collected = [];
-      let validNdjson = true;
-      for (const record of records) {
-        const parsed = readRecord(record);
+      let validSequence = true;
+      for (const document of documents) {
+        const parsed = readRecord(document);
         if (!parsed.valid) {
-          validNdjson = false;
+          validSequence = false;
           break;
         }
         collected.push(...parsed.uris);
       }
-      if (validNdjson) uris = collected;
+      if (validSequence) uris = collected;
     }
   }
 
