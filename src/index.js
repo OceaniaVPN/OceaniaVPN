@@ -6,7 +6,7 @@ import { createOrUpdateFile, getFileContent } from "./github.js";
 import { sendMessage, answerCallback } from "./telegram.js";
 import { COUNTRIES, detectCountryFromText } from "./contries.js";
 import { listSubscriptions, getActiveSubscription, makeSubscriptionDeviceKey } from "./subscriptions.js";
-import { buildHappJsonSubscription } from "./json-subscription.js";
+import { buildHappJsonSubscription, buildRawJsonSubscription } from "./json-subscription.js";
 import { getProxyPreference, getDecodedProfileProxyPreference } from "./proxy-preferences.js";
 import { isKnownHttpProxyEndpoint, refreshHttpProxyCountries } from "./proxy-check.js";
 import { processScheduledChanges } from "./scheduler.js";
@@ -371,6 +371,31 @@ async function serveSubscription(request, cfg) {
     ? "links"
     : (httpProxyEndpoint ? "json" : (selected?.format === "json" ? "json" : "links"));
   if (format === "json") {
+    const rawResult = buildRawJsonSubscription(content);
+    if (rawResult.configs.length) {
+      // Raw Xray/Sing-box configs are emitted intact; URI entries already in the
+      // same profile are appended as generated JSON configs after the raw ones.
+      const generated = buildHappJsonSubscription(content, httpProxyEndpoint);
+      const generatedDocuments = generated.configs.map(config => JSON.stringify(config));
+      const body = generatedDocuments.length
+        ? "[\n" + rawResult.rawDocuments.concat(generatedDocuments).map(value => "  " + value).join(",\n") + "\n]"
+        : rawResult.body;
+
+      headers["Content-Type"] = "application/json;charset=utf-8";
+      headers["Content-Disposition"] = 'inline; filename="subscription.json"';
+      if (httpProxyEndpoint) headers["X-VPN-Proxy-Mode"] = "HTTP-CONNECT";
+      if (generated.unsupported.length) headers["X-Subscription-Unsupported-Configs"] = String(generated.unsupported.length);
+      if (generated.errors.length) headers["X-Subscription-Invalid-Configs"] = String(generated.errors.length);
+      if (generated.unsupported.length || generated.errors.length) {
+        const skipped = generated.unsupported.length + generated.errors.length;
+        headers["Announce"] = base64HeaderText(
+          (headers["Profile-Title"] || "Подписка") + ": " + skipped +
+          " URI-конфигураций не удалось преобразовать; исходные JSON-конфиги переданы без изменений."
+        );
+      }
+      return new Response(body, { headers });
+    }
+
     const result = buildHappJsonSubscription(content, httpProxyEndpoint);
     headers["Content-Type"] = "application/json;charset=utf-8";
     headers["Content-Disposition"] = 'inline; filename="subscription.json"';
@@ -379,7 +404,11 @@ async function serveSubscription(request, cfg) {
     if (result.errors.length) headers["X-Subscription-Invalid-Configs"] = String(result.errors.length);
     if (result.unsupported.length || result.errors.length) {
       const skipped = result.unsupported.length + result.errors.length;
-      headers["Announce"] = base64HeaderText(`${headers["Profile-Title"] || "Подписка"}: ${skipped} конфигураций не удалось представить в Happ JSON и они пропущены.${httpProxyEndpoint ? " HTTP-прокси работает только для TCP; UDP-зависимые узлы могут не работать." : ""}`);
+      headers["Announce"] = base64HeaderText(
+        (headers["Profile-Title"] || "Подписка") + ": " + skipped +
+        " конфигураций не удалось представить в Happ JSON и они пропущены." +
+        (httpProxyEndpoint ? " HTTP-прокси работает только для TCP; UDP-зависимые узлы могут не работать." : "")
+      );
     }
     if (!result.configs.length) {
       return new Response(JSON.stringify({ error: "No supported servers for Happ JSON subscription", unsupported: result.unsupported.map((item) => item.protocol) }), {
