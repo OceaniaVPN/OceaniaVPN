@@ -1,5 +1,49 @@
 const SUPPORTED_PROTOCOLS = new Set(["vless", "vmess", "trojan", "ss"]);
 
+const RAW_JSON_CONFIG_PREFIX = "#x-raw-json-config-b64:";
+
+export function buildRawJsonSubscription(content) {
+  const rawDocuments = [];
+  const configs = [];
+
+  for (const line of String(content || "").split(/\r?\n/)) {
+    if (!line.startsWith(RAW_JSON_CONFIG_PREFIX)) continue;
+    const encoded = line.slice(RAW_JSON_CONFIG_PREFIX.length).trim();
+    if (!encoded) continue;
+
+    try {
+      const binary = decodeBase64(encoded);
+      const bytes = Uint8Array.from(binary, char => char.charCodeAt(0));
+      const raw = new TextDecoder().decode(bytes);
+      const parsed = JSON.parse(raw);
+      const items = Array.isArray(parsed) ? parsed : [parsed];
+
+      if (!items.length || items.some(item =>
+        !item || typeof item !== "object" || Array.isArray(item) || !Array.isArray(item.outbounds)
+      )) continue;
+
+      if (Array.isArray(parsed)) {
+        for (const item of items) {
+          rawDocuments.push(JSON.stringify(item));
+          configs.push(item);
+        }
+      } else {
+        rawDocuments.push(raw);
+        configs.push(parsed);
+      }
+    } catch {
+      // Ignore malformed internal markers; the regular URI subscription remains usable.
+    }
+  }
+
+  const body = rawDocuments.length
+    ? "[\n" + rawDocuments.map(value => "  " + value).join(",\n") + "\n]"
+    : "";
+
+  return { body, configs, rawDocuments };
+}
+
+
 function decodeBase64(value) {
   const normalized = String(value || "").replace(/-/g, "+").replace(/_/g, "/");
   const padded = normalized + "=".repeat((4 - normalized.length % 4) % 4);
