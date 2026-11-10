@@ -592,8 +592,10 @@ async function runDecodeWithProfile(cfg, chatId, url, selection) {
     // is a full Xray/Sing-box JSON document. Do not use parser-generated URIs
     // for the JSON import button.
     const rawJsonBody = stripLeadingPayloadHeaders(content);
-    const isRawJson = rawJsonBody.startsWith("{");
-    const rawJsonConfigCount = isRawJson ? 1 : 0;
+    const isRawJson = /^[{\[]/.test(rawJsonBody);
+    const rawJsonDocuments = isRawJson ? splitRawJsonDocuments(rawJsonBody) : null;
+    const rawJsonConfigCount = isRawJson ? Math.max(rawJsonDocuments?.length || 0, 1) : 0;
+    const jsonServerCount = isRawJson ? countJsonServerOutbounds(rawJsonBody) : 0;
     if (cfg.store) {
       if (parsedUris.length || rawJsonConfigCount) {
         await cfg.store.put(`parsedcache_${chatId}`, JSON.stringify({
@@ -632,8 +634,10 @@ async function runDecodeWithProfile(cfg, chatId, url, selection) {
     ] };
     const successMsg = "✅ <b>Содержимое подписки сохранено</b>\n\n" +
       "━━━━━━━━━━━━━━━━━━━━\n📄 Строк передано: <code>" + savedLineCount + "</code>\n" +
-      "🔎 Распознано серверов для добавления: <code>" + parsedUris.length + "</code>\n" +
-      "Исходное тело и начальные метаданные сохранены. При выдаче известные метаданные переносятся в HTTP-заголовки; ссылки и имена узлов не пересобирались.\n" +
+      (isRawJson
+        ? "🔎 Серверов найдено внутри JSON (outbounds): <code>" + jsonServerCount + "</code>\n📦 JSON-документов для импорта: <code>" + rawJsonConfigCount + "</code>\n"
+        : "🔎 Распознано серверов для добавления: <code>" + parsedUris.length + "</code>\n") +
+      "Исходное тело сохранено без конвертации в VLESS. При выдаче известные метаданные переносятся в HTTP-заголовки; поля JSON и имена узлов не пересобирались.\n" +
       "━━━━━━━━━━━━━━━━━━━━\n\n" +
       "<b>Источник:</b> " + escapeHtml(hostname) + "\n" +
       "<b>Платформа:</b> " + platformLabel + "\n" +
@@ -1012,6 +1016,93 @@ function stripLeadingPayloadHeaders(value) {
   return lines.slice(first).join("\n").trim();
 }
 
+function splitRawJsonDocuments(value) {
+  const input = String(value || "").replace(/^\uFEFF/, "").trim();
+  if (!input) return null;
+
+  const documents = [];
+  let index = 0;
+
+  while (index < input.length) {
+    while (index < input.length && /\s/.test(input[index])) index++;
+    if (index >= input.length) break;
+
+    const start = index;
+    const first = input[index];
+    if (first !== "{" && first !== "[") return null;
+
+    const stack = [first === "{" ? "}" : "]"];
+    let inString = false;
+    let escaped = false;
+    index++;
+
+    while (index < input.length && stack.length) {
+      const ch = input[index];
+      if (inString) {
+        if (escaped) escaped = false;
+        else if (ch === "\\") escaped = true;
+        else if (ch === '"') inString = false;
+      } else if (ch === '"') {
+        inString = true;
+      } else if (ch === "{") {
+        stack.push("}");
+      } else if (ch === "[") {
+        stack.push("]");
+      } else if (ch === "}" || ch === "]") {
+        if (stack.pop() !== ch) return null;
+      }
+      index++;
+    }
+
+    if (stack.length || inString) return null;
+    const document = input.slice(start, index).trim();
+    try {
+      JSON.parse(document);
+    } catch {
+      return null;
+    }
+    documents.push(document);
+
+    while (index < input.length && /\s/.test(input[index])) index++;
+    if (input[index] === ",") index++;
+  }
+
+  return documents.length ? documents : null;
+}
+
+function countJsonServerOutbounds(value) {
+  const documents = splitRawJsonDocuments(value);
+  if (!documents) return 0;
+
+  const proxyProtocols = new Set([
+    "vless", "vmess", "trojan", "shadowsocks", "ss",
+    "socks", "socks5", "http", "hysteria", "hysteria2",
+    "tuic", "wireguard", "wg", "ssh", "shadowtls",
+    "anytls", "mieru", "juicity", "naive",
+  ]);
+
+  let count = 0;
+  for (const document of documents) {
+    let parsed;
+    try {
+      parsed = JSON.parse(document);
+    } catch {
+      continue;
+    }
+    const configs = Array.isArray(parsed) ? parsed : [parsed];
+    for (const config of configs) {
+      if (!config || typeof config !== "object" || Array.isArray(config)) continue;
+      const outbounds = Array.isArray(config.outbounds) ? config.outbounds : [];
+      for (const outbound of outbounds) {
+        const protocol = String(outbound?.protocol || outbound?.type || "").toLowerCase();
+        if (proxyProtocols.has(protocol)) count++;
+      }
+    }
+  }
+  return count;
+}
+
+
 
 export async function cmdAdd(cfg, chatId, value) {
   const text = String(value || "").trim();
@@ -1166,7 +1257,8 @@ async function cmdAddParsedToSubscription(cfg, chatId) {
   if (cached?.rawJsonFilename) {
     const sourceFile = await getFileContent(cfg, cached.rawJsonFilename);
     const rawJson = stripLeadingPayloadHeaders(sourceFile);
-    if (!rawJson.startsWith("{")) {
+    const rawDocuments = splitRawJsonDocuments(rawJson);
+    if (!rawDocuments?.length) {
       return sendMessage(cfg.telegramToken, chatId,
         "❌ <b>Исходный JSON не найден или повреждён.</b>\n\nЗапусти /decode ещё раз, чтобы сохранить исходный конфиг.",
         { inline_keyboard: [[{ text: "🔍 Декодер", callback_data: "decode" }], [{ text: "🏠 Меню", callback_data: "menu" }]] });
@@ -1189,7 +1281,27 @@ async function cmdAddParsedToSubscription(cfg, chatId) {
     const existing = new Set(split.headers
       .filter(line => line.startsWith(markerPrefix))
       .map(line => line.slice(markerPrefix.length).trim()));
-    const encoded = [encodeRawJsonConfig(rawJson)]
+    const configsToStore = [];
+    for (const document of rawDocuments) {
+      let parsed;
+      try {
+        parsed = JSON.parse(document);
+      } catch {
+        continue;
+      }
+      const items = Array.isArray(parsed) ? parsed : [parsed];
+      for (const item of items) {
+        if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+        // Keep the exact original text for standalone JSON/NDJSON objects.
+        // When the source is a JSON array, store each config as a document.
+        configsToStore.push(Array.isArray(parsed) ? JSON.stringify(item) : document);
+      }
+    }
+    if (!configsToStore.length) {
+      return sendMessage(cfg.telegramToken, chatId,
+        "❌ <b>В JSON не найдено ни одного объекта конфигурации.</b>\n\nПроверь исходную подписку и повтори декодирование.");
+    }
+    const encoded = [...new Set(configsToStore.map(encodeRawJsonConfig))]
       .filter(value => !existing.has(value));
 
     // Remove the URI copies that the previous decoder version may already
