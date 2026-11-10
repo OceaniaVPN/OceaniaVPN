@@ -1194,11 +1194,19 @@ async function cmdAddParsedToSubscription(cfg, chatId) {
       .map(encodeRawJsonConfig)
       .filter(value => !existing.has(value));
 
-    if (encoded.length) {
+    // Remove the URI copies that the previous decoder version may already
+    // have inserted for this exact decoded source. Keep unrelated manual links.
+    const decodedUris = new Set((Array.isArray(cached?.uris) ? cached.uris : [])
+      .map(uri => String(uri || "").trim())
+      .filter(isSupportedServerUri));
+    const preservedLinks = split.links.filter(uri => !decodedUris.has(uri));
+    const removedOldUriCopies = preservedLinks.length !== split.links.length;
+
+    if (encoded.length || removedOldUriCopies) {
       const rawJsonHeaders = encoded.map(value => markerPrefix + value);
-      const nextContent = [...split.headers, ...rawJsonHeaders, ...split.links].join("\n");
+      const nextContent = [...split.headers, ...rawJsonHeaders, ...preservedLinks].join("\n");
       const saved = await createOrUpdateFile(cfg, filename, nextContent,
-        "Add " + encoded.length + " original decoded JSON configs for " + chatId);
+        "Import " + payload.configs.length + " original decoded JSON configs for " + chatId);
       if (!(saved.content || saved.sha || saved.commit)) {
         return sendMessage(cfg.telegramToken, chatId, "❌ Не удалось сохранить исходный JSON в подписку.");
       }
