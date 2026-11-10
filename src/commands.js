@@ -597,7 +597,7 @@ async function runDecodeWithProfile(cfg, chatId, url, selection) {
     const rawJsonConfigCount = rawJsonPayload?.configs?.length || 0;
     if (cfg.store) {
       if (parsedUris.length || rawJsonConfigCount) {
-        await cfg.store.put(\`parsedcache_\${chatId}\`, JSON.stringify({
+        await cfg.store.put(`parsedcache_${chatId}`, JSON.stringify({
           uris: parsedUris,
           rawJsonFilename: rawJsonConfigCount ? filename : null,
           rawJsonCount: rawJsonConfigCount,
@@ -605,7 +605,7 @@ async function runDecodeWithProfile(cfg, chatId, url, selection) {
           savedAt: Date.now(),
         }), { expirationTtl: 86400 });
       } else {
-        await cfg.store.delete(\`parsedcache_\${chatId}\`).catch(() => {});
+        await cfg.store.delete(`parsedcache_${chatId}`).catch(() => {});
       }
     }
 
@@ -1161,7 +1161,7 @@ export async function cmdDelete(cfg, chatId) {
 }
 
 async function cmdAddParsedToSubscription(cfg, chatId) {
-  const cached = cfg.store ? await cfg.store.get(\`parsedcache_\${chatId}\`, "json") : null;
+  const cached = cfg.store ? await cfg.store.get(`parsedcache_${chatId}`, "json") : null;
 
   // JSON decode result: import the saved original body, not its parsed URI list.
   if (cached?.rawJsonFilename) {
@@ -1233,16 +1233,16 @@ async function cmdAddParsedToSubscription(cfg, chatId) {
   const added = parsedUris.filter(uri => !existing.has(uri));
   if (!added.length) {
     return sendMessage(cfg.telegramToken, chatId,
-      \`ℹ️ Все распознанные серверы уже есть в подписке.\n\n📡 В подписке: <code>\${links.length}</code>\n🔎 Проверено: <code>\${parsedUris.length}</code>\`,
+      `ℹ️ Все распознанные серверы уже есть в подписке.\n\n📡 В подписке: <code>${links.length}</code>\n🔎 Проверено: <code>${parsedUris.length}</code>`,
       { inline_keyboard: [[{ text: "📡 Серверы", callback_data: "list" }], [{ text: "🏠 Меню", callback_data: "menu" }]] });
   }
   const nextContent = [...headers, ...links, ...added].join("\n");
-  const res = await createOrUpdateFile(cfg, filename, nextContent, \`Append \${added.length} decoded servers for \${chatId}\`);
+  const res = await createOrUpdateFile(cfg, filename, nextContent, `Append ${added.length} decoded servers for ${chatId}`);
   if (!(res.content || res.sha || res.commit)) {
     return sendMessage(cfg.telegramToken, chatId, "❌ Не удалось добавить серверы: GitHub не подтвердил сохранение.");
   }
   return sendMessage(cfg.telegramToken, chatId,
-    \`✅ <b>Распознанные серверы добавлены</b>\n\n➕ Добавлено: <code>\${added.length}</code>\n📡 Всего в подписке: <code>\${links.length + added.length}</code>\n♻️ Повторы пропущены, текущие серверы сохранены.\`,
+    `✅ <b>Распознанные серверы добавлены</b>\n\n➕ Добавлено: <code>${added.length}</code>\n📡 Всего в подписке: <code>${links.length + added.length}</code>\n♻️ Повторы пропущены, текущие серверы сохранены.`,
     { inline_keyboard: [[{ text: "📡 Список серверов", callback_data: "list" }], [{ text: "📋 Мой профиль", callback_data: "my" }], [{ text: "🏠 Меню", callback_data: "menu" }]] });
 }
 
