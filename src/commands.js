@@ -588,15 +588,24 @@ async function runDecodeWithProfile(cfg, chatId, url, selection) {
     const parsedUris = [...new Set((Array.isArray(result.uris) ? result.uris : [])
       .map(uri => String(uri || "").trim())
       .filter(isSupportedServerUri))];
+    // Keep a pointer to the exact decoded source file when the upstream body
+    // is a full Xray/Sing-box JSON document. Do not use parser-generated URIs
+    // for the JSON import button.
+    const rawJsonPayload = result.format === "json"
+      ? parseAddJsonPayload(stripLeadingPayloadHeaders(content))
+      : null;
+    const rawJsonConfigCount = rawJsonPayload?.configs?.length || 0;
     if (cfg.store) {
-      if (parsedUris.length) {
-        await cfg.store.put(`parsedcache_${chatId}`, JSON.stringify({
+      if (parsedUris.length || rawJsonConfigCount) {
+        await cfg.store.put(\`parsedcache_\${chatId}\`, JSON.stringify({
           uris: parsedUris,
+          rawJsonFilename: rawJsonConfigCount ? filename : null,
+          rawJsonCount: rawJsonConfigCount,
           sourceHost: hostname,
           savedAt: Date.now(),
         }), { expirationTtl: 86400 });
       } else {
-        await cfg.store.delete(`parsedcache_${chatId}`).catch(() => {});
+        await cfg.store.delete(\`parsedcache_\${chatId}\`).catch(() => {});
       }
     }
 
@@ -615,7 +624,9 @@ async function runDecodeWithProfile(cfg, chatId, url, selection) {
     const platformLabel = platform === "android" ? "Android" : "Windows";
     const proxyLabel = mode === "on" ? (selection.country + " · " + selection.endpoint) : "Без прокси";
     const kb = { inline_keyboard: [
-      ...(parsedUris.length ? [[{ text: "➕ Добавить распознанные серверы в подписку", callback_data: "add_parsed_to_sub" }]] : []),
+      ...(rawJsonConfigCount
+        ? [[{ text: "➕ Добавить исходный JSON в мою подписку", callback_data: "add_parsed_to_sub" }]]
+        : (parsedUris.length ? [[{ text: "➕ Добавить распознанные серверы в подписку", callback_data: "add_parsed_to_sub" }]] : [])),
       [{ text: "🔗 Итоговый профиль · " + platformLabel, url: profileUrl }],
       [{ text: "🔄 Декодировать другую ссылку", callback_data: "decode" }],
       [{ text: "🏠 Главное меню", callback_data: "menu" }],
@@ -990,6 +1001,18 @@ function encodeRawJsonConfig(value) {
   return btoa(binary);
 }
 
+function stripLeadingPayloadHeaders(value) {
+  const source = String(value || "").replace(/^\uFEFF/, "");
+  const lines = source.split(/\r?\n/);
+  let first = 0;
+  while (first < lines.length) {
+    const line = lines[first].trim();
+    if (!line || line.startsWith("#")) first++;
+    else break;
+  }
+  return lines.slice(first).join("\n").trim();
+}
+
 
 export async function cmdAdd(cfg, chatId, value) {
   const text = String(value || "").trim();
@@ -1138,13 +1161,64 @@ export async function cmdDelete(cfg, chatId) {
 }
 
 async function cmdAddParsedToSubscription(cfg, chatId) {
-  const cached = cfg.store ? await cfg.store.get(`parsedcache_${chatId}`, "json") : null;
+  const cached = cfg.store ? await cfg.store.get(\`parsedcache_\${chatId}\`, "json") : null;
+
+  // JSON decode result: import the saved original body, not its parsed URI list.
+  if (cached?.rawJsonFilename) {
+    const sourceFile = await getFileContent(cfg, cached.rawJsonFilename);
+    const payload = parseAddJsonPayload(stripLeadingPayloadHeaders(sourceFile));
+    if (!payload?.configs?.length) {
+      return sendMessage(cfg.telegramToken, chatId,
+        "❌ <b>Исходный JSON не найден или повреждён.</b>\n\nЗапусти /decode ещё раз, чтобы сохранить исходный конфиг.",
+        { inline_keyboard: [[{ text: "🔍 Декодер", callback_data: "decode" }], [{ text: "🏠 Меню", callback_data: "menu" }]] });
+    }
+
+    const active = await getActiveSubscription(cfg, chatId);
+    if (!active) {
+      return sendMessage(cfg.telegramToken, chatId,
+        "📭 <b>Сначала создай подписку.</b>",
+        { inline_keyboard: [[{ text: "🚀 Создать подписку", callback_data: "create" }], [{ text: "🏠 Меню", callback_data: "menu" }]] });
+    }
+
+    const filename = active.filename;
+    const currentContent = await getFileContent(cfg, filename);
+    if (currentContent === null) {
+      return sendMessage(cfg.telegramToken, chatId, "📭 <b>Файл активной подписки не найден.</b>");
+    }
+    const split = currentContent ? splitSubscriptionFile(currentContent) : { headers: [], links: [] };
+    const markerPrefix = "#x-raw-json-config-b64:";
+    const existing = new Set(split.headers
+      .filter(line => line.startsWith(markerPrefix))
+      .map(line => line.slice(markerPrefix.length).trim()));
+    const encoded = payload.configs
+      .map(encodeRawJsonConfig)
+      .filter(value => !existing.has(value));
+
+    if (encoded.length) {
+      const rawJsonHeaders = encoded.map(value => markerPrefix + value);
+      const nextContent = [...split.headers, ...rawJsonHeaders, ...split.links].join("\n");
+      const saved = await createOrUpdateFile(cfg, filename, nextContent,
+        "Add " + encoded.length + " original decoded JSON configs for " + chatId);
+      if (!(saved.content || saved.sha || saved.commit)) {
+        return sendMessage(cfg.telegramToken, chatId, "❌ Не удалось сохранить исходный JSON в подписку.");
+      }
+    }
+
+    await updateSubscriptionSettings(cfg, chatId, active.id, { format: "json" });
+    return sendMessage(cfg.telegramToken, chatId,
+      encoded.length
+        ? "✅ <b>Исходный JSON добавлен в подписку.</b>\n\n📦 Конфигов: <code>" + encoded.length + "</code>\n📄 Выдача: <b>полный JSON без конвертации в VLESS</b>.\n\nПоля dns, routing, inbounds, outbounds, streamSettings, remarks и meta сохранены."
+        : "ℹ️ <b>Эти исходные JSON-конфиги уже есть в подписке.</b>\n\nФормат выдачи установлен: <b>JSON без конвертации</b>.",
+      { inline_keyboard: [[{ text: "📋 Моя подписка", callback_data: "my" }], [{ text: "📤 Экспорт", callback_data: "export" }], [{ text: "🏠 Меню", callback_data: "menu" }]] });
+  }
+
+  // Backward-compatible path for older URI-only decode cache entries.
   const parsedUris = [...new Set((Array.isArray(cached?.uris) ? cached.uris : [])
     .map(uri => String(uri || "").trim())
     .filter(isSupportedServerUri))];
   if (!parsedUris.length) {
     return sendMessage(cfg.telegramToken, chatId,
-      "⌛ <b>Нет распознанных серверов для добавления.</b>\n\nЗапусти декодер ещё раз и выбери источник с поддерживаемыми серверами.",
+      "⌛ <b>Нет распознанных данных для добавления.</b>\n\nЗапусти декодер ещё раз.",
       { inline_keyboard: [[{ text: "🔍 Декодер", callback_data: "decode" }], [{ text: "🏠 Меню", callback_data: "menu" }]] });
   }
   const filename = await getActiveFilename(cfg, chatId);
@@ -1159,16 +1233,16 @@ async function cmdAddParsedToSubscription(cfg, chatId) {
   const added = parsedUris.filter(uri => !existing.has(uri));
   if (!added.length) {
     return sendMessage(cfg.telegramToken, chatId,
-      `ℹ️ Все распознанные серверы уже есть в подписке.\n\n📡 В подписке: <code>${links.length}</code>\n🔎 Проверено: <code>${parsedUris.length}</code>`,
+      \`ℹ️ Все распознанные серверы уже есть в подписке.\n\n📡 В подписке: <code>\${links.length}</code>\n🔎 Проверено: <code>\${parsedUris.length}</code>\`,
       { inline_keyboard: [[{ text: "📡 Серверы", callback_data: "list" }], [{ text: "🏠 Меню", callback_data: "menu" }]] });
   }
   const nextContent = [...headers, ...links, ...added].join("\n");
-  const res = await createOrUpdateFile(cfg, filename, nextContent, `Append ${added.length} decoded servers for ${chatId}`);
+  const res = await createOrUpdateFile(cfg, filename, nextContent, \`Append \${added.length} decoded servers for \${chatId}\`);
   if (!(res.content || res.sha || res.commit)) {
     return sendMessage(cfg.telegramToken, chatId, "❌ Не удалось добавить серверы: GitHub не подтвердил сохранение.");
   }
   return sendMessage(cfg.telegramToken, chatId,
-    `✅ <b>Распознанные серверы добавлены</b>\n\n➕ Добавлено: <code>${added.length}</code>\n📡 Всего в подписке: <code>${links.length + added.length}</code>\n♻️ Повторы пропущены, текущие серверы сохранены.`,
+    \`✅ <b>Распознанные серверы добавлены</b>\n\n➕ Добавлено: <code>\${added.length}</code>\n📡 Всего в подписке: <code>\${links.length + added.length}</code>\n♻️ Повторы пропущены, текущие серверы сохранены.\`,
     { inline_keyboard: [[{ text: "📡 Список серверов", callback_data: "list" }], [{ text: "📋 Мой профиль", callback_data: "my" }], [{ text: "🏠 Меню", callback_data: "menu" }]] });
 }
 
