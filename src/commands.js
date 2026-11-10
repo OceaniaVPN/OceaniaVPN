@@ -591,10 +591,9 @@ async function runDecodeWithProfile(cfg, chatId, url, selection) {
     // Keep a pointer to the exact decoded source file when the upstream body
     // is a full Xray/Sing-box JSON document. Do not use parser-generated URIs
     // for the JSON import button.
-    const rawJsonPayload = result.format === "json"
-      ? parseAddJsonPayload(stripLeadingPayloadHeaders(content))
-      : null;
-    const rawJsonConfigCount = rawJsonPayload?.configs?.length || 0;
+    const rawJsonBody = stripLeadingPayloadHeaders(content);
+    const isRawJson = rawJsonBody.startsWith("{");
+    const rawJsonConfigCount = isRawJson ? 1 : 0;
     if (cfg.store) {
       if (parsedUris.length || rawJsonConfigCount) {
         await cfg.store.put(`parsedcache_${chatId}`, JSON.stringify({
@@ -1166,8 +1165,8 @@ async function cmdAddParsedToSubscription(cfg, chatId) {
   // JSON decode result: import the saved original body, not its parsed URI list.
   if (cached?.rawJsonFilename) {
     const sourceFile = await getFileContent(cfg, cached.rawJsonFilename);
-    const payload = parseAddJsonPayload(stripLeadingPayloadHeaders(sourceFile));
-    if (!payload?.configs?.length) {
+    const rawJson = stripLeadingPayloadHeaders(sourceFile);
+    if (!rawJson.startsWith("{")) {
       return sendMessage(cfg.telegramToken, chatId,
         "❌ <b>Исходный JSON не найден или повреждён.</b>\n\nЗапусти /decode ещё раз, чтобы сохранить исходный конфиг.",
         { inline_keyboard: [[{ text: "🔍 Декодер", callback_data: "decode" }], [{ text: "🏠 Меню", callback_data: "menu" }]] });
@@ -1190,8 +1189,7 @@ async function cmdAddParsedToSubscription(cfg, chatId) {
     const existing = new Set(split.headers
       .filter(line => line.startsWith(markerPrefix))
       .map(line => line.slice(markerPrefix.length).trim()));
-    const encoded = payload.configs
-      .map(encodeRawJsonConfig)
+    const encoded = [encodeRawJsonConfig(rawJson)]
       .filter(value => !existing.has(value));
 
     // Remove the URI copies that the previous decoder version may already
@@ -1206,7 +1204,7 @@ async function cmdAddParsedToSubscription(cfg, chatId) {
       const rawJsonHeaders = encoded.map(value => markerPrefix + value);
       const nextContent = [...split.headers, ...rawJsonHeaders, ...preservedLinks].join("\n");
       const saved = await createOrUpdateFile(cfg, filename, nextContent,
-        "Import " + payload.configs.length + " original decoded JSON configs for " + chatId);
+        "Import original decoded JSON for " + chatId);
       if (!(saved.content || saved.sha || saved.commit)) {
         return sendMessage(cfg.telegramToken, chatId, "❌ Не удалось сохранить исходный JSON в подписку.");
       }
@@ -1216,7 +1214,7 @@ async function cmdAddParsedToSubscription(cfg, chatId) {
     return sendMessage(cfg.telegramToken, chatId,
       encoded.length
         ? "✅ <b>Исходный JSON добавлен в подписку.</b>\n\n📦 Конфигов: <code>" + encoded.length + "</code>\n📄 Выдача: <b>полный JSON без конвертации в VLESS</b>.\n\nПоля dns, routing, inbounds, outbounds, streamSettings, remarks и meta сохранены."
-        : "ℹ️ <b>Эти исходные JSON-конфиги уже есть в подписке.</b>\n\nФормат выдачи установлен: <b>JSON без конвертации</b>.",
+        : "ℹ️ <b>Этот исходный JSON уже есть в подписке.</b>\n\nФормат выдачи установлен: <b>JSON без конвертации</b>.",
       { inline_keyboard: [[{ text: "📋 Моя подписка", callback_data: "my" }], [{ text: "📤 Экспорт", callback_data: "export" }], [{ text: "🏠 Меню", callback_data: "menu" }]] });
   }
 
