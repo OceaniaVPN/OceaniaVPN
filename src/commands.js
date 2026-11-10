@@ -4,7 +4,6 @@ import { getState, setState, clearState, STEPS, STEP_MSG } from "./state.js";
 import { decodeSubscription, checkServersAlive } from "./decoder.js";
 import { probeHttpProxyTarget } from "./subscription-http.js";
 import { decryptCrypt5 } from "./crypt5.js";
-import { parseJson } from "./parsers.js";
 import { pingServers, cmdDev, cmdDevPing, cmdDevDiag, cmdDevMetrics } from "./devtools.js";
 import { buildFile } from "./build.js";
 import { escapeHtml } from "./config.js";
@@ -905,24 +904,8 @@ export async function cmdExport(cfg, chatId) {
 
 function parseAddJsonPayload(value) {
   const source = String(value || "").replace(/^\uFEFF/, "").trim();
-  if (!/^[\[{"]/.test(source)) return null;
+  if (!/^[\[{]/.test(source)) return null;
 
-  const readRecord = (raw) => {
-    let data;
-    try { data = JSON.parse(raw); } catch { return { valid: false, uris: [] }; }
-    if (typeof data === "string" && isSupportedServerUri(data)) {
-      return { valid: true, uris: [data.trim()] };
-    }
-    const parsed = parseJson(raw, { allowProxyNumberTags: true });
-    return {
-      valid: true,
-      uris: parsed?.ok && Array.isArray(parsed.uris) ? parsed.uris : [],
-    };
-  };
-
-  // Split a JSON text sequence into complete top-level JSON values.
-  // Unlike line splitting, this handles pretty-printed objects spanning
-  // multiple lines as well as compact objects placed after them.
   const splitJsonDocuments = (input) => {
     const documents = [];
     let index = 0;
@@ -933,118 +916,130 @@ function parseAddJsonPayload(value) {
 
       const start = index;
       const first = input[index];
+      if (first !== "{" && first !== "[") return null;
 
-      if (first === "{" || first === "[") {
-        const stack = [first === "{" ? "}" : "]"];
-        let inString = false;
-        let escaped = false;
-        index++;
+      const stack = [first === "{" ? "}" : "]"];
+      let inString = false;
+      let escaped = false;
+      index++;
 
-        while (index < input.length && stack.length) {
-          const ch = input[index];
-          if (inString) {
-            if (escaped) escaped = false;
-            else if (ch === "\\") escaped = true;
-            else if (ch === '"') inString = false;
-          } else if (ch === '"') {
-            inString = true;
-          } else if (ch === "{") {
-            stack.push("}");
-          } else if (ch === "[") {
-            stack.push("]");
-          } else if (ch === "}" || ch === "]") {
-            if (stack.pop() !== ch) return null;
-          }
-          index++;
-        }
-
-        if (stack.length || inString) return null;
-      } else if (first === '"') {
-        let escaped = false;
-        index++;
-        while (index < input.length) {
-          const ch = input[index++];
+      while (index < input.length && stack.length) {
+        const ch = input[index];
+        if (inString) {
           if (escaped) escaped = false;
           else if (ch === "\\") escaped = true;
-          else if (ch === '"') break;
+          else if (ch === '"') inString = false;
+        } else if (ch === '"') {
+          inString = true;
+        } else if (ch === "{") {
+          stack.push("}");
+        } else if (ch === "[") {
+          stack.push("]");
+        } else if (ch === "}" || ch === "]") {
+          if (stack.pop() !== ch) return null;
         }
-        if (input[index - 1] !== '"') return null;
-      } else {
-        while (index < input.length && !/[\s,]/.test(input[index])) index++;
+        index++;
       }
 
+      if (stack.length || inString) return null;
       const document = input.slice(start, index).trim();
-      if (!document) return null;
       try { JSON.parse(document); } catch { return null; }
       documents.push(document);
 
-      // Be tolerant of comma-separated top-level values as well.
+      while (index < input.length && /\s/.test(input[index])) index++;
       if (input[index] === ",") index++;
     }
 
     return documents;
   };
 
-  // First try one regular JSON document (object, array, pretty JSON, etc.).
-  const whole = readRecord(source);
-  let uris = whole.valid ? whole.uris : [];
+  const documents = splitJsonDocuments(source);
+  if (!documents?.length) return { configs: [], error: "Не удалось разобрать JSON." };
 
-  // If this is a JSON text sequence, parse each complete object independently.
-  // This is deliberately scoped to /add; /decode keeps its existing behavior.
-  if (!whole.valid) {
-    const documents = splitJsonDocuments(source);
-    if (documents?.length > 1) {
-      const collected = [];
-      let validSequence = true;
-      for (const document of documents) {
-        const parsed = readRecord(document);
-        if (!parsed.valid) {
-          validSequence = false;
-          break;
-        }
-        collected.push(...parsed.uris);
-      }
-      if (validSequence) uris = collected;
+  const configs = [];
+  for (const document of documents) {
+    let parsed;
+    try { parsed = JSON.parse(document); }
+    catch { return { configs: [], error: "В JSON обнаружена синтаксическая ошибка." }; }
+
+    const items = Array.isArray(parsed) ? parsed : [parsed];
+    if (!items.length || items.some(item =>
+      !item || typeof item !== "object" || Array.isArray(item) || !Array.isArray(item.outbounds)
+    )) {
+      return {
+        configs: [],
+        error: "Ожидается полный Xray/Sing-box JSON-конфиг с массивом outbounds.",
+      };
+    }
+
+    // Keep the complete source JSON. Do not extract outbounds or convert it to URI.
+    if (Array.isArray(parsed)) {
+      for (const item of items) configs.push(JSON.stringify(item));
+    } else {
+      configs.push(document);
     }
   }
 
-  return {
-    uris: [...new Set(uris.map(uri => String(uri || "").trim()).filter(isSupportedServerUri))],
-  };
+  return { configs };
 }
+
+function encodeRawJsonConfig(value) {
+  const bytes = new TextEncoder().encode(String(value));
+  let binary = "";
+  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+  return btoa(binary);
+}
+
 
 export async function cmdAdd(cfg, chatId, value) {
   const text = String(value || "").trim();
-  if (!text) return sendMessage(cfg.telegramToken, chatId, `➕ <b>Добавление</b>\n\nОтправь VLESS/VMess/Trojan/SS или URL подписки.`);
+  if (!text) return sendMessage(cfg.telegramToken, chatId, "➕ <b>Добавление</b>\n\nОтправь VLESS/VMess/Trojan/SS, URL подписки или полный JSON-конфиг.");
   if (isTelegramProxyLink(text)) return addProxyLink(cfg, chatId, text);
 
   const jsonPayload = parseAddJsonPayload(text);
   if (jsonPayload) {
-    if (!jsonPayload.uris.length) {
+    if (!jsonPayload.configs.length) {
       return sendMessage(cfg.telegramToken, chatId,
-        "❌ <b>JSON/NDJSON не содержит распознаваемых серверов.</b>\n\nПоддерживаются конфиги Xray/Sing-box/Hiddify и NDJSON (один JSON-объект на строку).");
+        "❌ <b>JSON не добавлен.</b>\n\n" + escapeHtml(jsonPayload.error || "Не найдено ни одного полного JSON-конфига."));
     }
 
-    const filename = await getActiveFilename(cfg, chatId);
+    const active = await getActiveSubscription(cfg, chatId);
+    if (!active) {
+      return sendMessage(cfg.telegramToken, chatId,
+        "📭 <b>Сначала создай подписку.</b>",
+        { inline_keyboard: [[{ text: "🚀 Создать подписку", callback_data: "create" }], [{ text: "🏠 Меню", callback_data: "menu" }]] });
+    }
+
+    const filename = active.filename;
     const content = await getFileContent(cfg, filename);
     const split = content ? splitSubscriptionFile(content) : { headers: [], links: [] };
-    const existing = new Set(split.links);
-    const added = jsonPayload.uris.filter(uri => !existing.has(uri));
+    const markerPrefix = "#x-raw-json-config-b64:";
+    const existing = new Set(split.headers
+      .filter(line => line.startsWith(markerPrefix))
+      .map(line => line.slice(markerPrefix.length).trim()));
+    const encoded = jsonPayload.configs
+      .map(encodeRawJsonConfig)
+      .filter(value => !existing.has(value));
 
-    if (!added.length) {
+    if (!encoded.length) {
+      await updateSubscriptionSettings(cfg, chatId, active.id, { format: "json" });
       return sendMessage(cfg.telegramToken, chatId,
-        `ℹ️ Все ${jsonPayload.uris.length} серверов из JSON уже есть в подписке.`,
-        { inline_keyboard: [[{ text: "📡 Список", callback_data: "list" }], [{ text: "🏠 Меню", callback_data: "menu" }]] });
+        "ℹ️ Эти JSON-конфиги уже есть в подписке.\n\n📦 Конфигов: <code>" + jsonPayload.configs.length + "</code>\n📄 Формат выдачи: <b>JSON без конвертации</b>.",
+        { inline_keyboard: [[{ text: "📋 Открыть подписку", callback_data: "my" }], [{ text: "🏠 Меню", callback_data: "menu" }]] });
     }
 
-    const newContent = [...split.headers, ...split.links, ...added].join("\n");
-    const res = await createOrUpdateFile(cfg, filename, newContent, `Add ${added.length} JSON servers for ${chatId}`);
-    if (res.content || res.sha) {
-      return sendMessage(cfg.telegramToken, chatId,
-        `✅ <b>Серверы из JSON добавлены.</b>\n\n➕ Добавлено: <code>${added.length}</code>\n📡 Всего: <code>${split.links.length + added.length}</code>`,
-        { inline_keyboard: [[{ text: "📡 Список", callback_data: "list" }], [{ text: "🏠 Меню", callback_data: "menu" }]] });
+    const rawJsonHeaders = encoded.map(value => markerPrefix + value);
+    const nextContent = [...split.headers, ...rawJsonHeaders, ...split.links].join("\n");
+    const saved = await createOrUpdateFile(cfg, filename, nextContent,
+      "Add " + encoded.length + " full JSON configs for " + chatId);
+    if (!(saved.content || saved.sha || saved.commit)) {
+      return sendMessage(cfg.telegramToken, chatId, "❌ Не удалось сохранить JSON-конфиги.");
     }
-    return sendMessage(cfg.telegramToken, chatId, "❌ Не удалось сохранить серверы из JSON.");
+
+    await updateSubscriptionSettings(cfg, chatId, active.id, { format: "json" });
+    return sendMessage(cfg.telegramToken, chatId,
+      "✅ <b>Полные JSON-конфиги сохранены.</b>\n\n📦 Добавлено: <code>" + encoded.length + "</code>\n📄 Формат подписки переключён на <b>JSON</b>.\n\nВсе поля исходных конфигов сохранены. Серверы не преобразовывались в VLESS-ссылки.",
+      { inline_keyboard: [[{ text: "📋 Моя подписка", callback_data: "my" }], [{ text: "📤 Экспорт", callback_data: "export" }], [{ text: "🏠 Меню", callback_data: "menu" }]] });
   }
 
   const content = await getFileContent(cfg, await getActiveFilename(cfg, chatId));
@@ -1053,9 +1048,9 @@ export async function cmdAdd(cfg, chatId, value) {
     lines.push(text);
     const oldHeaders = content ? splitSubscriptionFile(content).headers : [];
     const newContent = [...oldHeaders, ...lines].join("\n");
-    const res = await createOrUpdateFile(cfg, await getActiveFilename(cfg, chatId), newContent, `Add server for ${chatId}`);
-    if (res.content || res.sha) return sendMessage(cfg.telegramToken, chatId, `✅ <b>Сервер добавлен.</b>\n\n📡 Всего: <code>${lines.length}</code>`, { inline_keyboard: [[{ text: "📡 Список", callback_data: "list" }], [{ text: "🏠 Меню", callback_data: "menu" }]] });
-    return sendMessage(cfg.telegramToken, chatId, `❌ Не удалось сохранить сервер.`);
+    const res = await createOrUpdateFile(cfg, await getActiveFilename(cfg, chatId), newContent, "Add server for " + chatId);
+    if (res.content || res.sha) return sendMessage(cfg.telegramToken, chatId, "✅ <b>Сервер добавлен.</b>\n\n📡 Всего: <code>" + lines.length + "</code>", { inline_keyboard: [[{ text: "📡 Список", callback_data: "list" }], [{ text: "🏠 Меню", callback_data: "menu" }]] });
+    return sendMessage(cfg.telegramToken, chatId, "❌ Не удалось сохранить сервер.");
   }
   return cmdDecode(cfg, chatId, text);
 }
