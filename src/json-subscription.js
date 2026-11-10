@@ -19,7 +19,7 @@ export function buildRawJsonSubscription(content) {
       const items = Array.isArray(parsed) ? parsed : [parsed];
 
       if (!items.length || items.some(item =>
-        !item || typeof item !== "object" || Array.isArray(item) || !Array.isArray(item.outbounds)
+        !item || typeof item !== "object" || Array.isArray(item)
       )) continue;
 
       if (Array.isArray(parsed)) {
