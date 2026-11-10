@@ -371,7 +371,7 @@ async function serveSubscription(request, cfg) {
     ? "links"
     : (httpProxyEndpoint ? "json" : (selected?.format === "json" ? "json" : "links"));
   if (format === "json") {
-    const rawResult = buildRawJsonSubscription(content);
+    const rawResult = buildRawJsonSubscription(sourceContent);
     if (rawResult.configs.length) {
       // Raw Xray/Sing-box configs are emitted intact; URI entries already in the
       // same profile are appended as generated JSON configs after the raw ones.
