@@ -778,7 +778,7 @@ export async function cmdMy(cfg, chatId) {
   if (deviceOverflow) {
     // Keep the "My subscription" response small: do not include server count,
     // server-list/export shortcuts, or profile headers when device limit is exceeded.
-    const shortMsg = `📋 <b>МОЙ ПРОФИЛЬ</b>\\n\\n🟢 Статус: <b>АКТИВЕН</b>\\n🏷 Подписка: <b>${profileTitle}</b>\\n🧾 Формат: <b>${formatLabel}</b>\\n📱 Устройства: <code>${limitLabel}</code>\\n\\n<i>Список серверов и дополнительные параметры скрыты из-за превышения лимита устройств.</i>`;
+    const shortMsg = `📋 <b>МОЙ ПРОФИЛЬ</b>\n\n🟢 Статус: <b>АКТИВЕН</b>\n🏷 Подписка: <b>${profileTitle}</b>\n🧾 Формат: <b>${formatLabel}</b>\n📱 Устройства: <code>${limitLabel}</code>\n\n<i>Список серверов и дополнительные параметры скрыты из-за превышения лимита устройств.</i>`;
     const overflowKeyboard = {
       inline_keyboard: profileKeyboard.inline_keyboard.filter(row =>
         !row.some(button => button.callback_data === "list" || button.callback_data === "export")
