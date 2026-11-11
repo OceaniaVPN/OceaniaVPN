@@ -773,8 +773,16 @@ export async function cmdMy(cfg, chatId) {
   if (deviceOverflow && msg.length > 3800) {
     msg = `📋 <b>МОЙ ПРОФИЛЬ</b>\n\n🟢 Статус: <b>АКТИВЕН</b>\n🏷 Подписка: <b>${profileTitle}</b>\n📡 Серверов: <code>${links.length}</code>\n🧾 Формат: <b>${formatLabel}</b>\n📱 Устройства: <code>${limitLabel}</code>\n\n<i>Дополнительные параметры скрыты, чтобы сообщение поместилось.</i>`;
   }
-  await sendMessage(cfg.telegramToken, chatId, msg, { inline_keyboard: [[{ text: "🧾 Формат подписки", callback_data: `sub_format_menu_${active.id}` }, { text: "📱 Устройства", callback_data: `dev_manage_${active.id}` }], [{ text: "🔗 Открыть подписку", url: subUrl }], [{ text: "🎨 Страница", url: pageUrl }, { text: "🖼 Тема", callback_data: "theme_pick" }], [{ text: "📡 Серверы", callback_data: "list" }, { text: "📤 Экспорт", callback_data: "export" }],
-    [{ text: "🔁 Auto Decode · 5 ч", callback_data: "autodecode" }], [{ text: "🔀 Все подписки", callback_data: "subs" }], [{ text: "⚡ Проверка", callback_data: "check" }, { text: "📊 Аналитика", callback_data: "analytics" }], [{ text: "🗑 Удалить", callback_data: "delete" }], [{ text: "🏠 Меню", callback_data: "menu" }]] });
+  const profileKeyboard = { inline_keyboard: [[{ text: "🧾 Формат подписки", callback_data: `sub_format_menu_${active.id}` }, { text: "📱 Устройства", callback_data: `dev_manage_${active.id}` }], [{ text: "🔗 Открыть подписку", url: subUrl }], [{ text: "🎨 Страница", url: pageUrl }, { text: "🖼 Тема", callback_data: "theme_pick" }], [{ text: "📡 Серверы", callback_data: "list" }, { text: "📤 Экспорт", callback_data: "export" }],
+    [{ text: "🔁 Auto Decode · 5 ч", callback_data: "autodecode" }], [{ text: "🔀 Все подписки", callback_data: "subs" }], [{ text: "⚡ Проверка", callback_data: "check" }, { text: "📊 Аналитика", callback_data: "analytics" }], [{ text: "🗑 Удалить", callback_data: "delete" }], [{ text: "🏠 Меню", callback_data: "menu" }]] };
+  try {
+    await sendMessage(cfg.telegramToken, chatId, msg, profileKeyboard);
+  } catch (error) {
+    const description = String(error?.message || error || "");
+    if (!deviceOverflow || !/message is too long/i.test(description)) throw error;
+    const shortMsg = `📋 <b>МОЙ ПРОФИЛЬ</b>\n\n🟢 Статус: <b>АКТИВЕН</b>\n🏷 Подписка: <b>${profileTitle}</b>\n📡 Серверов: <code>${links.length}</code>\n🧾 Формат: <b>${formatLabel}</b>\n📱 Устройства: <code>${limitLabel}</code>\n\n<i>Список параметров сокращён из-за превышения лимита устройств.</i>`;
+    await sendMessage(cfg.telegramToken, chatId, shortMsg, profileKeyboard);
+  }
 }
 
 async function cmdAutoDecodeSettings(cfg, chatId) {
