@@ -755,34 +755,34 @@ export async function cmdMy(cfg, chatId) {
   if (!content) return sendMessage(cfg.telegramToken, chatId, `📭 <b>Подписка ещё не создана</b>\n\nСоздай профиль или импортируй URL.`, { inline_keyboard: [[{ text: "🚀 Создать", callback_data: "create" }, { text: "🔍 Декодировать", callback_data: "decode" }], [{ text: "🏠 Меню", callback_data: "menu" }]] });
   const { headers, links } = splitSubscriptionFile(content);
   const { pageUrl, subUrl } = await userUrls(cfg, chatId);
-  const limit = Number.isInteger(active.deviceLimit) ? active.deviceLimit : 3;
+  const parsedLimit = Number.parseInt(active.deviceLimit, 10);
+  const limit = Number.isInteger(parsedLimit) && parsedLimit >= 0 ? parsedLimit : 3;
   let registeredDevices = 0;
   try {
-    if (cfg.db?.countSubscriptionDevices) registeredDevices = await cfg.db.countSubscriptionDevices(makeSubscriptionDeviceKey(chatId, active.id));
+    if (cfg.db?.countSubscriptionDevices) {
+      const countResult = await cfg.db.countSubscriptionDevices(makeSubscriptionDeviceKey(chatId, active.id));
+      registeredDevices = Number(typeof countResult === "object" ? countResult?.count : countResult) || 0;
+    }
   } catch (error) {
     console.error("[Command] device count lookup failed:", error?.message || error);
   }
   const limitLabel = limit === 0 ? "без лимита" : `${registeredDevices}/${limit}`;
   const deviceOverflow = limit > 0 && registeredDevices > limit;
   const formatLabel = active.format === "json" ? "Happ JSON" : "VLESS/URI список";
-  const profileTitle = escapeHtml(active.title || "Моя подписка");
-  const profileParams = headers.join("\n");
-  let msg = `📋 <b>МОЙ ПРОФИЛЬ</b>\n\n🟢 Статус: <b>АКТИВЕН</b>\n🏷 Подписка: <b>${profileTitle}</b>\n📡 Серверов: <code>${links.length}</code>\n🧾 Формат: <b>${formatLabel}</b>\n📱 Устройства: <code>${limitLabel}</code>\n\n<b>Параметры профиля</b>\n<pre>${escapeHtml(profileParams)}</pre>`;
-  // Only the "My subscription" view with an exceeded device limit may drop
-  // optional profile metadata to stay within Telegram's 4096-character limit.
-  if (deviceOverflow && msg.length > 3800) {
-    msg = `📋 <b>МОЙ ПРОФИЛЬ</b>\n\n🟢 Статус: <b>АКТИВЕН</b>\n🏷 Подписка: <b>${profileTitle}</b>\n📡 Серверов: <code>${links.length}</code>\n🧾 Формат: <b>${formatLabel}</b>\n📱 Устройства: <code>${limitLabel}</code>\n\n<i>Дополнительные параметры скрыты, чтобы сообщение поместилось.</i>`;
-  }
+  const profileTitle = escapeHtml(String(active.title || "Моя подписка").slice(0, 80));
   const profileKeyboard = { inline_keyboard: [[{ text: "🧾 Формат подписки", callback_data: `sub_format_menu_${active.id}` }, { text: "📱 Устройства", callback_data: `dev_manage_${active.id}` }], [{ text: "🔗 Открыть подписку", url: subUrl }], [{ text: "🎨 Страница", url: pageUrl }, { text: "🖼 Тема", callback_data: "theme_pick" }], [{ text: "📡 Серверы", callback_data: "list" }, { text: "📤 Экспорт", callback_data: "export" }],
     [{ text: "🔁 Auto Decode · 5 ч", callback_data: "autodecode" }], [{ text: "🔀 Все подписки", callback_data: "subs" }], [{ text: "⚡ Проверка", callback_data: "check" }, { text: "📊 Аналитика", callback_data: "analytics" }], [{ text: "🗑 Удалить", callback_data: "delete" }], [{ text: "🏠 Меню", callback_data: "menu" }]] };
-  try {
-    await sendMessage(cfg.telegramToken, chatId, msg, profileKeyboard);
-  } catch (error) {
-    const description = String(error?.message || error || "");
-    if (!deviceOverflow || !/message is too long/i.test(description)) throw error;
-    const shortMsg = `📋 <b>МОЙ ПРОФИЛЬ</b>\n\n🟢 Статус: <b>АКТИВЕН</b>\n🏷 Подписка: <b>${profileTitle}</b>\n📡 Серверов: <code>${links.length}</code>\n🧾 Формат: <b>${formatLabel}</b>\n📱 Устройства: <code>${limitLabel}</code>\n\n<i>Список параметров сокращён из-за превышения лимита устройств.</i>`;
-    await sendMessage(cfg.telegramToken, chatId, shortMsg, profileKeyboard);
+
+  // When the device allowance is exceeded, do not even attempt to send the
+  // potentially huge profile metadata block. Keep this behavior local to cmdMy.
+  if (deviceOverflow) {
+    const shortMsg = `📋 <b>МОЙ ПРОФИЛЬ</b>\n\n🟢 Статус: <b>АКТИВЕН</b>\n🏷 Подписка: <b>${profileTitle}</b>\n📡 Серверов: <code>${links.length}</code>\n🧾 Формат: <b>${formatLabel}</b>\n📱 Устройства: <code>${limitLabel}</code>\n\n<i>Дополнительные параметры скрыты из-за превышения лимита устройств.</i>`;
+    return sendMessage(cfg.telegramToken, chatId, shortMsg, profileKeyboard);
   }
+
+  const profileParams = headers.join("\n");
+  const msg = `📋 <b>МОЙ ПРОФИЛЬ</b>\n\n🟢 Статус: <b>АКТИВЕН</b>\n🏷 Подписка: <b>${profileTitle}</b>\n📡 Серверов: <code>${links.length}</code>\n🧾 Формат: <b>${formatLabel}</b>\n📱 Устройства: <code>${limitLabel}</code>\n\n<b>Параметры профиля</b>\n<pre>${escapeHtml(profileParams)}</pre>`;
+  return sendMessage(cfg.telegramToken, chatId, msg, profileKeyboard);
 }
 
 async function cmdAutoDecodeSettings(cfg, chatId) {
