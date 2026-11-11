@@ -208,7 +208,6 @@ function buildDecoderHeaders(requestOptions = {}) {
   // These are transport-managed or hop-by-hop headers. Cloudflare Fetch sets
   // them for its own outbound connection; copying client values is not valid.
   for (const name of [
-    "accept",
     "accept-encoding",
     "connection",
     "host",
@@ -229,16 +228,14 @@ function buildDecoderHeaders(requestOptions = {}) {
   }
 
   if (androidProfile) {
-    // The supplied reference is an older Android log: use the requested 4.8.0
-    // application version and create fresh per-decode identifiers.
-    headers.set("user-agent", "Happ/4.8.0/Android/" + randomDigits(20));
-    headers.set("x-device-locale", "ru");
-    headers.set("x-hwid", randomHex(8));
-    headers.set("x-device-os", "Android");
-    headers.set("x-ver-os", "16");
-    headers.set("x-device-model", "2311DRK48G");
-    headers.delete("x-app-version");
-    headers.delete("accept-language");
+    // Preserve the exact Android Happ profile supplied by the normal decoder.
+    // Only fill missing fields; do not replace its session ID or HWID.
+    if (!headers.has("x-app-version")) headers.set("x-app-version", "4.8.0");
+    if (!headers.has("x-device-locale")) headers.set("x-device-locale", "ru");
+    if (!headers.has("x-device-os")) headers.set("x-device-os", "Android");
+    if (!headers.has("x-device-model")) headers.set("x-device-model", "2311DRK48G");
+    if (!headers.has("x-ver-os")) headers.set("x-ver-os", "16");
+    if (!headers.has("accept-language")) headers.set("accept-language", "ru-RU,en,*");
   } else if (windowsProfile) {
     // Match the supplied real Windows request profile (Happ 4.5.4).
     headers.set("user-agent", "Happ/4.5.4/Windows/" + randomDigits(13));
