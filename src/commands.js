@@ -757,9 +757,6 @@ export async function cmdMy(cfg, chatId) {
       { inline_keyboard: [[{ text: "🚀 Создать", callback_data: "create" }, { text: "🔍 Декодировать", callback_data: "decode" }], [{ text: "🏠 Меню", callback_data: "menu" }]] });
   }
 
-  // Check the device allowance BEFORE loading/parsing the subscription file.
-  // The subscription endpoint rejects a new device as soon as the limit is reached,
-  // so >= is intentional (not >).
   const parsedLimit = Number.parseInt(active.deviceLimit, 10);
   const limit = Number.isInteger(parsedLimit) && parsedLimit >= 0 ? parsedLimit : 3;
   let registeredDevices = 0;
@@ -773,10 +770,13 @@ export async function cmdMy(cfg, chatId) {
   }
 
   const limitLabel = limit === 0 ? "без лимита" : `${registeredDevices}/${limit}`;
-  const deviceLimitReached = limit > 0 && registeredDevices >= limit;
   const formatLabel = active.format === "json" ? "Happ JSON" : "VLESS/URI список";
   const profileTitle = escapeHtml(String(active.title || "Моя подписка").slice(0, 80));
   const { pageUrl, subUrl } = await userUrls(cfg, chatId);
+
+  // Never load or include subscription contents in the profile card.
+  // Auto-decoded subscriptions can be very large; server entries and metadata
+  // are available through their dedicated buttons, not in this summary message.
   const profileKeyboard = { inline_keyboard: [
     [{ text: "🧾 Формат подписки", callback_data: `sub_format_menu_${active.id}` }, { text: "📱 Устройства", callback_data: `dev_manage_${active.id}` }],
     [{ text: "🔗 Открыть подписку", url: subUrl }],
@@ -789,26 +789,11 @@ export async function cmdMy(cfg, chatId) {
     [{ text: "🏠 Меню", callback_data: "menu" }]
   ] };
 
-  if (deviceLimitReached) {
-    // Do not load, parse, count, or include server links/profile headers in this response.
-    const shortMsg = `📋 <b>МОЙ ПРОФИЛЬ</b>\n\n🟢 Статус: <b>АКТИВЕН</b>\n🏷 Подписка: <b>${profileTitle}</b>\n🧾 Формат: <b>${formatLabel}</b>\n📱 Устройства: <code>${limitLabel}</code>\n\n<i>Список серверов скрыт: достигнут лимит устройств.</i>`;
-    const compactKeyboard = {
-      inline_keyboard: profileKeyboard.inline_keyboard.filter(row =>
-        !row.some(button => button.callback_data === "list" || button.callback_data === "export")
-      )
-    };
-    return sendMessage(cfg.telegramToken, chatId, shortMsg, compactKeyboard);
-  }
-
-  const content = await getFileContent(cfg, active.filename);
-  if (!content) {
-    return sendMessage(cfg.telegramToken, chatId,
-      `📭 <b>Файл подписки не найден</b>\n\nПопробуй открыть «Все подписки» или создать профиль заново.`,
-      { inline_keyboard: [[{ text: "🔀 Все подписки", callback_data: "subs" }], [{ text: "🏠 Меню", callback_data: "menu" }]] });
-  }
-  const { headers, links } = splitSubscriptionFile(content);
-  const profileParams = headers.join("\n");
-  const msg = `📋 <b>МОЙ ПРОФИЛЬ</b>\n\n🟢 Статус: <b>АКТИВЕН</b>\n🏷 Подписка: <b>${profileTitle}</b>\n📡 Серверов: <code>${links.length}</code>\n🧾 Формат: <b>${formatLabel}</b>\n📱 Устройства: <code>${limitLabel}</code>\n\n<b>Параметры профиля</b>\n<pre>${escapeHtml(profileParams)}</pre>`;
+  const deviceLimitReached = limit > 0 && registeredDevices >= limit;
+  const statusLine = deviceLimitReached
+    ? "⚠️ Список серверов скрыт: достигнут лимит устройств."
+    : "Список серверов и параметры профиля не выводятся в карточке.";
+  const msg = `📋 <b>МОЙ ПРОФИЛЬ</b>\n\n🟢 Статус: <b>АКТИВЕН</b>\n🏷 Подписка: <b>${profileTitle}</b>\n🧾 Формат: <b>${formatLabel}</b>\n📱 Устройства: <code>${limitLabel}</code>\n\n<i>${statusLine}</i>`;
   return sendMessage(cfg.telegramToken, chatId, msg, profileKeyboard);
 }
 
