@@ -751,10 +751,15 @@ export async function cmdSwitchSubscription(cfg, chatId, id) {
 
 export async function cmdMy(cfg, chatId) {
   const active = await getActiveSubscription(cfg, chatId);
-  const content = active ? await getFileContent(cfg, active.filename) : null;
-  if (!content) return sendMessage(cfg.telegramToken, chatId, `📭 <b>Подписка ещё не создана</b>\n\nСоздай профиль или импортируй URL.`, { inline_keyboard: [[{ text: "🚀 Создать", callback_data: "create" }, { text: "🔍 Декодировать", callback_data: "decode" }], [{ text: "🏠 Меню", callback_data: "menu" }]] });
-  const { headers, links } = splitSubscriptionFile(content);
-  const { pageUrl, subUrl } = await userUrls(cfg, chatId);
+  if (!active) {
+    return sendMessage(cfg.telegramToken, chatId,
+      `📭 <b>Подписка ещё не создана</b>\n\nСоздай профиль или импортируй URL.`,
+      { inline_keyboard: [[{ text: "🚀 Создать", callback_data: "create" }, { text: "🔍 Декодировать", callback_data: "decode" }], [{ text: "🏠 Меню", callback_data: "menu" }]] });
+  }
+
+  // Check the device allowance BEFORE loading/parsing the subscription file.
+  // The subscription endpoint rejects a new device as soon as the limit is reached,
+  // so >= is intentional (not >).
   const parsedLimit = Number.parseInt(active.deviceLimit, 10);
   const limit = Number.isInteger(parsedLimit) && parsedLimit >= 0 ? parsedLimit : 3;
   let registeredDevices = 0;
@@ -766,27 +771,42 @@ export async function cmdMy(cfg, chatId) {
   } catch (error) {
     console.error("[Command] device count lookup failed:", error?.message || error);
   }
+
   const limitLabel = limit === 0 ? "без лимита" : `${registeredDevices}/${limit}`;
-  const deviceOverflow = limit > 0 && registeredDevices > limit;
+  const deviceLimitReached = limit > 0 && registeredDevices >= limit;
   const formatLabel = active.format === "json" ? "Happ JSON" : "VLESS/URI список";
   const profileTitle = escapeHtml(String(active.title || "Моя подписка").slice(0, 80));
-  const profileKeyboard = { inline_keyboard: [[{ text: "🧾 Формат подписки", callback_data: `sub_format_menu_${active.id}` }, { text: "📱 Устройства", callback_data: `dev_manage_${active.id}` }], [{ text: "🔗 Открыть подписку", url: subUrl }], [{ text: "🎨 Страница", url: pageUrl }, { text: "🖼 Тема", callback_data: "theme_pick" }], [{ text: "📡 Серверы", callback_data: "list" }, { text: "📤 Экспорт", callback_data: "export" }],
-    [{ text: "🔁 Auto Decode · 5 ч", callback_data: "autodecode" }], [{ text: "🔀 Все подписки", callback_data: "subs" }], [{ text: "⚡ Проверка", callback_data: "check" }, { text: "📊 Аналитика", callback_data: "analytics" }], [{ text: "🗑 Удалить", callback_data: "delete" }], [{ text: "🏠 Меню", callback_data: "menu" }]] };
+  const { pageUrl, subUrl } = await userUrls(cfg, chatId);
+  const profileKeyboard = { inline_keyboard: [
+    [{ text: "🧾 Формат подписки", callback_data: `sub_format_menu_${active.id}` }, { text: "📱 Устройства", callback_data: `dev_manage_${active.id}` }],
+    [{ text: "🔗 Открыть подписку", url: subUrl }],
+    [{ text: "🎨 Страница", url: pageUrl }, { text: "🖼 Тема", callback_data: "theme_pick" }],
+    [{ text: "📡 Серверы", callback_data: "list" }, { text: "📤 Экспорт", callback_data: "export" }],
+    [{ text: "🔁 Auto Decode · 5 ч", callback_data: "autodecode" }],
+    [{ text: "🔀 Все подписки", callback_data: "subs" }],
+    [{ text: "⚡ Проверка", callback_data: "check" }, { text: "📊 Аналитика", callback_data: "analytics" }],
+    [{ text: "🗑 Удалить", callback_data: "delete" }],
+    [{ text: "🏠 Меню", callback_data: "menu" }]
+  ] };
 
-  // When the device allowance is exceeded, do not even attempt to send the
-  // potentially huge profile metadata block. Keep this behavior local to cmdMy.
-  if (deviceOverflow) {
-    // Keep the "My subscription" response small: do not include server count,
-    // server-list/export shortcuts, or profile headers when device limit is exceeded.
-    const shortMsg = `📋 <b>МОЙ ПРОФИЛЬ</b>\n\n🟢 Статус: <b>АКТИВЕН</b>\n🏷 Подписка: <b>${profileTitle}</b>\n🧾 Формат: <b>${formatLabel}</b>\n📱 Устройства: <code>${limitLabel}</code>\n\n<i>Список серверов и дополнительные параметры скрыты из-за превышения лимита устройств.</i>`;
-    const overflowKeyboard = {
+  if (deviceLimitReached) {
+    // Do not load, parse, count, or include server links/profile headers in this response.
+    const shortMsg = `📋 <b>МОЙ ПРОФИЛЬ</b>\n\n🟢 Статус: <b>АКТИВЕН</b>\n🏷 Подписка: <b>${profileTitle}</b>\n🧾 Формат: <b>${formatLabel}</b>\n📱 Устройства: <code>${limitLabel}</code>\n\n<i>Список серверов скрыт: достигнут лимит устройств.</i>`;
+    const compactKeyboard = {
       inline_keyboard: profileKeyboard.inline_keyboard.filter(row =>
         !row.some(button => button.callback_data === "list" || button.callback_data === "export")
       )
     };
-    return sendMessage(cfg.telegramToken, chatId, shortMsg, overflowKeyboard);
+    return sendMessage(cfg.telegramToken, chatId, shortMsg, compactKeyboard);
   }
 
+  const content = await getFileContent(cfg, active.filename);
+  if (!content) {
+    return sendMessage(cfg.telegramToken, chatId,
+      `📭 <b>Файл подписки не найден</b>\n\nПопробуй открыть «Все подписки» или создать профиль заново.`,
+      { inline_keyboard: [[{ text: "🔀 Все подписки", callback_data: "subs" }], [{ text: "🏠 Меню", callback_data: "menu" }]] });
+  }
+  const { headers, links } = splitSubscriptionFile(content);
   const profileParams = headers.join("\n");
   const msg = `📋 <b>МОЙ ПРОФИЛЬ</b>\n\n🟢 Статус: <b>АКТИВЕН</b>\n🏷 Подписка: <b>${profileTitle}</b>\n📡 Серверов: <code>${links.length}</code>\n🧾 Формат: <b>${formatLabel}</b>\n📱 Устройства: <code>${limitLabel}</code>\n\n<b>Параметры профиля</b>\n<pre>${escapeHtml(profileParams)}</pre>`;
   return sendMessage(cfg.telegramToken, chatId, msg, profileKeyboard);
