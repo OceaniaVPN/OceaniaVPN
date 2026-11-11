@@ -776,8 +776,15 @@ export async function cmdMy(cfg, chatId) {
   // When the device allowance is exceeded, do not even attempt to send the
   // potentially huge profile metadata block. Keep this behavior local to cmdMy.
   if (deviceOverflow) {
-    const shortMsg = `📋 <b>МОЙ ПРОФИЛЬ</b>\n\n🟢 Статус: <b>АКТИВЕН</b>\n🏷 Подписка: <b>${profileTitle}</b>\n📡 Серверов: <code>${links.length}</code>\n🧾 Формат: <b>${formatLabel}</b>\n📱 Устройства: <code>${limitLabel}</code>\n\n<i>Дополнительные параметры скрыты из-за превышения лимита устройств.</i>`;
-    return sendMessage(cfg.telegramToken, chatId, shortMsg, profileKeyboard);
+    // Keep the "My subscription" response small: do not include server count,
+    // server-list/export shortcuts, or profile headers when device limit is exceeded.
+    const shortMsg = `📋 <b>МОЙ ПРОФИЛЬ</b>\\n\\n🟢 Статус: <b>АКТИВЕН</b>\\n🏷 Подписка: <b>${profileTitle}</b>\\n🧾 Формат: <b>${formatLabel}</b>\\n📱 Устройства: <code>${limitLabel}</code>\\n\\n<i>Список серверов и дополнительные параметры скрыты из-за превышения лимита устройств.</i>`;
+    const overflowKeyboard = {
+      inline_keyboard: profileKeyboard.inline_keyboard.filter(row =>
+        !row.some(button => button.callback_data === "list" || button.callback_data === "export")
+      )
+    };
+    return sendMessage(cfg.telegramToken, chatId, shortMsg, overflowKeyboard);
   }
 
   const profileParams = headers.join("\n");
