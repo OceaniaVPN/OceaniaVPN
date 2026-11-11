@@ -8,6 +8,23 @@ const PREFIX = "autodecode_";
 export const AUTO_DECODE_INTERVAL_MS = 5 * 60 * 60 * 1000;
 const MAX_AUTO_SERVERS = 5000;
 
+function buildAndroidHappHeaders(cfg = {}) {
+  const sessionId = String(cfg.happAndroidSessionId || "").trim();
+  const hwid = String(cfg.happAndroidHwid || "").trim();
+  return {
+    "User-Agent": `Happ/4.8.0/Android${sessionId ? `/${sessionId}` : ""}`,
+    "Accept": "text/plain, application/json;q=0.9",
+    "Accept-Language": "ru-RU,en,*",
+    ...(hwid ? { "X-HWID": hwid } : {}),
+    "X-App-Version": "4.8.0",
+    "X-Device-Locale": "ru",
+    "X-Device-Os": "Android",
+    "X-Device-Model": "2311DRK48G",
+    "X-Ver-Os": "16",
+  };
+}
+
+
 export function autoDecodeKey(chatId, subscriptionId) {
   return `${PREFIX}${String(chatId)}_${String(subscriptionId)}`;
 }
@@ -115,6 +132,7 @@ export async function runAutoDecodeOnce(cfg, chatId, subscriptionId, options = {
       apiOrigin: cfg.workerOrigin || "",
       upstreamSecret: cfg.subscriptionUpstreamSecret || "",
       upstreamOrigin: cfg.subscriptionUpstreamOrigin || "",
+      deviceHeaders: buildAndroidHappHeaders(cfg),
     });
     if (!result?.ok) throw new Error(result?.error || "Источник не удалось расшифровать.");
 
