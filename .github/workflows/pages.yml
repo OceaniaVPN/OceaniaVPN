@@ -2,7 +2,7 @@ name: Deploy static theme pages to GitHub Pages
 
 on:
   push:
-    branches: [pages-migration]
+    branches: [main]
   workflow_dispatch:
 
 permissions:
